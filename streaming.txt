@@ -1,0 +1,243 @@
+Streaming replication in postgres ( 2 EC2 postgresql-13)
+
+Postgres replication is the process of copying data from one database host (primary) to another database host (standby).
+
+In  version 9.0 (back in 2010), streaming replication was introduced.
+
+Streaming replication in PostgreSQL works on log shipping.
+Every transaction in postgres is written to a transaction log called WAL (write-ahead log) to achieve durability.
+A slave uses these WAL segments to continuously replicate changes from its master.
+
+In Streaming Replication, three kinds of processes work cooperatively.
+A walsender process on the primary server sends WAL data to standby server;
+and then, a walreceiver and a startup processes on standby server receives and replays these data.
+A walsender and a walreceiver communicate using a single TCP connection.
+
+
+PostgreSQL is a widely used relational database that supports both logical and physical replication.
+Logical replication streams high-level changes from the primary database cluster to the replica databases.
+Using logical replication, you can stream changes to just a single database or table in a database.
+
+in physical replication, changes to the WAL (Write-Ahead-Logging) log file are streamed and replicated in the replica
+clusters. As a result, you can’t replicate specific areas of a primary database cluster, but instead all changes to the primary
+are replicated.
+
+Streaming replication allows a standby server to stay more up-to-date than is possible with file-based log shipping.
+The standby connects to the primary, which streams WAL records to the standby as they're generated, without waiting for the WAL
+file to be filled.
+Streaming replication is asynchronous by default , in which case there is a small delay between committing a transaction in
+the primary and the changes becoming visible in the standby.
+This delay is however much smaller than with file-based log shipping,
+typically under one second assuming the standby is powerful enough to keep up with the load. With streaming replication,
+archive_timeout is not required to reduce the data loss window.
+
+
+Continuous archiving can be used to create a high availability (HA) cluster configuration with one or more standby servers ready
+to take over operations if the primary server fails. This capability is widely referred to as warm standby or log shipping.
+
+
+Detailed steps of implementation
+
+
+Primary: 3.109.3.22 (Master)
+Secondary: 13.127.174.221 (Slave)
+
+Primary
+********
+
+setup the hostname of primary
+
+sudo hostnamectl set-hostname master
+
+setup the hostname of slave
+
+sudo hostnamectl set-hostname slave
+
+
+sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+sudo dnf -qy module disable postgresql
+sudo dnf install -y postgresql13-server
+
+sudo /usr/pgsql-13/bin/postgresql-13-setup initdb
+sudo systemctl enable postgresql-13
+
+sudo systemctl start postgresql-13
+sudo systemctl status postgresql-13
+
+Public master IP : 52.66.88.239
+private master IP : 172.31.40.180
+
+
+Public Slave IP : 52.66.88.239
+private slave IP : 172.31.32.79
+
+
+Slave
+
+sudo hostnamectl set-hostname slave
+
+sudo dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-8-x86_64/pgdg-redhat-repo-latest.noarch.rpm
+sudo dnf -qy module disable postgresql
+sudo dnf install -y postgresql13-server
+
+Primary
+
+ps axf | grep post
+
+
+Check selinux status on both primary and slave sestatus remove on both nodes.
+
+sestatus
+
+sudo vi /etc/selinux/config
+
+sudo vi /etc/sudoers
+postgres        ALL=(ALL)       NOPASSWD: ALL
+
+
+
+Enabling Primary for replication as below
+
+Enable networking (bind addresses) in postgresql.conf
+
+sudo su - postgres
+psql postgres
+psql (13.2)
+Type "help" for help.
+
+postgres=# SHOW config_file;
+config_file
+----------------------------------------
+/var/lib/pgsql/13/data/postgresql.conf
+(1 row)
+The following parameter has to be changed in postgresql.conf:
+
+vi /var/lib/pgsql/13/data/postgresql.conf
+listen_addresses = '*'
+
+Create a replication user.
+sudo su - postgres
+psql
+
+CREATE USER repuser REPLICATION;
+Allow remote access in pg_hba.conf
+vi $PGDATA/pg_hba.conf
+host replication repuser 52.66.88.239/32 trust
+Note : repilca the ip with IP of slave
+
+Restart the primary server
+sudo systemctl restart postgresql-13
+
+
+Login on slave as postgres os user/ On slave- Creating a base backup
+
+
+sudo su - postgres
+sudo systemctl status postgresql-13
+sudo systemctl stop postgresql-13
+
+sudo su - postgres
+cd /var/lib/pgsql/13/data/
+ls
+must be empty
+
+Test remove connectivity ok
+
+[postgres@slave data]$ psql -U postgres -h 52.66.88.239
+psql: error: FATAL:  no pg_hba.conf entry for host "3.110.216.45", user "postgres", database "postgres", SSL off
+
+
+vi $PGDATA/pg_hba.conf
+host postgres postgres 3.110.216.459/32 md5
+
+cd /var/lib/pgsql/13/data
+pg_basebackup -h 52.66.88.239 -U repuser --checkpoint=fast \
+-D /var/lib/pgsql/13/data/ -R --slot=some_name -C
+
+pg_basebackup  connects to the primary IP and  copies all the data files from primary.
+The connection happens through postgres database user named as repuser.
+
+To ensure that the copy process starts instantly,
+checpoint to happen instantly .
+The -D flag denotes the destination directory where we want to store the data on the replica.
+The -R flag automatically configures our replica for replication.
+No more configuration is needed on the secondary server.
+Finally, we created a replication slot. What is the purpose of a replication slot in PostgreSQL?
+
+Basically, the primary server is able to recycle the WAL – if it is not needed anymore on the primary
+. But what if the replica has not consumed it yet? In that case, the replica will fail unless there is a replication slot
+ensuring that the primary can only recycle the WAL if the replica has fully consumed it.
+
+
+what did pg_basebackup did
+
+navigate to PGDATA and do 
+ls
+
+You will see all and few more
+pg_basebackup has copied everything from source master server.
+The standby.signal file has been created which make it  the replica and  it is  a replica.
+
+
+Let's adjusted the postgresql.auto.conf file which happens to contain all the configuration needed to make the replica/slave connect
+to its replica on the primary server (node1):
+cat postgresql.auto.conf
+# Do not edit this file manually!
+# It will be overwritten by the ALTER SYSTEM command.
+listen_addresses = '*'
+primary_conninfo = 'user=repuser passfile=''/var/lib/pgsql/.pgpass'' channel_binding=prefer host=52.66.88.239 port=5432 sslmode=prefer sslcompression=0 ssl_min_protocol_version=TLSv1.2 gssencmode=prefer krbsrvname=postgres target_session_attrs=any'
+primary_slot_name = 'some_name'
+
+
+alter system set primary_conninfo = 'user=repuser passfile=''/var/lib/pgsql/.pgpass'' channel_binding=prefer host=52.66.88.239 port=5432 sslmode=prefer sslcompression=0 ssl_min_protocol_version=TLSv1.2 gssencmode=prefer krbsrvname=postgres target_session_attrs=any';
+
+
+How to start the replica
+****************************
+
+Now We are ready to start the replica using systemctl on replica node which has been replicated:
+
+sudo systemctl start postgresql-13
+ps axf | grep post
+
+most important part is as below mentioned
+Ensure  to check for the existence of the walreceiver process.
+walreceiver is responsible of fetching the WAL from the primary host.
+
+How to ensure that  PostgreSQL replication setup is succesful
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+primary
+
+sudo su - postgres
+psql
+set th expended display as below mentioned
+\x
+SELECT * FROM pg_stat_replication ;
+
+
+the data shows that replication is working properly between source and target
+
+
+Replica ( Node 2)
+sudo su - postgres
+psql
+\x
+SELECT * FROM pg_stat_wal_receiver;
+
+
+
+Test -Master
+
+select * from pg_stat_replication ;
+
+create table test (name text);
+insert into test values('EMS');
+
+Hot Standby DB
+select * from pg_stat_wal_receiver;
+Receiver process verification
+ps -ef | grep receiver
+
+select * from test;
+

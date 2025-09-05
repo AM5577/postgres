@@ -1,0 +1,533 @@
+Jesus
+======
+
+Master
+
+192.168.136.133
+
+Standby
+
+192.168.136.134
+
+mkdir -p /DB01/logs
+
+mkdir -p /DB01/data
+
+
+Step 2
+=======
+
+apt install curl ca-certificates
+
+install -d /usr/share/postgresql-common/pgdg
+
+curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+
+. /etc/os-release
+
+sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
+
+apt update
+
+apt-get -y install postgresql-16
+
+
+Step 3
+
+chown -R postgres:postgres /DB01/logs
+
+chmod 700 /DB01/logs
+
+
+chown -R postgres:postgres /DB01/data
+
+chmod 700 /DB01/data
+
+
+chown -R postgres:postgres /DB01/archive
+
+chmod 700 /DB01/archive
+
+
+Step 4
+
+su - postgres
+
+ps -ef | grep postgres
+
+verify 
+
+Step 5
+
+cd /etc/postgresql/16/main/
+
+nano /etc/postgresql/16/main/postgresql.conf
+
+Changed data directory /DB01/data in postgresql.conf
+
+systemctl stop postgresql@16-main.service
+
+su - postgres
+
+/usr/lib/postgresql/16/bin/initdb --lc-collate="en_GB.utf8" --lc-ctype="en_GB.utf8" -D /DB01/data -U postgres
+
+systemctl status postgresql@16-main.service
+
+systemctl start postgresql@16-main.service
+
+Reboot for verification
+
+step 6
+
+Add postgresql.conf
+
+
+# DB Version: 13
+# OS Type: linux
+# DB Type: dw
+# Total Memory (RAM): 16 GB
+# CPUs num: 2
+# Connections num: 100
+# Data Storage: ssd
+
+max_connections = 100
+shared_buffers = 4GB
+effective_cache_size = 12GB
+maintenance_work_mem = 2GB
+checkpoint_completion_target = 0.9
+wal_buffers = 16MB
+default_statistics_target = 500
+random_page_cost = 1.1
+effective_io_concurrency = 200
+work_mem = 10485kB
+min_wal_size = 4GB
+max_wal_size = 16GB
+
+
+log_destination = 'csvlog' [csvlog: format will excel,eventlog : only system related events recorded]
+logging_collector = on [it will start logger process]
+log_directory = '/DB01/logs' 
+log_filename = 'postgresql-%Y%m%d.log'
+log_rotation_age = 1d
+log_rotation_size = 0
+log_min_duration_statement = 0 (milliseconds: 60000)
+log_connections = on
+log_disconnections = on
+log_line_prefix = '%a %u %d %h %p' 
+log_statement = 'all'       
+log_temp_files = 0 
+
+Listen_address = *
+
+wal_keep_size = 1000
+
+
+lc_messages = 'en_GB.utf8'                     # locale for system error message
+                                               # strings
+lc_monetary = 'en_GB.utf8'                     # locale for monetary formatting
+lc_numeric = 'en_GB.utf8'                      # locale for number formatting
+lc_time = 'en_GB.utf8'  
+
+postgres=# alter user postgres with password 'jesus@123#';
+
+add postgresql.conf entries
+
+host all pgpool all md5
+host postgres postgres all md5
+host all svc_irisreport all md5
+host all rosreport all md5
+host replication     replication_user    192.168.136.150/32         md5
+hostssl replication     replication_user    192.168.136.150/32         md5
+#host replication postgres 192.168.136.145/32 md5
+
+pg_hba.conf
+
+host replication all standby ip address (192.168.136.134)trust
+
+host replication all 192.168.136.134/32 trust
+
+ufw disable
+
+select pg_reload_conf();
+
+systemctl restart postgresql@16-main.service
+
+
+SELECT pg_create_physical_replication_slot('replicaslot2');
+
+
+====================================
+
+Standby
+
+====================================
+
+
+mkdir -p /DB01/logs
+
+mkdir -p /DB01/data
+
+
+Step 2
+=======
+
+apt install curl ca-certificates
+
+install -d /usr/share/postgresql-common/pgdg
+
+curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+
+. /etc/os-release
+
+sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
+
+apt update
+
+apt-get -y install postgresql-16
+
+
+Step 3
+
+chown -R postgres:postgres /DB01/logs
+
+chmod 700 /DB01/logs
+
+
+chown -R postgres:postgres /DB01/data
+
+chmod 700 /DB01/data
+
+
+chown -R postgres:postgres /DB01/archive
+
+chmod 700 /DB01/archive
+
+
+Step 4
+
+su - postgres
+
+ps -ef | grep postgres
+
+verify 
+
+Step 5
+
+cd /etc/postgresql/16/main/
+
+nano /etc/postgresql/16/main/postgresql.conf
+
+Changed data directory /DB01/data in postgresql.conf
+
+systemctl stop postgresql@16-main.service
+
+su - postgres
+
+/usr/lib/postgresql/16/bin/initdb --lc-collate="en_GB.utf8" --lc-ctype="en_GB.utf8" -D /DB01/data -U postgres
+
+systemctl status postgresql@16-main.service
+
+systemctl start postgresql@16-main.service
+
+Reboot for verification
+
+in primary go to 192.168.136.133
+
+scp -rp /etc/postgresql/13/main/* postgres@192.168.136.134:/etc/postgresql/13/main
+
+step 2 create standby.signal file in /DB02/data
+
+cd /DB01/data
+
+touch standby.signal
+touch standby.signal
+
+step 3
+
+Modify primary_conninfo postgresql.conf
+
+create user replication_user REPLICATION encrypted password 'Jesus@123#';
+
+nano /var/lib/postgresql/.pgpass.
+
+hostname:port:database:username:password
+
+192.168.136.133:5432:*:replication_user:Jesus@123#
+
+chown postgres:postgres /var/lib/postgresql/.pgpass
+
+chmod 600 /var/lib/postgresql/.pgpass
+
+primary_conninfo = 'host=192.168.136.133 port=5432 user=replication_user'
+
+Ref: primary_conninfo = 'host=192.168.136.133 port=5432 user=postgres password=jesus@123#'
+
+In Primary server’s pg_hba.conf
+==================================
+
+host replication replication_user 192.168.136.0/24 md5
+
+step 4
+
+cd /DB01/data
+
+pwd
+
+rm -rf *
+
+pg_basebackup -h 192.168.136.133 -p 5432 -U postgres -v -D /DB01/data
+
+Remove entry in pg_hba.conf
+
+-bash-4.2$ cat postgresql.auto.conf
+# Do not edit this file manually!
+# It will be overwritten by the ALTER SYSTEM command.
+primary_slot_name = 'replicaslot2'
+recovery_target_timeline = 'latest'
+
+touch standby.signal
+
+step 4
+
+start the standby cluster (root)
+
+systemctl start postgresql@16-main.service
+
+systemctl status postgresql@16-main.service
+
+
+================================
+
+Pgpool 2 installation
+
+=================================
+
+
+
+apt install curl ca-certificates
+
+install -d /usr/share/postgresql-common/pgdg
+
+curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+
+. /etc/os-release
+
+sh -c "echo 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $VERSION_CODENAME-pgdg main' > /etc/apt/sources.list.d/pgdg.list"
+
+apt update
+
+apt-get -y install postgresql-16
+
+apt-get -y install pgpool2
+
+
+
+
+# - pgpool Connection Settings -
+
+listen_addresses = '*'
+                                   # Host name or IP address to listen on:
+                                   # '*' for all, '' for no TCP/IP connections
+                                   # (change requires restart)
+port = 5432
+                                   # Port number
+                                   # (change requires restart)
+
+
+# - Backend Connection Settings -
+
+backend_hostname0 = '192.168.136.145'
+                                   # Host name or IP address to connect to for backend 0
+backend_port0 = 5432
+                                   # Port number for backend 0
+backend_weight0 = 1
+                                   # Weight for backend 0 (only in load balancing mode)
+backend_data_directory0 = '/DB01/data'
+                                   # Data directory for backend 0
+backend_flag0 = 'DISALLOW_TO_FAILOVER'
+                                   # Controls various backend behavior
+                                   # ALLOW_TO_FAILOVER, DISALLOW_TO_FAILOVER
+                                   # or ALWAYS_PRIMARY
+#backend_application_name0 = 'server0'
+                                   # walsender's application_name, used for "show pool_nodes" command
+backend_hostname1 = '192.168.136.150'
+backend_port1 = 5432
+backend_weight1 = 1
+backend_data_directory1 = '/DB01/data'
+backend_flag1 = 'DISALLOW_TO_FAILOVER'
+#backend_application_name1 = 'server1'
+
+allow_clear_text_frontend_auth = on
+                                   # Allow Pgpool-II to use clear text password authentication
+                                   # with clients, when pool_passwd does not
+                                   # contain the user password
+
+
+# - SSL Connections -
+
+#ssl = on
+                                   # Enable SSL support
+                                   # (change requires restart)
+
+#------------------------------------------------------------------------------
+# POOLS
+#------------------------------------------------------------------------------
+
+# - Concurrent session and pool size -
+
+num_init_children = 64
+                                   # Number of concurrent sessions allowed
+                                   # (change requires restart)
+max_pool = 8
+                                   # Number of connection pool caches per connection
+                                   # (change requires restart)
+
+# - Life time -
+
+
+connection_life_time = 30
+                                   # Connection to backend closes after being idle for this many seconds
+                                   # 0 means no close
+
+log_directory = '/tmp/pgpool_logs'
+                                        # directory where log files are written,
+                                        # can be absolute
+
+log_truncate_on_rotation = on
+
+log_rotation_size = 0
+
+
+database_redirect_preference_list = 'postgres:standby'
+
+STREAMING REPLICATION MODE
+
+                                   # Disabled (0) by default
+sr_check_user = 'pgpool'
+                                   # Streaming replication check user
+                                   # This is neccessary even if you disable streaming
+                                   # replication delay check by sr_check_period = 0
+sr_check_password = 'jesus@123#'
+                                   # Password for streaming replication check user
+                                   # Leaving it empty will make Pgpool-II to first look for the
+                                   # Password in pool_passwd file before using the empty password
+
+sr_check_database = 'postgres'
+
+
+# HEALTH CHECK GLOBAL PARAMETERS
+#------------------------------------------------------------------------------
+
+#health_check_period = 0
+                                   # Health check period
+                                   # Disabled (0) by default
+#health_check_timeout = 20
+                                   # Health check timeout
+                                   # 0 means no timeout
+health_check_user = 'pgpool'
+                                   # Health check user
+health_check_password = 'jesus@123#'
+                                   # Password for health check user
+                                   # Leaving it empty will make Pgpool-II to first look for the
+                                   # Password in pool_passwd file before using the empty password
+
+health_check_database = 'postgres'
+
+
+pgpool Client Authentication Configuration File
+
+
+host    all         all         0.0.0.0/0             md5
+
+hostssl   all         all         0.0.0.0/0             md5
+
+
+
+# Pgpool listening
+listen_addresses = '*'
+port = 9999
+
+# Connection pooling
+enable_pool_hba = on
+connection_cache = on
+
+# Backend PostgreSQL nodes
+backend_hostname0 = '192.168.136.133'   # Primary
+backend_port0 = 5432
+backend_weight0 = 1
+backend_data_directory0 = '/var/lib/postgresql/16/main'
+backend_flag0 = 'ALLOW_TO_FAILOVER'
+
+backend_hostname1 = '192.168.136.134'   # Standby
+backend_port1 = 5432
+backend_weight1 = 1
+backend_data_directory1 = '/var/lib/postgresql/16/main'
+backend_flag1 = 'ALLOW_TO_FAILOVER'
+
+# Load balancing reads
+load_balance_mode = on
+
+# Health check
+health_check_period = 10
+health_check_timeout = 20
+health_check_user = 'postgres'
+health_check_password = '<your_postgres_password>'
+failover_command = '/etc/pgpool2/failover.sh'
+
+# Pool authentication
+pool_passwd = '/etc/pgpool2/pool_passwd'
+
+
+
+step 2
+
+Create pool_passwd
+
+pg_md5 -m -u postgres jesus@123#
+
+pg_md5 -m -u pgpool jesus@123#
+
+pg_md5 -m -u svc_replication jesus@123#
+
+
+Step 3
+=======
+
+Configure PostgreSQL Nodes to Accept Pgpool Connections - On both primary and standby nodes (pg_hba.conf):
+
+host    all     all     192.168.136.135/32    md5
+host    replication     all     192.168.136.135/32    md5
+
+Reload PostgreSQL:
+
+systemctl reload postgresql
+
+Step 4
+==========
+
+Start Pgpool-II
+
+sudo systemctl enable pgpool2
+sudo systemctl start pgpool2
+sudo systemctl status pgpool2
+
+Step 5
+=======
+
+Test connection:
+
+psql -h 192.168.136.135 -p 5432 -U postgres -d postgres -c "SHOW POOL_NODES;"
+
+
+==============================
+ldap_bind.secret
+==============================
+
+
+export PGBINDPW=$(cat /etc/postgresql/ldap_bind.secret)
+
+chmod 600 /etc/postgresql/ldap_bind.secret
+chown postgres:postgres /etc/postgresql/ldap_bind.secret
+
+
+
