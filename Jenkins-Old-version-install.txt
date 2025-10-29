@@ -1,0 +1,23 @@
+yum install -y java-11-openjdk java-11-openjdk-devel
+
+wget https://archives.jenkins-ci.org/redhat/jenkins-2.459-1.1.noarch.rpm -P /tmp/
+
+dnf localinstall -y --allowerasing /tmp/jenkins-2.459-1.1.noarch.rpm
+
+systemctl start jenkins
+
+systemctl status jenkins
+
+systemctl enable jenkins
+
+cat /var/lib/jenkins/secrets/initialAdminPassword
+488f072607884d5cb4e59dc43cb85244
+
+firewall-cmd --permanent --add-port=8080/tcp
+
+firewall-cmd --reload
+
+
+
+
+

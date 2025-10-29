@@ -1,0 +1,50 @@
+sudo dnf install java-17-openjdk java-17-openjdk-devel -y
+
+sudo alternatives --config java
+
+There are 2 programs which provide 'java'.
+
+  Selection    Command
+-----------------------------------------------
+* 1           /usr/lib/jvm/java-11-openjdk.x86_64/bin/java
+  2           /usr/lib/jvm/java-17-openjdk.x86_64/bin/java
+
+java -version
+
+sudo systemctl restart jenkins
+
+sudo tail -n 20 /var/log/jenkins/jenkins.log
+
+
+
+
+[root@localhost ~]# cd /var/lib/jenkins/
+[root@localhost jenkins]#
+[root@localhost jenkins]# ls -l
+total 80
+-rw-r--r--.  1 jenkins jenkins 1560 Oct 29 05:59 config.xml
+-rw-r--r--.  1 root    root    1660 Oct 29 05:52 config.xml.bak
+
+
+for f in $(sudo grep -Rl "<\?xml version=['\"]1\.1" /var/lib/jenkins); do
+  echo "Fixing $f"
+  sudo cp "$f" "$f.bak_pre_fix"
+  sudo sed -i "1s/<?xml version=['\"]1\.1/<?xml version='1.0/" "$f"
+done
+
+
+
+/var/lib/jenkins/hudson.model.UpdateCenter.xml
+/var/lib/jenkins/jenkins.telemetry.Correlator.xml
+/var/lib/jenkins/users/amaddukuri_*/config.xml
+/var/lib/jenkins/hudson.plugins.git.GitTool.xml
+/var/lib/jenkins/jenkins.model.JenkinsLocationConfiguration.xml
+/var/lib/jenkins/hudson.plugins.emailext.ExtendedEmailPublisher.xml
+/var/lib/jenkins/config.xml.bak
+
+
+sudo chown -R jenkins:jenkins /var/lib/jenkins
+sudo systemctl restart jenkins
+
+
+sudo tail -n 100 /var/log/jenkins/jenkins.log
