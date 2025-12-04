@@ -1,0 +1,31 @@
+Thanks, Ciaran, for your email. ServiceNow fetches only severity 3, 4, and 5 from Qualys, and severity 1 and 2 are categorized as low. The team, who usually works in ServiceNow daily, will work on critical (severity 5 in Qualys), high (severity 4 in Qualys), and medium (severity 3 in Qualys) items. Please see the details below.
+
+SHA1 deprecated: We have already removed the deprecated SHA1 cipher from many of the servers earlier, and we will re-check again. However, this is tracked in Qualys. Moving forward, we will download the report directly from Qualys and fix the issues accordingly, as these VITs are not visible in ServiceNow and need to be monitored at the Qualys level due to their low priority.
+
+SSL certificate expired: Due to recent changes in the lifespan of SSL/TLS certificates, we received these VITs. We need to correct the certificate validity.
+
+
+Hidden RPC services: These VITs were usually categorized as “potential” earlier, but it looks like they have now been changed to “confirmed” vulnerabilities of low priority.
+
+Remaining items: We have taken exceptions/waivers because the fix is not available; it is only provided in the Pro (licensed) versions.
+
+EOL – Ubuntu 20.04 version: The OpsRamp team has completed 90% of the migration. We are pending the remaining 10%. We have already received decommission confirmation for 90% of the VMs, and the remaining 10% will be completed by next week.
+
+libssh: These are recent vulnerabilities that were triggered after the OS patching cycle (28-11-2025). These will be addressed during the next OS patching cycle.
+
+We will work with Francisco and the team to check whether, once a waiver is approved in ServiceNow, we can apply any modification or exclusion so that these waived VITs do not impact the business score.
+
+
+======================================================================================
+
+
+Hidden RPC services - Udually these VITs were categorized as potentical earlier, looks like changed to confirmed vvulneration of low prioty.
+
+Remaing we took exectiomn/waiver due to fix is not avaible as it is avaible in pro versions (licensed).
+
+EOL - Ubuntu 20.0 version - OpsRamp team 90% of migration completed. we are pending with 10%, we already got demssion of 90% VMs and remaing 10% will be complted by next week.
+
+Libssh are recent vulnerativirt which got triggered post OS ptching cycle (28-11-2025), these will be addressed next month OS patching cycle.
+
+
+We will work with Fransiso and team wheneber any waiver approved in SNOW, can we do any mofifcation/exclusion of these approved waivered VITs to not affect bussins score
