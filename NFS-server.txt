@@ -1,0 +1,40 @@
+apt-get download nfs-common nfs-kernel-server
+
+mkdir nfs-offline
+cd nfs-offline
+apt-get download $(apt-cache depends --recurse --no-recommends \
+  --no-suggests --no-conflicts --no-breaks --no-replaces --no-enhances \
+  nfs-common nfs-kernel-server | grep "^\w")
+
+sudo dpkg -i *.deb
+sudo apt --fix-broken install
+
+apt-get download $(apt-cache depends --recurse --no-recommends nfs-kernel-server | grep -E '^\w')
+
+dpkg -i *.deb
+
+apt update
+
+apt --fix-broken install
+
+dpkg -l nfs-common nfs-kernel-server rpcbind adduser
+# or show only problematic packages
+dpkg --audit
+
+apt download rpcbind adduser
+# or use your distro's package server to fetch the correct .deb versions
+
+
+apt-get --download-only install nfs-kernel-server nfs-common
+
+OEL- 9
+
+mkdir /tmp/nfs-offline
+cd /tmp/nfs-offline
+
+sudo dnf download --resolve nfs-utils rpcbind
+
+cd /tmp/nfs-offline
+sudo dnf install ./*.rpm
+
+sudo dnf install --cacheonly --disablerepo='*' ./*.rpm
