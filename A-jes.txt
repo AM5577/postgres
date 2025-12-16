@@ -1,0 +1,5 @@
+Thanks, for your email. We are happy to change the passwords for all service accounts. However, our concern is that while changing the password in AD is not an issue, updating or replacing the passwords in all configurations is challenging. We need to be aware of all the places where these passwords are configured, and these are all production systems where testing may not be possible.
+
+Most of these are our infrastructure applications. We will explore and update them with new passwords. We will provide you with the current progress every month and expect to complete this within 3 to 6 months.
+
+Current progress: We have verified the last logon date in AD. We are reviewing the accounts and will notify the owners and delete them if there is no response.
