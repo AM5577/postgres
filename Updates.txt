@@ -1,0 +1,9 @@
+Last week, we segregated the Qualys Severity 1 and 2 items by group and shared those VITs with Cumulus, OpsRamp, and our team. Once we begin remediation, the business score will improve.
+
+We assigned owners for all service accounts and categorized them into two types. If the account is owned or used by an application team, our team will notify the application team and request a password change. If the service account is used internally by us, we will first create documentation and then proceed with a secondary review (Windows/VMware – Colin; Linux/DB/Others – I will review). If everything looks good after the secondary review, we will proceed with implementation. We have requested six months to complete this activity, as there is no back-out plan.
+
+I also provided support to the Incorta POC team for VSP360 in Colin’s absence, and there is nothing pending action items from our side. All requested tasks, including the firewall request, have been completed.
+
+Additionally, I shared KT and the steps for Incorta NFS mounting with Praveen.
+
+I will also be working with the team on the Internal Audit Q3 evidence requests.
