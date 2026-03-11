@@ -1,0 +1,151 @@
+============================
+
+Upgrade to Harbor 2.6.x
+
+============================
+
+cd /root/harbor
+
+docker-compose down
+
+du -sh harbor
+
+mv harbor /opt
+
+cp -r /data/database/ /opt
+
+
+======================================
+Download Intermediate Harbor 2.6.
+======================================
+
+curl -s https://api.github.com/repos/goharbor/harbor/releases/tags/v2.6.0 | grep browser_download_url | cut -d '"' -f 4 | grep '\.tgz$' | wget -i -
+
+docker pull goharbor/prepare:v2.6.0
+
+tar zxvf harbor-offline-installer-v2.6.0.tgz
+
+cd harbor
+
+ls -l
+
+docker image load -i harbor.v2.6.0.tar.gz
+
+cp /opt/harbor/harbor.yml /root/harbor
+
+cd harbor/
+
+docker run -it --rm -v /:/hostfs goharbor/prepare:v2.6.0 migrate -i $(pwd)/harbor.yml
+
+./install.sh
+
+==============
+Validation
+==============
+
+docker ps -a | grep harbor
+docker logs harbor-core
+docker ps | grep harbor-db
+docker logs harbor-db
+
+
+docker-compose ps
+docker inspect harbor-core | grep VERSION
+
+
+============================
+
+Upgrade to Harbor 2.8
+
+============================
+
+cd /root/harbor
+
+docker-compose down
+
+cd ..
+
+cd /root
+
+curl -s https://api.github.com/repos/goharbor/harbor/releases/tags/v2.8.4 | grep browser_download_url | cut -d '"' -f 4 | grep '\.tgz$' | wget -i -
+
+tar zxvf harbor-offline-installer-v2.8.4.tgz
+
+cd harbor
+
+docker image load -i harbor.v2.8.4.tar.gz
+
+cp /opt/harbor/harbor.yml /root/harbor
+
+cd harbor/
+
+docker run -it --rm -v /:/hostfs goharbor/prepare:v2.8.4 migrate -i $(pwd)/harbor.yml
+
+
+./install.sh
+
+==============
+Validation
+=============
+
+docker ps -a | grep harbor
+docker logs harbor-core
+docker ps | grep harbor-db
+docker logs harbor-db
+
+
+docker-compose ps
+docker inspect harbor-core | grep VERSION
+
+
+==========================
+Upgrade to Harbor 2.12
+=========================
+
+cd /root/harbor
+
+docker-compose down
+
+cd ..
+
+cd /root
+
+curl -s https://api.github.com/repos/goharbor/harbor/releases/tags/v2.12.0 | grep browser_download_url | cut -d '"' -f 4 | grep '\.tgz$' | wget -i -
+
+docker pull goharbor/prepare:v2.12.0
+
+tar zxvf harbor-offline-installer-v2.12.0.tgz
+
+cd harbor
+ 
+ls -l
+
+docker image load -i harbor.v2.12.0.tar.gz
+
+cp /opt/harbor/harbor.yml /root/harbor
+
+cd harbor/
+
+ls -l
+
+docker run -it --rm -v /:/hostfs goharbor/prepare:v2.12.0 migrate -i $(pwd)/harbor.yml
+
+./install.sh
+
+==============
+Validation
+=============
+
+docker ps -a | grep harbor
+docker logs harbor-core
+docker ps | grep harbor-db
+docker logs harbor-db
+
+
+docker-compose ps
+docker inspect harbor-core | grep VERSION
+
+
+
+
+
