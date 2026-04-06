@@ -1,0 +1,221 @@
+Pre-requisite:
+====================
+
+https://goharbor.io/docs/2.10.0/administration/upgrade/
+https://goharbor.io/docs/2.14.0/
+
+docker --version
+docker-compose --version
+
+root@jes1-virtual-machine:~# docker --version
+Docker version 29.3.1, build c2be9cc
+root@jes1-virtual-machine:~#
+root@jes1-virtual-machine:~# docker-compose --version
+docker-compose version 1.29.2, build 5becea4c
+
+cd /opt/
+
+mkdir -p harbor-2.11
+mkdir -p harbor-2.12
+mkdir -p harbor-2.13
+mkdir -p harbor-2.14
+mkdir -p harbor-2.15
+
+============================
+
+Upgrade to Harbor 2.12
+
+============================
+
+cd /data/harbor
+
+docker-compose down
+
+mv harbor /opt/harbor-2.11
+
+cp -r /data/database/ /opt/db-2.11 (optional)
+
+curl -s https://api.github.com/repos/goharbor/harbor/releases/tags/v2.12.0 | grep browser_download_url | cut -d '"' -f 4 | grep '\.tgz$' | wget -i -
+
+docker pull goharbor/prepare:v2.12.0
+
+tar zxvf harbor-offline-installer-v2.12.0.tgz
+
+cd harbor
+
+ls -l
+
+docker image load -i harbor.v2.12.0.tar.gz
+
+cp /opt/harbor-2.11/harbor/harbor.yml /data/harbor
+
+ls -l harbor.yml
+
+docker run -it --rm -v /:/hostfs goharbor/prepare:v2.12.0 migrate -i $(pwd)/harbor.yml
+
+./install.sh --with-trivy
+
+==============
+Validation
+==============
+
+docker ps -a | grep harbor
+docker logs harbor-core
+docker ps | grep harbor-db
+docker logs harbor-db
+
+
+docker compose ps
+docker inspect harbor-core | grep VERSION
+docker compose up -d
+
+
+============================
+
+Upgrade to Harbor 2.13
+
+============================
+
+cd /data/harbor
+
+docker-compose down
+
+cd ..
+
+mv harbor /opt/harbor-2.12
+
+cp -r /data/database/ /opt/db-2.12 (Optional)
+
+curl -s https://api.github.com/repos/goharbor/harbor/releases/tags/v2.13.0 | grep browser_download_url | cut -d '"' -f 4 | grep '\.tgz$' | wget -i -
+
+docker pull goharbor/prepare:v2.13.0
+
+tar zxvf harbor-offline-installer-v2.13.0.tgz
+
+cd harbor
+
+docker image load -i harbor.v2.13.0.tar.gz
+
+cp /opt/harbor-2.12/harbor/harbor.yml /data/harbor
+
+ls -l harbor.yml
+
+docker run -it --rm -v /:/hostfs goharbor/prepare:v2.13.0 migrate -i $(pwd)/harbor.yml
+
+./install.sh --with-trivy
+
+==============
+Validation
+=============
+
+docker ps -a | grep harbor
+docker logs harbor-core
+docker ps | grep harbor-db
+docker logs harbor-db
+
+
+docker compose ps
+docker inspect harbor-core | grep VERSION
+docker compose up -d
+
+==========================
+Upgrade to Harbor 2.14
+=========================
+
+cd /data/harbor
+
+docker-compose down
+
+cd ..
+
+mv harbor /opt/harbor-2.13
+
+cp -r /data/database/ /opt/db-2.13 (optional)
+
+curl -s https://api.github.com/repos/goharbor/harbor/releases/tags/v2.14.0 | grep browser_download_url | cut -d '"' -f 4 | grep '\.tgz$' | wget -i -
+
+docker pull goharbor/prepare:v2.14.0
+
+tar zxvf harbor-offline-installer-v2.14.0.tgz
+
+cd harbor
+ 
+ls -l
+
+docker image load -i harbor.v2.14.0.tar.gz
+
+cp /opt/harbor-2.13/harbor/harbor.yml /data/harbor
+
+ls -l harbor.yml
+
+docker run -it --rm -v /:/hostfs goharbor/prepare:v2.14.0 migrate -i $(pwd)/harbor.yml
+
+./install.sh --with-trivy
+
+==============
+Validation
+=============
+
+docker ps -a | grep harbor
+docker logs harbor-core
+docker ps | grep harbor-db
+docker logs harbor-db
+
+docker compose ps
+docker inspect harbor-core | grep VERSION
+docker compose up -d
+
+==================================
+Upgrade to Harbor 2.15
+=================================
+
+cd /data/harbor
+
+docker-compose down
+
+cd ..
+
+mv harbor /opt/harbor-2.14
+
+cp -r /data/database/ /opt/db-2.14 (optional)
+
+curl -s https://api.github.com/repos/goharbor/harbor/releases/tags/v2.15.0 | grep browser_download_url | cut -d '"' -f 4 | grep '\.tgz$' | wget -i -
+
+docker pull goharbor/prepare:v2.15.0
+
+tar zxvf harbor-offline-installer-v2.15.0.tgz
+
+cd harbor
+ 
+ls -l
+
+docker image load -i harbor.v2.15.0.tar.gz
+
+cp /opt/harbor-2.14/harbor/harbor.yml /data/harbor
+
+ls -l harbor.yml
+
+docker run -it --rm -v /:/hostfs goharbor/prepare:v2.15.0 migrate -i $(pwd)/harbor.yml
+
+./install.sh --with-trivy
+
+==============
+Validation
+=============
+
+docker ps -a | grep harbor
+docker logs harbor-core
+docker ps | grep harbor-db
+docker logs harbor-db
+
+docker compose ps
+docker inspect harbor-core | grep VERSION
+docker compose up -d
+
+
+
+Ref:
+======
+echo -e "nameserver 8.8.8.8\nnameserver 1.1.1.1" > /etc/resolv.conf
+
+ping github.com
