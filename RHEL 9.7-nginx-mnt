@@ -1,0 +1,156 @@
+mkdir -p /var/www/html/rhel97
+cd /var/www/html/rhel97
+
+mount -o loop rhel-9.7-x86_64-dvd.iso /mnt
+cp -r /mnt/* /var/www/html/rhel97
+umount /mnt
+
+ls /var/www/html/rhel97/
+
+subscription-manager register
+
+dnf install -y nginx
+systemctl enable --now nginx
+
+
+
+mkdir -p /etc/nginx/ssl
+
+openssl req -new -x509 -days 3650 -nodes \
+  -out /etc/nginx/ssl/server.crt \
+  -keyout /etc/nginx/ssl/server.key
+
+vi /etc/nginx/conf.d/rhel97.conf
+
+
+server {
+    listen 443 ssl;
+    server_name 192.168.121.169;
+
+    ssl_certificate /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+
+    location /rhel97/ {
+        autoindex on;
+        alias /var/www/html/rhel97/;
+    }
+}
+
+
+systemctl restart nginx
+
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+
+
+https:// 192.168.121.160/rhel97/
+
+vi /etc/yum.repos.d/rhel97.repo
+
+
+[rhel97-baseos]
+name=RHEL 9.7 BaseOS
+baseurl=http://192.168.121.169/rhel97/BaseOS/
+enabled=1
+gpgcheck=0
+
+[rhel97-appstream]
+name=RHEL 9.7 AppStream
+baseurl=http://192.168.121.169/rhel97/AppStream/
+enabled=1
+gpgcheck=0
+
+
+dnf clean all
+dnf makecache
+dnf repolist
+
+
+systemctl status nginx
+ss -tulnp | grep nginx
+
+chmod -R 755 /var/www/html/rhel97
+
+restorecon -Rv /var/www/html
+
+=============
+
+1. Install NGINX + SSL tools
+
+
+dnf install -y nginx openssl
+systemctl enable --now nginx
+
+
+2. Prepare Repo Directory (already done)
+
+/var/www/html/rhel97
+
+chmod -R 755 /var/www/html/rhel97
+restorecon -Rv /var/www/html
+
+
+Generate SSL Certificate
+
+
+mkdir -p /etc/nginx/ssl
+
+openssl req -new -x509 -days 3650 -nodes \
+  -out /etc/nginx/ssl/server.crt \
+  -keyout /etc/nginx/ssl/server.key
+
+
+. NGINX HTTPS Config (IMPORTANT)
+
+vi /etc/nginx/conf.d/rhel97.conf
+
+server {
+    listen 443 ssl;
+    server_name 192.168.121.169;
+
+    ssl_certificate /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+
+    root /var/www/html;
+
+    location /rhel97/ {
+        autoindex on;
+        alias /var/www/html/rhel97/;
+    }
+}
+
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+
+
+systemctl restart nginx
+
+ss -tulnp | grep 443
+
+
+https://192.168.121.169/rhel97/
+curl -k https://192.168.121.169/rhel97/
+
+vi /etc/yum.repos.d/rhel97.repo
+
+
+[rhel97-baseos]
+name=RHEL 9.7 BaseOS
+baseurl=https://192.168.121.169/rhel97/BaseOS/
+enabled=1
+gpgcheck=0
+sslverify=0
+
+[rhel97-appstream]
+name=RHEL 9.7 AppStream
+baseurl=https://192.168.121.169/rhel97/AppStream/
+enabled=1
+gpgcheck=0
+sslverify=0
+
+dnf clean all
+dnf makecache
+dnf repolist
+
+
+
