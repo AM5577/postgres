@@ -1,0 +1,1678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Red Hat Enterprise Linux 9.5 Bare Metal Installation Guide</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        
+        /* Title Page */
+        .title-page {
+            page-break-after: always;
+            text-align: center;
+            padding: 100px 50px;
+            background: linear-gradient(135deg, #1a237e 0%, #0d47a1 50%, #e53935 100%);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+        
+        .title-page h1 {
+            font-size: 48px;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .title-page h2 {
+            font-size: 28px;
+            font-weight: 300;
+            margin-bottom: 40px;
+            opacity: 0.9;
+        }
+        
+        .title-page .subtitle {
+            font-size: 20px;
+            margin-top: 60px;
+            opacity: 0.8;
+        }
+        
+        .title-page .logo {
+            font-size: 72px;
+            margin-bottom: 30px;
+        }
+        
+        .title-page .version {
+            margin-top: 80px;
+            font-size: 16px;
+            opacity: 0.7;
+        }
+        
+        /* TOC */
+        .toc {
+            page-break-after: always;
+            padding: 40px;
+        }
+        
+        .toc h1 {
+            color: #1a237e;
+            border-bottom: 3px solid #e53935;
+            padding-bottom: 15px;
+            margin-bottom: 30px;
+        }
+        
+        .toc ul {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .toc li {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .toc a {
+            text-decoration: none;
+            color: #333;
+        }
+        
+        .toc a:hover {
+            color: #e53935;
+        }
+        
+        /* Content Pages */
+        .content {
+            padding: 40px 60px;
+        }
+        
+        h1 {
+            color: #1a237e;
+            font-size: 32px;
+            border-bottom: 3px solid #e53935;
+            padding-bottom: 15px;
+            margin-top: 40px;
+            page-break-before: always;
+        }
+        
+        h1:first-of-type {
+            page-break-before: auto;
+        }
+        
+        h2 {
+            color: #0d47a1;
+            font-size: 24px;
+            margin-top: 30px;
+            padding-left: 15px;
+            border-left: 4px solid #e53935;
+        }
+        
+        h3 {
+            color: #1565c0;
+            font-size: 18px;
+            margin-top: 20px;
+        }
+        
+        p {
+            margin: 15px 0;
+            text-align: justify;
+        }
+        
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+            page-break-inside: avoid;
+        }
+        
+        th {
+            background: #1a237e;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: bold;
+        }
+        
+        td {
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+        }
+        
+        tr:nth-child(even) {
+            background: #f5f5f5;
+        }
+        
+        tr:hover {
+            background: #e3f2fd;
+        }
+        
+        /* Code Blocks */
+        pre {
+            background: #263238;
+            color: #aed581;
+            padding: 15px 20px;
+            border-radius: 5px;
+            overflow-x: auto;
+            page-break-inside: avoid;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        code {
+            font-family: 'Consolas', 'Monaco', monospace;
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        
+        pre code {
+            background: none;
+            padding: 0;
+        }
+        
+        /* Boxed Content */
+        .info-box, .warning-box, .success-box {
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 5px;
+            page-break-inside: avoid;
+        }
+        
+        .info-box {
+            background: #e3f2fd;
+            border-left: 5px solid #2196f3;
+        }
+        
+        .warning-box {
+            background: #fff3e0;
+            border-left: 5px solid #ff9800;
+        }
+        
+        .success-box {
+            background: #e8f5e9;
+            border-left: 5px solid #4caf50;
+        }
+        
+        /* Diagrams */
+        .diagram {
+            background: white;
+            border: 2px solid #ddd;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+            page-break-inside: avoid;
+        }
+        
+        .diagram-box {
+            display: inline-block;
+            padding: 15px 25px;
+            margin: 10px;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+        
+        .diagram-admin {
+            background: #e1bee7;
+            border: 2px solid #8e24aa;
+        }
+        
+        .diagram-bmc {
+            background: #b3e5fc;
+            border: 2px solid #0288d1;
+        }
+        
+        .diagram-server {
+            background: #c8e6c9;
+            border: #388e3c;
+            border-style: solid;
+        }
+        
+        .diagram-arrow {
+            font-size: 24px;
+            color: #666;
+            margin: 0 10px;
+        }
+        
+        /* Console UI Mockups */
+        .console-ui {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Consolas', monospace;
+            font-size: 13px;
+            margin: 20px 0;
+            page-break-inside: avoid;
+            overflow-x: auto;
+        }
+        
+        .console-ui .title {
+            color: #569cd6;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .console-ui .menu {
+            color: #4ec9b0;
+        }
+        
+        .console-ui .input {
+            color: #9cdcfe;
+        }
+        
+        .console-ui .label {
+            color: #ce9178;
+        }
+        
+        .console-ui .button {
+            color: #4caf50;
+        }
+        
+        /* Checklists */
+        .checklist {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .checklist li {
+            padding: 10px 0;
+            padding-left: 30px;
+            position: relative;
+        }
+        
+        .checklist li:before {
+            content: "☐";
+            position: absolute;
+            left: 0;
+            font-size: 20px;
+            color: #1a237e;
+        }
+        
+        /* Print Media */
+        @media print {
+            body {
+                font-size: 12pt;
+            }
+            
+            h1 {
+                font-size: 24pt;
+            }
+            
+            h2 {
+                font-size: 18pt;
+            }
+            
+            .title-page {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+            
+            pre {
+                white-space: pre-wrap;
+                word-wrap: break-word;
+            }
+        }
+        
+        /* Page Numbers */
+        .page-number {
+            position: running(page-number);
+            font-size: 10pt;
+            color: #666;
+        }
+        
+        @page {
+            @bottom-right {
+                content: "Page " counter(page);
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- TITLE PAGE -->
+<div class="title-page">
+    <div class="logo">🐧</div>
+    <h1>Red Hat Enterprise Linux 9.5</h1>
+    <h2>Bare Metal Installation Guide</h2>
+    <p style="font-size: 22px; margin-top: 40px;">Enterprise-Grade Remote Console Deployment</p>
+    <p style="font-size: 18px; margin-top: 20px; opacity: 0.9;">iDRAC • iLO • IPMI</p>
+    <div class="subtitle">
+        <p>Step-by-Step Installation Procedures for Production Environments</p>
+    </div>
+    <div class="version">
+        <p><strong>Version:</strong> 1.0 | <strong>Date:</strong> April 2026</p>
+        <p>Senior RHCA & Technical Documentation Expert</p>
+    </div>
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="toc">
+    <h1>Table of Contents</h1>
+    <ul>
+        <li><a href="#1">1. Introduction &amp; Overview</a></li>
+        <li><a href="#2">2. Prerequisites</a></li>
+        <li><a href="#3">3. Architecture Diagram: Remote Console Workflow</a></li>
+        <li><a href="#4">4. Accessing Remote Console</a>
+            <ul>
+                <li><a href="#41">4.1 iDRAC Access (Dell)</a></li>
+                <li><a href="#42">4.2 iLO Access (HPE)</a></li>
+                <li><a href="#43">4.3 IPMI Access</a></li>
+            </ul>
+        </li>
+        <li><a href="#5">5. Mounting RHEL ISO via Virtual Media</a></li>
+        <li><a href="#6">6. BIOS/UEFI Boot Configuration</a></li>
+        <li><a href="#7">7. RAID Configuration</a></li>
+        <li><a href="#8">8. Booting into RHEL Installer</a></li>
+        <li><a href="#9">9. Anaconda Installer Walkthrough</a>
+            <ul>
+                <li><a href="#91">9.1 Language Selection</a></li>
+                <li><a href="#92">9.2 Installation Summary</a></li>
+                <li><a href="#93">9.3 Disk Partitioning (LVM)</a></li>
+                <li><a href="#94">9.4 Network Configuration</a></li>
+                <li><a href="#95">9.5 Software Selection</a></li>
+                <li><a href="#96">9.6 User Creation</a></li>
+                <li><a href="#97">9.7 Installation Progress</a></li>
+                <li><a href="#98">9.8 First Login</a></li>
+            </ul>
+        </li>
+        <li><a href="#10">10. Reboot and Validation</a></li>
+        <li><a href="#11">11. Enterprise Best Practices</a></li>
+        <li><a href="#12">12. Common Mistakes in Remote Installs</a></li>
+        <li><a href="#13">13. Troubleshooting</a></li>
+        <li><a href="#14">14. Quick Reference Cheat Sheet</a></li>
+    </ul>
+</div>
+
+<!-- CONTENT -->
+<div class="content">
+
+<h1 id="1">1. Introduction &amp; Overview</h1>
+
+<h2>Purpose</h2>
+<p>This guide provides step-by-step instructions for installing Red Hat Enterprise Linux 9.5 on bare metal servers using remote console technologies (iDRAC, iLO, or IPMI). This methodology is essential for:</p>
+<ul>
+    <li><strong>Datacenter deployments</strong> where physical server access is impractical</li>
+    <li><strong>Remote/hybrid work environments</strong> requiring out-of-band management</li>
+    <li><strong>Enterprise standardization</strong> of OS deployment procedures</li>
+    <li><strong>Disaster recovery scenarios</strong> needing rapid OS reinstallation</li>
+</ul>
+
+<h2>Target Audience</h2>
+<ul>
+    <li>System Administrators</li>
+    <li>DevOps Engineers</li>
+    <li>Infrastructure Architects</li>
+    <li>RHCA-Certified Professionals</li>
+</ul>
+
+<h2>RHEL 9.5 Key Features</h2>
+<table>
+    <tr>
+        <th>Feature</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>UEFI Secure Boot</td>
+        <td>Enhanced security with signed bootloaders</td>
+    </tr>
+    <tr>
+        <td>LVM Thin Provisioning</td>
+        <td>Efficient storage allocation</td>
+    </tr>
+    <tr>
+        <td>Network Stack</td>
+        <td>Improved NetworkManager with keyfile support</td>
+    </tr>
+    <tr>
+        <td>SELinux</td>
+        <td>Enforcing mode by default</td>
+    </tr>
+    <tr>
+        <td>Firmware</td>
+        <td>Modern hardware support (AMD Genoa, Intel Sapphire Rapids)</td>
+    </tr>
+</table>
+
+<h1 id="2">2. Prerequisites</h1>
+
+<h2>Hardware Requirements</h2>
+<table>
+    <tr>
+        <th>Component</th>
+        <th>Minimum</th>
+        <th>Recommended (Enterprise)</th>
+    </tr>
+    <tr>
+        <td>CPU</td>
+        <td>2 cores</td>
+        <td>8+ cores</td>
+    </tr>
+    <tr>
+        <td>RAM</td>
+        <td>2 GB</td>
+        <td>16+ GB</td>
+    </tr>
+    <tr>
+        <td>Disk</td>
+        <td>10 GB</td>
+        <td>500+ GB (RAID configured)</td>
+    </tr>
+    <tr>
+        <td>Network</td>
+        <td>1 Gbps</td>
+        <td>10 Gbps</td>
+    </tr>
+</table>
+
+<h2>Storage Recommendations</h2>
+<table>
+    <tr>
+        <th>Mount Point</th>
+        <th>Minimum Size</th>
+        <th>Recommended</th>
+        <th>File System</th>
+    </tr>
+    <tr>
+        <td>Operating System</td>
+        <td>50 GB</td>
+        <td>100 GB</td>
+        <td>XFS</td>
+    </tr>
+    <tr>
+        <td>/boot</td>
+        <td>1 GB</td>
+        <td>1 GB</td>
+        <td>XFS</td>
+    </tr>
+    <tr>
+        <td>/boot/efi</td>
+        <td>512 MB</td>
+        <td>512 MB</td>
+        <td>EFI</td>
+    </tr>
+    <tr>
+        <td>Swap</td>
+        <td>2 GB</td>
+        <td>8 GB (or RAM size)</td>
+        <td>Swap</td>
+    </tr>
+    <tr>
+        <td>/var</td>
+        <td>10 GB</td>
+        <td>20+ GB</td>
+        <td>XFS</td>
+    </tr>
+</table>
+
+<h2>Access Prerequisites</h2>
+<div class="info-box">
+    <strong>Network Requirements:</strong><br>
+    ✅ Remote console accessible on dedicated management network<br>
+    ✅ Virtual media sharing enabled (HTTP/HTTPS/CIFS)<br>
+    ✅ Firewall ports opened: iDRAC: 443, 623 (UDP) | iLO: 443, 17990 | IPMI: 623 (UDP)
+</div>
+
+<h2>Required Information</h2>
+<table>
+    <tr>
+        <th>Item</th>
+        <th>Example</th>
+    </tr>
+    <tr>
+        <td>Remote console URL</td>
+        <td>https://192.168.1.100</td>
+    </tr>
+    <tr>
+        <td>Management IP</td>
+        <td>192.168.1.100/24</td>
+    </tr>
+    <tr>
+        <td>Username</td>
+        <td>admin or root</td>
+    </tr>
+    <tr>
+        <td>Virtual Media URL</td>
+        <td>http://192.168.1.50/rhel-9.5.iso</td>
+    </tr>
+    <tr>
+        <td>Target server hostname</td>
+        <td>rhel-server-01</td>
+    </tr>
+    <tr>
+        <td>IP configuration</td>
+        <td>192.168.10.50/24, gw: 192.168.10.1</td>
+    </tr>
+    <tr>
+        <td>DNS servers</td>
+        <td>8.8.8.8, 8.8.4.4</td>
+    </tr>
+    <tr>
+        <td>NTP servers</td>
+        <td>time.redhat.com</td>
+    </tr>
+</table>
+
+<h1 id="3">3. Architecture Diagram: Remote Console Workflow</h1>
+
+<div class="diagram">
+    <h3>High-Level Architecture</h3>
+    <div style="display: flex; justify-content: center; align-items: center; flex-wrap: wrap;">
+        <div class="diagram-box diagram-admin">Admin Workstation</div>
+        <span class="diagram-arrow">→</span>
+        <div class="diagram-box diagram-bmc">BMC (iDRAC/iLO/IPMI)</div>
+        <span class="diagram-arrow">→</span>
+        <div class="diagram-box diagram-server">Server Hardware</div>
+    </div>
+    <p style="margin-top: 20px; font-size: 14px;">Step 1: Access BMC → Step 2: Mount ISO → Step 3: Configure Boot → Step 4: Launch Installer → Step 5: Complete Install → Step 6: Reboot &amp; Validate</p>
+</div>
+
+<div class="diagram">
+    <h3>Detailed Installation Workflow</h3>
+    <div style="text-align: left; padding: 20px;">
+        <p><strong>STEP 1:</strong> Login to Remote Console (Web UI) → https://[BMC-IP] → Authentication</p>
+        <p><strong>STEP 2:</strong> Mount RHEL ISO as Virtual Media → Connect ISO Image via HTTP/HTTPS</p>
+        <p><strong>STEP 3:</strong> Configure Boot Order → Set Virtual CD/DVD as First Boot Device</p>
+        <p><strong>STEP 4:</strong> Launch Remote Console (KVM) → Open Java/Web-based console</p>
+        <p><strong>STEP 5:</strong> Anaconda Installation → Complete installation wizard</p>
+        <p><strong>STEP 6:</strong> Reboot and Verify → Login, network connectivity, services</p>
+    </div>
+</div>
+
+<h1 id="4">4. Accessing Remote Console</h1>
+
+<h2 id="41">4.1 iDRAC Access (Dell)</h2>
+
+<h3>Connection Details</h3>
+<table>
+    <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+    </tr>
+    <tr>
+        <td>Interface</td>
+        <td>iDRAC9 (Gen14/15) or iDRAC8 (Gen13)</td>
+    </tr>
+    <tr>
+        <td>URL Format</td>
+        <td>https://[iDRAC-IP]</td>
+    </tr>
+    <tr>
+        <td>Default Port</td>
+        <td>443</td>
+    </tr>
+    <tr>
+        <td>Protocol</td>
+        <td>HTTPS (TLS 1.2+)</td>
+    </tr>
+</table>
+
+<h3>Steps to Access Virtual Console</h3>
+<ol>
+    <li>Navigate to <strong>iDRAC Dashboard</strong> → <strong>Settings</strong> → <strong>Virtual Console</strong></li>
+    <li><strong>Enable</strong> Virtual Console</li>
+    <li><strong>Set</strong> plug-in type to <strong>HTML5</strong> (recommended over Java)</li>
+    <li><strong>Click</strong> "Launch Virtual Console"</li>
+</ol>
+
+<div class="console-ui">
+    <div class="title">iDRAC9 VIRTUAL CONSOLE - HTML5</div>
+    <div class="menu">[i] [Dashboard] [Server] [Storage] [Network] [iDRAC Settings] [Logs]</div>
+    <br>
+    <div class="label">VIRTUAL MEDIA</div>
+    <div class="label">───────────────────</div>
+    <div class="label">CD/DVD: Connected</div>
+    <div class="label">Image: rhel-9.5.iso</div>
+    <div class="button">[Disconnect] [Map Drive...]</div>
+    <br>
+    <div class="label">POWER CONTROL</div>
+    <div class="label">───────────────────</div>
+    <div class="button">[Power On] [Power Off] [Reset] [Graceful Shutdown]</div>
+    <br>
+    <div class="label">BOOT SEQUENCE</div>
+    <div class="label">───────────────────</div>
+    <div class="label">1. Virtual CD/DVD</div>
+    <div class="label">2. Hard Drive</div>
+    <div class="label">3. Network (PXE)</div>
+    <div class="button">[One-Time Boot]</div>
+</div>
+
+<h2 id="42">4.2 iLO Access (HPE)</h2>
+
+<h3>Connection Details</h3>
+<table>
+    <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+    </tr>
+    <tr>
+        <td>Interface</td>
+        <td>iLO5 (Gen10), iLO6 (Gen11)</td>
+    </tr>
+    <tr>
+        <td>URL Format</td>
+        <td>https://[iLO-IP]</td>
+    </tr>
+    <tr>
+        <td>Default Port</td>
+        <td>443</td>
+    </tr>
+    <tr>
+        <td>Protocol</td>
+        <td>HTTPS with FIPS 140-2</td>
+    </tr>
+</table>
+
+<div class="console-ui">
+    <div class="title">HPE iLO5 LOGIN SCREEN</div>
+    <br>
+    <div class="label">HPE Integrated Lights-Out iLO 5.2.0</div>
+    <br>
+    <div class="label">Username: [admin]</div>
+    <div class="label">Password: [••••••••••••]</div>
+    <br>
+    <div class="button">[Login] [Language: EN]</div>
+</div>
+
+<h2 id="43">4.3 IPMI Access</h2>
+
+<h3>Connection Methods</h3>
+<table>
+    <tr>
+        <th>Method</th>
+        <th>Tool</th>
+        <th>Example Command</th>
+    </tr>
+    <tr>
+        <td>CLI</td>
+        <td>ipmitool</td>
+        <td>ipmitool -I lanplus -H 192.168.1.100 -U admin -P password sol activate</td>
+    </tr>
+    <tr>
+        <td>GUI</td>
+        <td>IPMIView</td>
+        <td>Download from vendor</td>
+    </tr>
+    <tr>
+        <td>Web</td>
+        <td>IPMI Web UI</td>
+        <td>Similar to iDRAC/iLO</td>
+    </tr>
+    <tr>
+        <td>Redfish</td>
+        <td>REST API</td>
+        <td>curl -k https://192.168.1.100/redfish/v1/</td>
+    </tr>
+</table>
+
+<h3>IPMItool Examples</h3>
+<pre>
+# Activate Serial Over LAN (SOL)
+ipmitool -I lanplus -H 192.168.1.100 -U admin -P 'Password123!' sol activate
+
+# Set boot device to PXE
+ipmitool -I lanplus -H 192.168.1.100 -U admin -P 'Password123!' chassis bootdev pxe
+
+# Set boot device to disk
+ipmitool -I lanplus -H 192.168.1.100 -U admin -P 'Password123!' chassis bootdev disk
+
+# Power control
+ipmitool -I lanplus -H 192.168.1.100 -U admin -P 'Password123!' power on
+ipmitool -I lanplus -H 192.168.1.100 -U admin -P 'Password123!' power reset
+</pre>
+
+<h1 id="5">5. Mounting RHEL ISO via Virtual Media</h1>
+
+<h2>Step 1: Host the ISO on a Web Server</h2>
+
+<h3>Option A: Python SimpleHTTPServer (Quick Test)</h3>
+<pre>
+# Create a directory for the ISO
+mkdir -p /opt/rhel-iso
+cd /opt/rhel-iso
+
+# Copy your RHEL ISO to this directory
+cp /path/to/rhel-9.5-x86_64-dvd1.iso .
+
+# Start HTTP server on port 8000
+python3 -m http.server 8000
+</pre>
+
+<h3>Option B: Apache/Nginx (Production)</h3>
+<pre>
+# Apache configuration example
+# /etc/httpd/conf.d/rhel-iso.conf
+Alias /rhel-iso /opt/rhel-iso
+&lt;Directory /opt/rhel-iso&gt;
+    Options +Indexes
+    Require all granted
+&lt;/Directory&gt;
+
+# Start Apache
+systemctl enable --now httpd
+</pre>
+
+<div class="success-box">
+    <strong>✅ Tip:</strong> Verify the ISO is accessible by running: <code>curl -I http://[IP]:8000/rhel-9.5.iso</code> from another machine before proceeding.
+</div>
+
+<h2>Step 2: Mount ISO in Remote Console</h2>
+<div class="console-ui">
+    <div class="title">VIRTUAL MEDIA - ISO MOUNTING SCREEN</div>
+    <br>
+    <div class="label">VIRTUAL MEDIA CONNECTED</div>
+    <div class="label">─────────────────────────────</div>
+    <div class="label">📀 RHEL 9.5 INSTALLATION MEDIA</div>
+    <div class="label">ISO File: rhel-9.5-x86_64-dvd1.iso</div>
+    <div class="label">Size: 10.2 GB</div>
+    <div class="label">Source: http://192.168.1.50:8000/rhel-9.5.iso</div>
+    <br>
+    <div class="button">[Status: CONNECTED ✓]</div>
+    <br>
+    <div class="label">Actions:</div>
+    <div class="label">• Disconnect Virtual Media</div>
+    <div class="label">• Connect New Image</div>
+    <div class="label">• Auto-Disconnect: [ ] On Reboot</div>
+</div>
+
+<h1 id="6">6. BIOS/UEFI Boot Configuration</h1>
+
+<h2>Accessing BIOS/UEFI Setup</h2>
+<ol>
+    <li>Power on or reset the server</li>
+    <li>Watch for boot prompt in remote console</li>
+    <li>Press appropriate key:
+        <ul>
+            <li><strong>Dell:</strong> F2 for System Setup</li>
+            <li><strong>HPE:</strong> F9 for BIOS/Utility</li>
+            <li><strong>Supermicro:</strong> Del or F11</li>
+        </ul>
+    </li>
+</ol>
+
+<h2>Boot Order Configuration</h2>
+<div class="console-ui">
+    <div class="title">BOOT SEQUENCE CONFIGURATION</div>
+    <br>
+    <div class="label">Current Boot Order:</div>
+    <div class="label">#1 [▶] Virtual CD/DVD (iDRAC Virtual CD/DVD)</div>
+    <div class="label">#2 [▶] Hard Drive (MEGARAID SAS INV Controller)</div>
+    <div class="label">#3 [▶] Network (Intel(R) Ethernet) - PXE</div>
+    <div class="label">#4 [▶] UEFI: PXE IPv4 Intel Corporation</div>
+    <div class="label">#5 [▶] USB Device</div>
+    <br>
+    <div class="label">One-Time Boot Options:</div>
+    <div class="label">(•) Force Virtual CD/DVD</div>
+    <div class="label">( ) Force BIOS Setup</div>
+    <div class="label">[Apply] [Reset to Default] [Exit]</div>
+</div>
+
+<h2>UEFI Secure Boot Considerations</h2>
+<table>
+    <tr>
+        <th>Setting</th>
+        <th>Recommendation</th>
+    </tr>
+    <tr>
+        <td>Secure Boot</td>
+        <td>Enable for production</td>
+    </tr>
+    <tr>
+        <td>UEFI Mode</td>
+        <td>Required for RHEL 9.x</td>
+    </tr>
+    <tr>
+        <td>CSM Support</td>
+        <td>Disable (Legacy boot)</td>
+    </tr>
+</table>
+
+<h1 id="7">7. RAID Configuration</h2>
+
+<h2>Why RAID Matters</h2>
+<table>
+    <tr>
+        <th>RAID Level</th>
+        <th>Use Case</th>
+        <th>Min Disks</th>
+        <th>Performance</th>
+        <th>Fault Tolerance</th>
+    </tr>
+    <tr>
+        <td>RAID 0</td>
+        <td>Non-critical</td>
+        <td>2</td>
+        <td>★★★★★</td>
+        <td>None</td>
+    </tr>
+    <tr>
+        <td>RAID 1</td>
+        <td>OS/boot</td>
+        <td>2</td>
+        <td>★★★☆☆</td>
+        <td>1 disk failure</td>
+    </tr>
+    <tr>
+        <td>RAID 5</td>
+        <td>General purpose</td>
+        <td>3</td>
+        <td>★★★★☆</td>
+        <td>1 disk failure</td>
+    </tr>
+    <tr>
+        <td>RAID 6</td>
+        <td>Large storage</td>
+        <td>4</td>
+        <td>★★★☆☆</td>
+        <td>2 disk failures</td>
+    </tr>
+    <tr>
+        <td>RAID 10</td>
+        <td>High I/O, critical</td>
+        <td>4+</td>
+        <td>★★★★★</td>
+        <td>Multiple</td>
+    </tr>
+</table>
+
+<h2>Recommended Partition Layout</h2>
+<table>
+    <tr>
+        <th>Device</th>
+        <th>Mount Point</th>
+        <th>Size</th>
+        <th>Type</th>
+        <th>Options</th>
+    </tr>
+    <tr>
+        <td>/dev/sda1</td>
+        <td>/boot/efi</td>
+        <td>512 MB</td>
+        <td>EFI</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda2</td>
+        <td>/boot</td>
+        <td>1 GB</td>
+        <td>XFS</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda3</td>
+        <td>-</td>
+        <td>2 GB</td>
+        <td>SWAP</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda4</td>
+        <td>/</td>
+        <td>50 GB</td>
+        <td>XFS</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda5</td>
+        <td>/var</td>
+        <td>20 GB</td>
+        <td>XFS</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda6</td>
+        <td>/var/log</td>
+        <td>10 GB</td>
+        <td>XFS</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda7</td>
+        <td>/home</td>
+        <td>5 GB</td>
+        <td>XFS</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda8</td>
+        <td>/tmp</td>
+        <td>10 GB</td>
+        <td>XFS</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda9</td>
+        <td>/opt</td>
+        <td>100 GB</td>
+        <td>XFS</td>
+        <td>defaults</td>
+    </tr>
+    <tr>
+        <td>/dev/sda10</td>
+        <td>-</td>
+        <td>301.5 GB</td>
+        <td>LVM PV</td>
+        <td></td>
+    </tr>
+</table>
+
+<h1 id="8">8. Booting into RHEL Installer</h1>
+
+<div class="console-ui">
+    <div class="title">GRUB BOOT MENU SCREEN</div>
+    <br>
+    <div class="menu">Red Hat Enterprise Linux 9.5</div>
+    <div class="menu">═══════════════════════════════</div>
+    <br>
+    <div class="label">▶ Install Red Hat Enterprise Linux 9.5</div>
+    <div class="label">  Test this media &amp; install Red Hat Enterprise Linux 9.5</div>
+    <div class="label">  Troubleshooting →</div>
+    <br>
+    <div class="label">Use the ↑ and ↓ keys to select which entry is highlighted.</div>
+    <div class="label">Press enter to boot the selected OS.</div>
+    <br>
+    <div class="label">'t' - to edit text of the kernel arguments before booting.</div>
+    <div class="label">'a' - to modify kernel arguments before booting.</div>
+    <div class="label">'c' - for a command line</div>
+    <br>
+    <div class="button">Press &lt;Enter&gt; to start the installation process</div>
+    <div class="label">Timer: 30 seconds before automatic selection of first option</div>
+</div>
+
+<h2>Boot Options (Advanced)</h2>
+<table>
+    <tr>
+        <th>Boot Option</th>
+        <th>Purpose</th>
+    </tr>
+    <tr>
+        <td><code>inst.repo=http://...</code></td>
+        <td>Specify network installation repository</td>
+    </tr>
+    <tr>
+        <td><code>inst.ip=192.168.1.50::255.255.255.0:192.168.1.1</code></td>
+        <td>Configure network manually</td>
+    </tr>
+    <tr>
+        <td><code>inst.vnc</code></td>
+        <td>Enable VNC for headless installation</td>
+    </tr>
+    <tr>
+        <td><code>inst.sshd</code></td>
+        <td>Enable SSH for text-mode installation</td>
+    </tr>
+    <tr>
+        <td><code>inst.text</code></td>
+        <td>Text-only installation</td>
+    </tr>
+    <tr>
+        <td><code>quiet</code></td>
+        <td>Suppress verbose boot messages</td>
+    </tr>
+</table>
+
+<h1 id="9">9. Anaconda Installer Walkthrough</h1>
+
+<h2 id="91">9.1 Language Selection</h2>
+<div class="info-box">
+    <strong>Select an Language</strong><br><br>
+    What language would you like to use during the installation process?<br><br>
+    <strong>Recommended:</strong> English (United States)<br>
+    You can configure additional language settings after installation.
+</div>
+
+<h2 id="92">9.2 Installation Summary</h2>
+<div class="info-box">
+    <strong>📋 Installation Summary</strong><br><br>
+    <strong>Localization</strong><br>
+    • [●] Keyboard: English (US)<br>
+    • [●] Language Support: English (US)<br>
+    • [●] Time Settings: America/New_York (UTC-05:00)<br><br>
+    <strong>Software</strong><br>
+    • [●] Installation Source: Local media<br>
+    • [●] Software Selection: Server with GUI<br><br>
+    <strong>System</strong><br>
+    • [●] Installation Destination: 500 GB VirtIO Block Device<br>
+    • [●] Network Configuration: Not connected<br>
+    • [●] Root Password: Not set<br><br>
+    <strong>User Settings</strong><br>
+    • [●] User Creation: No user will be created<br><br>
+    <div class="warning-box">
+        ⚠️ Configuration requirements before proceeding:<br>
+        • Installation Destination - Set partition layout<br>
+        • Network Configuration - Configure at least one connection<br>
+        • Root Password - Set a root password<br>
+        • Software Selection - Choose base environment
+    </div>
+</div>
+
+<h2 id="93">9.3 Disk Partitioning (LVM)</h2>
+
+<h3>Manual Partitioning Steps</h3>
+<div class="console-ui">
+    <div class="title">MANUAL PARTITIONING - LVM CONFIGURATION</div>
+    <br>
+    <div class="label">Click the + button to create new mount points.</div>
+    <div class="label">Click the - button to remove selected mount points.</div>
+    <br>
+    <div class="label">Mount Points:</div>
+    <div class="label">/dev/sda1 | /boot/efi | 512 MiB | EFI System Partition</div>
+    <div class="label">/dev/sda2 | /boot | 1 GiB | XFS</div>
+    <div class="label">/dev/sda3 | - | 2 GiB | Swap</div>
+    <div class="label">/dev/sda4 | / | 50 GiB | XFS</div>
+    <div class="label">/dev/sda5 | /var | 20 GiB | XFS</div>
+    <div class="label">/dev/sda6 | /var/log | 10 GiB | XFS</div>
+    <div class="label">/dev/sda7 | /home | 5 GiB | XFS</div>
+    <div class="label">/dev/sda8 | /tmp | 10 GiB | XFS</div>
+    <div class="label">/dev/sda9 | /opt | 100 GiB | XFS</div>
+    <div class="label">/dev/sda10 | - | Remaining | LVM Physical Volume</div>
+    <br>
+    <div class="button">[ + ] [ - ] [Modify...]</div>
+    <br>
+    <div class="label">Device Type: (•) Standard Partition ( ) LVM ( ) BTRFS ( ) VFAT</div>
+    <div class="label">Encrypt: [ ] Encrypt | Reformat: [ ] Reformat</div>
+</div>
+
+<h3>LVM Volume Group Configuration</h3>
+<div class="info-box">
+    <strong>Volume Groups:</strong><br>
+    <div style="margin-left: 20px;">
+        <strong>Name:</strong> vg_root<br>
+        <strong>Physical Volume:</strong> /dev/sda10<br>
+        <strong>Total Size:</strong> 301.5 GiB<br>
+        <strong>Free:</strong> 301.5 GiB<br><br>
+        <strong>Logical Volumes:</strong><br>
+        • lv_root (/) - Size: 301.5 GiB
+    </div>
+</div>
+
+<h2 id="94">9.4 Network Configuration</h2>
+<div class="console-ui">
+    <div class="title">NETWORK CONFIGURATION - ETHERNET</div>
+    <br>
+    <div class="label">🌐 Network Configuration</div>
+    <br>
+    <div class="label">Hostname: rhel-server-01</div>
+    <br>
+    <div class="label">Ethernet (ens160) - Connected</div>
+    <div class="label">[✓] Connect automatically</div>
+    <br>
+    <div class="label">IPv4 Settings:</div>
+    <div class="label">Method: (•) Manual ( ) Automatic (DHCP)</div>
+    <br>
+    <div class="label">Address:    [192.168.10.50      ]</div>
+    <div class="label">Netmask:    [255.255.255.0      ]</div>
+    <div class="label">Gateway:    [192.168.10.1       ]</div>
+    <br>
+    <div class="label">DNS Servers: [8.8.8.8           ]  [+] Add</div>
+    <div class="label">               [8.8.4.4           ]</div>
+    <br>
+    <div class="label">Search Domains: [corp.example.com    ]  [+] Add</div>
+    <br>
+    <div class="button">[Apply] [Done]</div>
+</div>
+
+<h2 id="95">9.5 Software Selection</h2>
+<div class="info-box">
+    <strong>📦 Software Selection</strong><br><br>
+    <strong>Base Environment:</strong><br>
+    • ( ) Server with GUI → GNOME Desktop Environment<br>
+    • (•) Server → Minimal installation (recommended)<br>
+    • ( ) Server with GUI (Preproduction)<br>
+    • ( ) Workstation<br>
+    • ( ) Custom Operating System<br><br>
+    <strong>Additional Software (Add-ons):</strong><br>
+    • [ ] Compatibility Libraries<br>
+    • [ ] Container Management<br>
+    • [✓] Development Tools<br>
+    • [ ] Graphical Administration Tools<br>
+    • [✓] Network Services<br>
+    • [ ] Performance Tools<br>
+    • [✓] Remote Management for Linux<br>
+    • [ ] Scientific Support<br>
+    • [ ] Security Tools<br>
+    • [ ] System Tools
+</div>
+
+<h2 id="96">9.6 User Creation</h2>
+<div class="info-box">
+    <strong>👤 User Creation</strong><br><br>
+    <strong>Root Password:</strong><br>
+    Password: [••••••••••••••••••••]<br>
+    Confirm: [••••••••••••••••••••]<br>
+    Password strength: ●●●●●● Excellent<br><br>
+    <strong>User Account:</strong><br>
+    Full name: [Admin User]<br>
+    User name: [admin]<br>
+    Password: [••••••••••••••••••••]<br>
+    Confirm: [••••••••••••••••••••]<br>
+    [ ] Make this user an administrator<br>
+    [✓] Require a password to use this account
+</div>
+
+<div class="warning-box">
+    <strong>User Creation Best Practices:</strong><br>
+    • Set strong root password (12+ characters, complexity)<br>
+    • Create non-root sudo user for daily tasks<br>
+    • Add SSH public key for key-based authentication
+</div>
+
+<h2 id="97">9.7 Installation Progress</h2>
+<div class="info-box">
+    <strong>⏳ Installing Red Hat Enterprise Linux 9.5</strong><br><br>
+    34% complete<br>
+    ████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░<br><br>
+    <strong>Package Installation:</strong><br>
+    Installing:<br>
+    • audit-3.0.7-1.el9.x86_64<br>
+    • audit-libs-3.0.7-1.el9.x86_64<br>
+    • basesystem-11-13.rhel9.noarch<br>
+    • bash-5.1.8-6.el9.x86_64<br>
+    • bind-utils-9.16.23-1.el9.x86_64<br>
+    • ... (280 more packages)<br><br>
+    Time remaining: 5 minutes 23 seconds<br><br>
+    <div class="warning-box">
+        ⚠️ Do not power off or restart the machine.
+    </div>
+</div>
+
+<h2 id="98">9.8 First Login</h2>
+<div class="console-ui">
+    <div class="title">RED HAT ENTERPRISE LINUX 9.5 GNOME LOGIN</div>
+    <br>
+    <div class="label">Red Hat Enterprise Linux</div>
+    <div class="label">Version 9.5</div>
+    <br>
+    <div class="label">"Register your system to receive updates and support."</div>
+    <br>
+    <div class="label">Username: admin</div>
+    <div class="label">Password: ●●●●●●●●●●●●●●</div>
+    <br>
+    <div class="button">[Sign In]</div>
+    <br>
+    <div class="label">System Information:</div>
+    <div class="label">• Kernel: 5.14.0-427.el9.x86_64</div>
+    <div class="label">• OS: Red Hat Enterprise Linux 9.5 (Plow)</div>
+    <div class="label">• Init: systemd</div>
+</div>
+
+<h1 id="10">10. Reboot and Validation</h1>
+
+<h2>Post-Installation Checklist</h2>
+
+<h3>1. Verify Network Connectivity</h3>
+<pre>
+# Check IP address
+ip addr show
+
+# Test connectivity
+ping -c 4 8.8.8.8
+
+# Verify DNS resolution
+nslookup google.com
+</pre>
+
+<h3>2. Check Disk Partitioning</h3>
+<pre>
+# List block devices
+lsblk
+
+# Show mounted filesystems
+df -h
+
+# Show LVM volumes
+pvs
+vgs
+lvs
+</pre>
+
+<h3>3. Verify System Services</h3>
+<pre>
+# Check critical services status
+systemctl status sshd
+systemctl status firewalld
+systemctl status rsyslog
+systemctl status NetworkManager
+</pre>
+
+<h3>4. Verify SELinux Status</h3>
+<pre>
+# Check SELinux status
+getenforce
+# Output: Enforcing
+
+# Check SELinux context
+sestatus
+</pre>
+
+<h3>5. Register with Red Hat (If Required)</h3>
+<pre>
+# Register the system
+subscription-manager register --username=your_username --password=your_password
+
+# Attach subscription
+subscription-manager attach --auto
+
+# Check subscription status
+subscription-manager status
+</pre>
+
+<h3>6. Update System</h3>
+<pre>
+# Check for updates
+dnf check-update
+
+# Apply updates (if available)
+sudo dnf update -y
+
+# Reboot if kernel updated
+sudo reboot
+</pre>
+
+<h1 id="11">11. Enterprise Best Practices</h1>
+
+<h2>Pre-Installation Best Practices</h2>
+<table>
+    <tr>
+        <th>Practice</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>Documentation</td>
+        <td>Document current server state, IP assignments, intended role</td>
+    </tr>
+    <tr>
+        <td>Backup</td>
+        <td>Backup any existing data; verify RAID controller configuration</td>
+    </tr>
+    <tr>
+        <td>ISO Verification</td>
+        <td>Verify SHA256 checksum of RHEL ISO before installation</td>
+    </tr>
+    <tr>
+        <td>Network Planning</td>
+        <td>Pre-plan IP addressing, hostname, DNS, NTP</td>
+    </tr>
+    <tr>
+        <td>Storage Planning</td>
+        <td>Determine partition scheme, LVM layout, RAID configuration</td>
+    </tr>
+</table>
+
+<h2>Post-Installation Security Hardening</h2>
+<pre>
+# 1. Disable unnecessary services
+sudo systemctl disable --now cups
+sudo systemctl disable --now avahi-daemon
+
+# 2. Configure firewall
+sudo firewall-cmd --permanent --add-service=ssh
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+
+# 3. Enable audit logging
+sudo auditctl -w /etc/passwd -p wa -k user_mod
+sudo auditctl -w /etc/shadow -p wa -k shadow_mod
+</pre>
+
+<h2>Performance Tuning</h2>
+<pre>
+# 1. Tune kernel parameters (sysctl)
+sudo sysctl -w net.core.somaxconn=65535
+sudo sysctl -w net.ipv4.tcp_max_syn_backlog=65535
+sudo sysctl -w vm.swappiness=10
+
+# 2. Configure tuned (performance profile)
+sudo tuned-adm profile throughput-performance
+</pre>
+
+<h2>Naming Conventions</h2>
+<table>
+    <tr>
+        <th>Element</th>
+        <th>Convention</th>
+        <th>Example</th>
+    </tr>
+    <tr>
+        <td>Hostname</td>
+        <td>[environment]-[role]-[number]</td>
+        <td>prod-web-01, dev-db-02</td>
+    </tr>
+    <tr>
+        <td>IP Address</td>
+        <td>Sequential by subnet</td>
+        <td>192.168.10.50, 192.168.10.51</td>
+    </tr>
+    <tr>
+        <td>Volume Groups</td>
+        <td>vg_[purpose]</td>
+        <td>vg_root, vg_data</td>
+    </tr>
+    <tr>
+        <td>Logical Volumes</td>
+        <td>lv_[mountpoint]</td>
+        <td>lv_root, lv_opt</td>
+    </tr>
+</table>
+
+<h1 id="12">12. Common Mistakes in Remote Installs</h1>
+
+<div class="warning-box">
+    <h3>Mistake 1: Virtual Media Not Properly Connected</h3>
+    <p><strong>Symptom:</strong> Server boots from hard drive instead of ISO</p>
+    <p><strong>Solution:</strong></p>
+    <ul>
+        <li>✅ Ensure ISO is mounted as "Connected" not just "Inserted"</li>
+        <li>✅ Check that "Connect Virtual Media at Boot" is enabled</li>
+        <li>✅ Verify boot order has Virtual CD/DVD at position 1</li>
+        <li>✅ Use "One-Time Boot" to force virtual media for this boot</li>
+    </ul>
+</div>
+
+<div class="warning-box">
+    <h3>Mistake 2: ISO Not Accessible via Network</h3>
+    <p><strong>Symptom:</strong> "Unable to retrieve installation image"</p>
+    <p><strong>Solution:</strong></p>
+    <ul>
+        <li>✅ Verify HTTP/HTTPS server is running and accessible</li>
+        <li>✅ Test URL from another machine: curl -I http://[IP]/rhel-9.5.iso</li>
+        <li>✅ Check firewall on ISO host</li>
+        <li>✅ Ensure no authentication required for ISO download</li>
+    </ul>
+</div>
+
+<div class="warning-box">
+    <h3>Mistake 3: Incorrect Boot Mode (UEFI vs BIOS)</h3>
+    <p><strong>Symptom:</strong> "No operating system found" after installation</p>
+    <p><strong>Solution:</strong></p>
+    <ul>
+        <li>✅ Verify boot mode matches installation mode</li>
+        <li>✅ Check UEFI settings: Boot Mode should be "UEFI Only"</li>
+        <li>✅ Ensure EFI partition (/boot/efi) is created for UEFI</li>
+    </ul>
+</div>
+
+<div class="warning-box">
+    <h3>Mistake 4: Partition Size Misconfiguration</h3>
+    <p><strong>Symptom:</strong> /var or /tmp fills up, system unusable</p>
+    <p><strong>Solution:</strong></p>
+    <ul>
+        <li>✅ Plan partition sizes based on workload</li>
+        <li>✅ Allocate more space to /var for logs and containers</li>
+        <li>✅ Use LVM for flexibility to resize partitions later</li>
+    </ul>
+</div>
+
+<div class="warning-box">
+    <h3>Mistake 5: Network Configuration Errors</h3>
+    <p><strong>Symptom:</strong> No network connectivity after installation</p>
+    <p><strong>Solution:</strong></p>
+    <ul>
+        <li>✅ Verify static IP configuration is correct</li>
+        <li>✅ Check gateway and netmask</li>
+        <li>✅ Ensure DNS servers are reachable</li>
+        <li>✅ Verify NetworkManager is enabled and running</li>
+    </ul>
+</div>
+
+<h1 id="13">13. Troubleshooting</h1>
+
+<h2>Issue 1: Remote Console Not Loading</h2>
+<div class="info-box">
+    <strong>Symptoms:</strong> "Unable to launch virtual console", Connection timeout<br><br>
+    <strong>Resolution Steps:</strong>
+    <ol>
+        <li>Check browser compatibility - Use Chrome/Edge for iDRAC, Firefox for iLO</li>
+        <li>Enable Java runtime (if using Java-based console)</li>
+        <li>Clear browser cache and cookies for BMC IP</li>
+        <li>Check network connectivity: ping [BMC-IP], telnet [BMC-IP] 443</li>
+        <li>Verify BMC firmware is up to date</li>
+    </ol>
+</div>
+
+<h2>Issue 2: ISO Mount Issues</h2>
+<div class="info-box">
+    <strong>Symptoms:</strong> "No media found", "Unable to connect to image"<br><br>
+    <strong>Resolution Steps:</strong>
+    <ol>
+        <li>Verify HTTP Server: curl -I http://192.168.1.50:8000/rhel-9.5.iso</li>
+        <li>Check ISO File Permissions: chmod 644 /opt/rhel-iso/rhel-9.5.iso</li>
+        <li>Try Alternative Methods: CIFS/SMB share instead of HTTP</li>
+    </ol>
+</div>
+
+<h2>Issue 3: Boot Failure After Installation</h2>
+<div class="info-box">
+    <strong>Symptoms:</strong> "No bootable device found", Boot loop<br><br>
+    <strong>Resolution Steps:</strong>
+    <ol>
+        <li>Check boot order in BIOS/UEFI</li>
+        <li>Verify bootloader installation (from rescue mode)</li>
+        <li>Recreate initramfs: dracut --force</li>
+        <li>Reinstall GRUB: grub2-install /dev/sda</li>
+    </ol>
+</div>
+
+<h2>Issue 4: Network Not Working After Install</h2>
+<div class="info-box">
+    <strong>Symptoms:</strong> No IP address assigned, Cannot ping gateway<br><br>
+    <strong>Resolution Steps:</strong>
+    <pre>
+# 1. Check NetworkManager status
+systemctl status NetworkManager
+nmcli device status
+
+# 2. View connection details
+nmcli connection show
+
+# 3. Manually bring up interface
+nmcli connection up ens160
+
+# 4. Test DNS resolution
+nslookup google.com 8.8.8.8
+    </pre>
+</div>
+
+<h2>Issue 5: Installation Freezes/Hangs</h2>
+<div class="info-box">
+    <strong>Common Causes &amp; Fixes:</strong>
+    <ol>
+        <li><strong>Insufficient Memory:</strong> Minimum 2 GB RAM required; 4 GB recommended</li>
+        <li><strong>Disk Issues:</strong> Check SMART status, verify RAID controller</li>
+        <li><strong>ISO Media Corruption:</strong> Verify SHA256 checksum</li>
+        <li><strong>BMC Performance:</strong> Reduce remote console resolution/quality</li>
+        <li><strong>Virtual Media Driver Issues:</strong> Try different method (CIFS vs HTTP)</li>
+    </ol>
+</div>
+
+<h1 id="14">14. Quick Reference Cheat Sheet</h1>
+
+<h2>Remote Console Access URLs</h2>
+<table>
+    <tr>
+        <th>Vendor</th>
+        <th>URL Format</th>
+        <th>Port</th>
+    </tr>
+    <tr>
+        <td>Dell iDRAC</td>
+        <td>https://[IP]</td>
+        <td>443</td>
+    </tr>
+    <tr>
+        <td>HPE iLO</td>
+        <td>https://[IP]</td>
+        <td>443</td>
+    </tr>
+    <tr>
+        <td>Supermicro IPMI</td>
+        <td>https://[IP]</td>
+        <td>443</td>
+    </tr>
+    <tr>
+        <td>Generic IPMI</td>
+        <td>ipmitool -I lanplus -H [IP]</td>
+        <td>623</td>
+    </tr>
+</table>
+
+<h2>IPMI Quick Commands</h2>
+<pre>
+# Power Control
+ipmitool -I lanplus -H [IP] -U admin -P [PASS] power on
+ipmitool -I lanplus -H [IP] -U admin -P [PASS] power off
+ipmitool -I lanplus -H [IP] -U admin -P [PASS] power reset
+
+# Boot Device
+ipmitool -I lanplus -H [IP] -U admin -P [PASS] chassis bootdev pxe
+ipmitool -I lanplus -H [IP] -U admin -P [PASS] chassis bootdev disk
+ipmitool -I lanplus -H [IP] -U admin -P [PASS] chassis bootdev bios
+
+# Serial Over LAN
+ipmitool -I lanplus -H [IP] -U admin -P [PASS] sol activate
+</pre>
+
+<h2>Post-Installation Verification Commands</h2>
+<pre>
+# System Info
+hostnamectl
+uname -r
+cat /etc/redhat-release
+
+# Disk
+lsblk -f
+df -h
+
+# Network
+ip addr
+ip route
+nmcli device
+
+# Services
+systemctl status sshd
+systemctl status firewalld
+getenforce
+
+# Updates
+dnf check-update
+subscription-manager status
+</pre>
+
+<h2>Partition Recommendations Summary</h2>
+<table>
+    <tr>
+        <th>Mount Point</th>
+        <th>Min Size</th>
+        <th>Recommended</th>
+        <th>File System</th>
+    </tr>
+    <tr>
+        <td>/boot/efi</td>
+        <td>512 MB</td>
+        <td>512 MB</td>
+        <td>EFI</td>
+    </tr>
+    <tr>
+        <td>/boot</td>
+        <td>1 GB</td>
+        <td>1 GB</td>
+        <td>XFS</td>
+    </tr>
+    <tr>
+        <td>swap</td>
+        <td>2 GB</td>
+        <td>RAM size (max 8 GB)</td>
+        <td>Swap</td>
+    </tr>
+    <tr>
+        <td>/</td>
+        <td>10 GB</td>
+        <td>50 GB</td>
+        <td>XFS</td>
+    </tr>
+    <tr>
+        <td>/var</td>
+        <td>10 GB</td>
+        <td>20+ GB</td>
+        <td>XFS</td>
+    </tr>
+    <tr>
+        <td>/tmp</td>
+        <td>5 GB</td>
+        <td>10 GB</td>
+        <td>XFS</td>
+    </tr>
+    <tr>
+        <td>/home</td>
+        <td>1 GB</td>
+        <td>5+ GB</td>
+        <td>XFS</td>
+    </tr>
+    <tr>
+        <td>/opt</td>
+        <td>5 GB</td>
+        <td>100+ GB</td>
+        <td>XFS</td>
+    </tr>
+</table>
+
+<!-- APPENDIX -->
+<h2>Appendix A: Firewall Ports</h2>
+<pre>
+# Common ports to open (Rich Rules)
+firewall-cmd --permanent --add-port=22/tcp   # SSH
+firewall-cmd --permanent --add-port=80/tcp   # HTTP
+firewall-cmd --permanent --add-port=443/tcp  # HTTPS
+firewall-cmd --permanent --add-port=3306/tcp # MySQL
+firewall-cmd --permanent --add-port=5432/tcp # PostgreSQL
+
+# Reload firewall
+firewall-cmd --reload
+
+# Verify
+firewall-cmd --list-all
+</pre>
+
+<h2>Appendix B: SELinux Boolean Examples</h2>
+<pre>
+# Common booleans for server operations
+getsebool -a | grep -E "httpd|nginx|container|docker"
+
+# Enable httpd to network connect
+setsebool -P httpd_can_network_connect 1
+
+# Enable container access to network
+setsebool -P container_can_network_connect 1
+</pre>
+
+<hr style="margin-top: 50px; border: 1px solid #ddd;">
+
+<div style="text-align: center; margin-top: 30px; color: #666; font-size: 12px;">
+    <p><strong>Document Revision History</strong></p>
+    <p>Version 1.0 | April 2026 | Senior RHCA &amp; Technical Documentation Expert</p>
+    <p style="margin-top: 20px;">For additional support, consult Red Hat official documentation at <a href="https://access.redhat.com/documentation/">https://access.redhat.com/documentation/</a></p>
+</div>
+
+</div>
+
+</body>
+</html>

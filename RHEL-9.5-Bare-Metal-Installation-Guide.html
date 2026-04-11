@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enterprise Bare Metal RHEL 9.5 Installation Guide</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+            @top-right {
+                content: "RHEL 9.5 Installation Guide";
+            }
+            @bottom-right {
+                content: counter(page);
+            }
+        }
+        
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 11pt;
+            line-height: 1.5;
+            color: #333;
+            max-width: 100%;
+            margin: 0 auto;
+            padding: 20px;
+            background: #fff;
+        }
+        
+        .title-page {
+            text-align: center;
+            padding: 100px 0;
+            page-break-after: always;
+        }
+        
+        .title-page h1 {
+            font-size: 36pt;
+            color: #cc0000;
+            margin-bottom: 20px;
+        }
+        
+        .title-page h2 {
+            font-size: 24pt;
+            color: #333;
+            margin-bottom: 40px;
+        }
+        
+        .title-page .subtitle {
+            font-size: 16pt;
+            color: #666;
+            margin-bottom: 60px;
+        }
+        
+        .title-page .version {
+            font-size: 14pt;
+            color: #999;
+        }
+        
+        h1 {
+            color: #cc0000;
+            font-size: 22pt;
+            margin-top: 30px;
+            border-bottom: 2px solid #cc0000;
+            padding-bottom: 10px;
+        }
+        
+        h2 {
+            color: #333;
+            font-size: 16pt;
+            margin-top: 25px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 5px;
+        }
+        
+        h3 {
+            color: #555;
+            font-size: 14pt;
+            margin-top: 20px;
+        }
+        
+        p {
+            margin: 10px 0;
+        }
+        
+        ul, ol {
+            margin: 10px 0 10px 20px;
+        }
+        
+        li {
+            margin: 5px 0;
+        }
+        
+        code {
+            background: #f4f4f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 10pt;
+        }
+        
+        pre {
+            background: #f4f4f4;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            border-left: 4px solid #cc0000;
+            font-size: 10pt;
+        }
+        
+        pre code {
+            background: none;
+            padding: 0;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 10pt;
+        }
+        
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: left;
+        }
+        
+        th {
+            background: #cc0000;
+            color: white;
+            font-weight: bold;
+        }
+        
+        tr:nth-child(even) {
+            background: #f9f9f9;
+        }
+        
+        .note {
+            background: #fff3cd;
+            border: 1px solid #ffc107;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        
+        .warning {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        
+        .tip {
+            background: #d4edda;
+            border: 1px solid #c3e6cb;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 15px 0;
+        }
+        
+        .toc {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        
+        .toc h2 {
+            border: none;
+            margin-top: 0;
+        }
+        
+        .toc ul {
+            list-style: none;
+            padding-left: 0;
+        }
+        
+        .toc li {
+            padding: 5px 0;
+        }
+        
+        .toc a {
+            color: #cc0000;
+            text-decoration: none;
+        }
+        
+        .diagram {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 15px 0;
+            text-align: center;
+        }
+        
+        hr {
+            border: none;
+            border-top: 1px solid #ddd;
+            margin: 30px 0;
+        }
+        
+        .page-break {
+            page-break-after: always;
+        }
+        
+        @media print {
+            body {
+                font-size: 10pt;
+            }
+            
+            .page-break {
+                page-break-after: always;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="title-page">
+    <h1>RED HAT ENTERPRISE LINUX 9.5</h1>
+    <h2>Bare Metal Installation via Remote Console</h2>
+    <p class="subtitle">(iDRAC • iLO • IPMI)</p>
+    <p><strong>ENTERPRISE GRADE GUIDE</strong></p>
+    <p style="margin-top: 50px;">Version 1.0</p>
+    <p>Prepared by: Senior RHCA Architect</p>
+    <p>Date: April 2025</p>
+    <p style="margin-top: 50px;">Supported Platforms:</p>
+    <p>Dell PowerEdge (iDRAC 9/8) • HP ProLiant (iLO 5/6) • Supermicro (IPMI) • Lenovo ThinkSystem (XClarity)</p>
+</div>
+
+<div class="page-break"></div>
+
+<h1>Table of Contents</h1>
+
+<div class="toc">
+    <ol>
+        <li><a href="#section1">Document Overview & Scope</a></li>
+        <li><a href="#section2">Prerequisites</a></li>
+        <li><a href="#section3">Architecture Diagram - Remote Console Workflow</a></li>
+        <li><a href="#section4">Accessing Remote Console</a></li>
+        <li><a href="#section5">Mounting RHEL ISO via Virtual Media</a></li>
+        <li><a href="#section6">BIOS/UEFI Boot Configuration</a></li>
+        <li><a href="#section7">RAID Configuration</a></li>
+        <li><a href="#section8">Booting into RHEL Installer</a></li>
+        <li><a href="#section9">Anaconda Installer Walkthrough</a></li>
+        <li><a href="#section10">Enterprise Best Practices</a></li>
+        <li><a href="#section11">Common Mistakes in Remote Installs</a></li>
+        <li><a href="#section12">Troubleshooting Guide</a></li>
+        <li><a href="#section13">Post-Installation Validation</a></li>
+        <li><a href="#section14">Appendix</a></li>
+    </ol>
+</div>
+
+<div class="page-break"></div>
+
+<h1 id="section1">1. Document Overview & Scope</h1>
+
+<h2>Purpose</h2>
+<p>This comprehensive guide provides enterprise-level instructions for installing Red Hat Enterprise Linux 9.5 on bare metal servers using remote console access mechanisms (iDRAC, iLO, or IPMI).</p>
+
+<h2>Audience</h2>
+<ul>
+    <li>System Administrators</li>
+    <li>DevOps Engineers</li>
+    <li>Infrastructure Architects</li>
+    <li>Enterprise IT Teams</li>
+</ul>
+
+<h2>RHEL 9.5 Overview</h2>
+
+<table>
+    <tr>
+        <th>Attribute</th>
+        <th>Value</th>
+    </tr>
+    <tr>
+        <td>Release Version</td>
+        <td>RHEL 9.5 (Update 5)</td>
+    </tr>
+    <tr>
+        <td>Release Date</td>
+        <td>October 2024</td>
+    </tr>
+    <tr>
+        <td>Kernel</td>
+        <td>5.14.0-503.el9</td>
+    </tr>
+    <tr>
+        <td>Anaconda Version</td>
+        <td>33.16</td>
+    </tr>
+    <tr>
+        <td>Support Lifecycle</td>
+        <td>Extended Update Support (EUS) until 2029</td>
+    </tr>
+    <tr>
+        <td>Architecture</td>
+        <td>x86_64, aarch64, ppc64le, s390x</td>
+    </tr>
+</table>
+
+<div class="page-break"></div>
+
+<h1 id="section2">2. Prerequisites</h1>
+
+<h2>2.1 Hardware Requirements</h2>
+
+<h3>Minimum Requirements</h3>
+
+<table>
+    <tr>
+        <th>Component</th>
+        <th>Minimum</th>
+        <th>Recommended</th>
+    </tr>
+    <tr>
+        <td>CPU</td>
+        <td>2 cores</td>
+        <td>4+ cores</td>
+    </tr>
+    <tr>
+        <td>RAM</td>
+        <td>2 GB</td>
+        <td>8+ GB</td>
+    </tr>
+    <tr>
+        <td>Disk</td>
+        <td>10 GB</td>
+        <td>100+ GB (RAID configured)</td>
+    </tr>
+    <tr>
+        <td>Network</td>
+        <td>1 Gbps</td>
+        <td>10 Gbps</td>
+    </tr>
+</table>
+
+<h3>Server Platform Support</h3>
+<ul>
+    <li>Dell: PowerEdge R650, R750, R650xs, R750xs, R940, R940xa</li>
+    <li>HP: ProLiant DL360, DL380, DL560, DL580, ML350</li>
+    <li>Supermicro: All 12th/13th Gen servers</li>
+    <li>Lenovo: ThinkSystem SR650, SR850</li>
+</ul>
+
+<h2>2.2 Software & Access Requirements</h2>
+
+<p><strong>Requirements:</strong></p>
+<ul>
+    <li>RHEL 9.5 ISO Image (DVD or Boot ISO)
+        <ul>
+            <li>Download from: access.redhat.com/downloads</li>
+            <li>File: rhel-9.5-x86_64-dvd.iso (~10 GB)</li>
+        </ul>
+    </li>
+    <li>Valid Red Hat Subscription</li>
+    <li>Remote Console Access
+        <ul>
+            <li>iDRAC Enterprise license (Dell)</li>
+            <li>iLO Advanced license (HP)</li>
+            <li>IPMI admin access</li>
+        </ul>
+    </li>
+    <li>Network Requirements
+        <ul>
+            <li>Management network reachable</li>
+            <li>VLAN configuration documented</li>
+            <li>DNS/NTP servers identified</li>
+        </ul>
+    </li>
+</ul>
+
+<div class="page-break"></div>
+
+<h1 id="section3">3. Architecture Diagram - Remote Console Workflow</h1>
+
+<div class="diagram">
+    <pre style="text-align: left; font-size: 9pt;">
+ADMIN WORKSTATION ──────────► REMOTE MANAGEMENT ──────────► TARGET SERVER
+                               (iDRAC/iLO/IPMI)              (Bare Metal)
+      RHEL 9.5 ISO                  │                           │
+           │                        │ Virtual Media             │
+           │                        │ Mount (ISO)               │
+           ▼                        ▼                           ▼
+    HTTPS/WebUI            Remote Management UI        ┌─────────────┐
+          │                  (Web Browser)             │   BIOS/     │
+          │                        │                    │   UEFI      │
+          │                        │                    └─────────────┘
+          │                        │                           │
+          │                        │                           ▼
+          │                        │                    ┌─────────────┐
+          │                        │                    │   RAID      │
+          │                        │                    │ Controller  │
+          │                        │                    └─────────────┘
+          │                        │                           │
+          │                        │                           ▼
+          │                        │                    ┌─────────────┐
+          │                        │                    │  Virtual    │
+          │                        │                    │  CD/DVD     │
+          │                        │                    │  (ISO)      │
+          │                        │                    └─────────────┘
+          │                        │                           │
+          │                        │                           ▼
+          │                        │                    ┌─────────────┐
+          │                        │                    │    RHEL     │
+          │                        │                    │  9.5 OS     │
+          │                        │                    │ INSTALLED   │
+          │                        │                    └─────────────┘
+    </pre>
+</div>
+
+<div class="page-break"></div>
+
+<h1 id="section4">4. Accessing Remote Console</h1>
+
+<h2>4.1 Dell iDRAC Configuration</h2>
+
+<h3>Accessing iDRAC Web Interface</h3>
+
+<p><strong>Step 1: Open Web Browser</strong></p>
+<p>URL: <code>https://&lt;iDRAC-IP&gt;</code></p>
+<p>Example: <code>https://192.168.1.100</code></p>
+
+<p><strong>Step 2: Login Credentials</strong></p>
+<p>Default Credentials (Factory Reset):</p>
+<ul>
+    <li>Username: <code>root</code></li>
+    <li>Password: <code>calvin</code> (or label on server)</li>
+</ul>
+
+<p><strong>Step 3: Dashboard Overview</strong></p>
+<p>Key iDRAC sections:</p>
+<ul>
+    <li>Server health status</li>
+    <li>Hardware inventory</li>
+    <li>Quick launch buttons</li>
+    <li>Alerts and logs</li>
+</ul>
+
+<h3>Launching Virtual Console (iDRAC)</h3>
+<ol>
+    <li>Navigate to: iDRAC Settings → Virtual Console</li>
+    <li>Click "Launch Virtual Console"</li>
+    <li>Accept Java/WebSocket certificate</li>
+    <li>Virtual Console window opens</li>
+</ol>
+
+<p><strong>Keyboard Shortcuts:</strong></p>
+<ul>
+    <li>Ctrl+Alt+Del → Send Ctrl+Alt+Del to server</li>
+    <li>Ctrl+Alt+Esc → Exit to BIOS/UEFI</li>
+    <li>Ctrl+Alt+F1 → Switch to text console</li>
+</ul>
+
+<h2>4.2 HP iLO Configuration</h2>
+
+<h3>Accessing iLO Web Interface</h3>
+
+<p><strong>Step 1: Open Web Browser</strong></p>
+<p>URL: <code>https://&lt;iLO-IP&gt;</code></p>
+<p>Example: <code>https://192.168.1.101</code></p>
+
+<p><strong>Step 2: Login Credentials</strong></p>
+<p>Default Credentials (Factory Reset):</p>
+<ul>
+    <li>Username: <code>Administrator</code></li>
+    <li>Password: (label on server or random)</li>
+</ul>
+
+<h3>iLO Virtual Media Setup</h3>
+<ol>
+    <li>Navigate to: Virtual Media → Virtual Media Launcher</li>
+    <li>Select: CD/DVD-ROM</li>
+    <li>Browse to: RHEL 9.5 ISO file</li>
+    <li>Click: Connect CD/DVD</li>
+    <li>Verify: Connected status shown</li>
+</ol>
+
+<h2>4.3 IPMI/KVM Access</h2>
+
+<h3>IPMI over LAN Configuration</h3>
+
+<p><strong>Via Command Line (ipmitool):</strong></p>
+
+<pre>
+# Set IP address
+ipmitool -I lanplus -H &lt;BMC-IP&gt; -U ADMIN -P 'password' set ipaddr 192.168.1.102
+
+# Enable KVM
+ipmitool -I lanplus -H &lt;BMC-IP&gt; -U ADMIN -P 'password' set sol enabled
+
+# Activate SOL (Serial Over LAN)
+ipmitool -I lanplus -H &lt;BMC-IP&gt; -U ADMIN -P 'password' sol activate
+</pre>
+
+<div class="page-break"></div>
+
+<h1 id="section5">5. Mounting RHEL ISO via Virtual Media</h1>
+
+<h2>5.1 Dell iDRAC Virtual Media</h2>
+
+<h3>Method 1: Web Interface</h3>
+<ol>
+    <li>Login to iDRAC Web UI</li>
+    <li>Navigate to: Virtual Media → Connected</li>
+    <li>Click: "Map CD/DVD"</li>
+    <li>Browse to: rhel-9.5-x86_64-dvd.iso</li>
+    <li>Select: "Map Drive"</li>
+    <li>Verify: Status shows "Connected"</li>
+</ol>
+
+<h3>Method 2: racadm Command Line</h3>
+
+<pre>
+# Mount ISO using racadm
+racadm -r 192.168.1.100 -u root -p calvin remoteimage -c
+racadm -r 192.168.1.100 -u root -p calvin remoteimage -l //fileserver/share/rhel-9.5-x86_64-dvd.iso
+
+# Check status
+racadm -r 192.168.1.100 -u root -p calvin remoteimage -s
+</pre>
+
+<h2>5.2 HP iLO Virtual Media</h2>
+
+<h3>Method 1: iLO Web Interface</h3>
+<ol>
+    <li>Login to iLO web interface</li>
+    <li>Navigate to: Virtual Media</li>
+    <li>Click: "Launch Virtual Media Launcher"</li>
+    <li>In new window:
+        <ul>
+            <li>Select: "CD/DVD" from dropdown</li>
+            <li>Click: "Browse" to find ISO</li>
+            <li>Click: "Connect"</li>
+            <li>Verify connection status</li>
+        </ul>
+    </li>
+</ol>
+
+<h2>5.3 IPMI Virtual Media (Supermicro)</h2>
+
+<h3>Via Web Interface</h3>
+<ol>
+    <li>Login to Supermicro IPMI web interface</li>
+    <li>Navigate to: Virtual Media → Virtual Media (KVM/IP)</li>
+    <li>Click: "CD-ROM Image"</li>
+    <li>Browse and select RHEL ISO</li>
+    <li>Click: "Mount"</li>
+    <li>Status shows: "Mounted: rhel-9.5-x86_64-dvd.iso"</li>
+</ol>
+
+<h2>5.4 Virtual Media Best Practices</h2>
+
+<div class="tip">
+    <strong>Performance Tips:</strong>
+    <ul>
+        <li>Use local network/file server for ISO (reduce latency)</li>
+        <li>Prefer 1 Gbps+ management network</li>
+        <li>Close other browser tabs during install</li>
+        <li>Disable browser caching for remote console</li>
+    </ul>
+</div>
+
+<div class="note">
+    <strong>Reliability Tips:</strong>
+    <ul>
+        <li>Verify ISO file checksum (sha256sum) before mounting</li>
+        <li>Use Full DVD ISO, not Boot ISO (includes all packages)</li>
+        <li>Ensure stable power before starting install</li>
+    </ul>
+</div>
+
+<div class="page-break"></div>
+
+<h1 id="section6">6. BIOS/UEFI Boot Configuration</h1>
+
+<h2>6.1 Accessing BIOS/UEFI Setup</h2>
+
+<h3>Via Remote Console</h3>
+<ol>
+    <li>Open Virtual Console (iDRAC/iLO/KVM)</li>
+    <li>During boot, press appropriate key:
+        <ul>
+            <li>Dell PowerEdge: F2 (or Ctrl+E for BIOS)</li>
+            <li>HP ProLiant: F9 (System Utilities)</li>
+            <li>Supermicro: Del (or F2)</li>
+        </ul>
+    </li>
+    <li>Navigate to: Boot Settings / BIOS Settings</li>
+</ol>
+
+<h3>Via Remote Boot Menu (One-Time)</h3>
+<ol>
+    <li>Open Virtual Console</li>
+    <li>Reboot server (via remote power control)</li>
+    <li>Press F11/F12 for Boot Menu</li>
+    <li>Select: "Virtual CD/DVD" or "BIOS Boot Manager"</li>
+</ol>
+
+<h2>6.2 UEFI Boot Settings Configuration</h2>
+
+<p><strong>BOOT ORDER (Top to Bottom):</strong></p>
+<ol>
+    <li>[✓] Virtual CD/DVD (first)</li>
+    <li>[✓] Hard Disk / RAID Controller</li>
+    <li>[ ] Network (PXE) - Disable unless needed for PXE install</li>
+    <li>[ ] USB Device</li>
+</ol>
+
+<p><strong>UEFI SETTINGS:</strong></p>
+<ul>
+    <li>Secure Boot: Disabled (for RHEL 9.5)</li>
+    <li>Boot Mode: UEFI (not Legacy)</li>
+    <li>CSM Support: Disabled</li>
+</ul>
+
+<h2>6.3 Dell-Specific BIOS Settings</h2>
+
+<h3>iDRAC BIOS Configuration</h3>
+<ol>
+    <li>Boot into System BIOS (F2 during boot)</li>
+    <li>Navigate: System BIOS → Boot Settings</li>
+</ol>
+
+<p><strong>Boot Settings:</strong></p>
+<ul>
+    <li>Boot Mode: UEFI</li>
+    <li>Boot Sequence: [Virtual CD/DVD, Hard Disk]</li>
+    <li>Secure Boot: Disabled</li>
+</ul>
+
+<h2>6.4 HP-Specific BIOS Settings</h2>
+
+<h3>iLO BIOS Configuration</h3>
+<ol>
+    <li>Boot into System Utilities (F9 during boot)</li>
+    <li>Navigate: System Configuration → BIOS/Platform Configuration (RBSU)</li>
+</ol>
+
+<p><strong>BIOS Settings:</strong></p>
+<ul>
+    <li>Boot Mode: UEFI</li>
+    <li>Boot Order: [Virtual Media, AHCI/RAID]</li>
+    <li>Virtualization Technology: Enabled</li>
+</ul>
+
+<div class="page-break"></div>
+
+<h1 id="section7">7. RAID Configuration</h1>
+
+<h2>7.1 RAID Controller Access</h2>
+
+<h3>Dell PERC (PowerEdge RAID Controller)</h3>
+<ol>
+    <li>During boot, press: Ctrl+R for PERC BIOS</li>
+    <li>Or via iDRAC: Server Configuration → Storage Controller</li>
+    <li>View: Physical Disks, Virtual Disks, Configuration</li>
+</ol>
+
+<h3>HP Smart Array</h3>
+<ol>
+    <li>During boot, press: F10 for Smart Array BIOS</li>
+    <li>Or via iLO: Storage → Smart Array</li>
+    <li>Configure: Arrays, Logical Drives, Spare Drives</li>
+</ol>
+
+<h2>7.2 RAID Configuration Options</h2>
+
+<table>
+    <tr>
+        <th>RAID Level</th>
+        <th>Min Disks</th>
+        <th>Use Case</th>
+        <th>Notes</th>
+    </tr>
+    <tr>
+        <td>RAID 0</td>
+        <td>2</td>
+        <td>Test/Dev</td>
+        <td>No redundancy (avoid)</td>
+    </tr>
+    <tr>
+        <td>RAID 1</td>
+        <td>2</td>
+        <td>Boot/OS</td>
+        <td>Mirroring, best for OS</td>
+    </tr>
+    <tr>
+        <td>RAID 5</td>
+        <td>3</td>
+        <td>General</td>
+        <td>Good balance (deprecated)</td>
+    </tr>
+    <tr>
+        <td>RAID 6</td>
+        <td>4</td>
+        <td>Data</td>
+        <td>Dual parity, high reliability</td>
+    </tr>
+    <tr>
+        <td>RAID 10</td>
+        <td>4</td>
+        <td>Database</td>
+        <td>Performance + redundancy</td>
+    </tr>
+</table>
+
+<div class="note">
+    <strong>Recommended for RHEL 9.5 Installation:</strong>
+    <ul>
+        <li>OS Disk: RAID 1 (two mirrored disks)</li>
+        <li>Data Disk: RAID 6 or RAID 10 depending on performance needs</li>
+        <li>Use Hot Spare: Yes (recommended for production)</li>
+    </ul>
+</div>
+
+<h2>7.3 Creating Virtual Disk (PERC Example)</h2>
+<ol>
+    <li>Press Ctrl+R during boot (PERC BIOS)</li>
+    <li>Select: Controller (Slot 6: PERC H750)</li>
+    <li>Press: F2 → Create New VD (Virtual Disk)</li>
+</ol>
+
+<p><strong>Create Virtual Disk:</strong></p>
+<ul>
+    <li>Name: RHEL_BOOT</li>
+    <li>RAID Level: RAID 1</li>
+    <li>Physical Disks: [Disk 0:1, Disk 0:2] (Select 2)</li>
+    <li>Cache Policy: Read Ahead, Write Back</li>
+    <li>Initialize: Yes (quick init)</li>
+</ul>
+
+<div class="page-break"></div>
+
+<h1 id="section8">8. Booting into RHEL Installer</h1>
+
+<h2>8.1 Virtual Console Setup Before Boot</h2>
+
+<p><strong>PRE-INSTALLATION CHECKLIST:</strong></p>
+<ul>
+    <li>Virtual Media mounted with RHEL 9.5 ISO</li>
+    <li>Boot order configured: Virtual CD first</li>
+    <li>Virtual Console active and responsive</li>
+    <li>Keyboard input working in Virtual Console</li>
+    <li>Console resolution set to 1024x768 or higher</li>
+</ul>
+
+<h2>8.2 Initiating Boot</h2>
+
+<h3>Power On Server (Remote)</h3>
+
+<p><strong>Via iDRAC:</strong></p>
+<ol>
+    <li>iDRAC Dashboard → Power Control</li>
+    <li>Click: "Power On System"</li>
+    <li>Monitor: Virtual Console for boot process</li>
+</ol>
+
+<p><strong>Via IPMI:</strong></p>
+
+<pre>
+ipmitool -I lanplus -H &lt;BMC-IP&gt; -U ADMIN -P 'password' power on
+</pre>
+
+<h3>Boot Sequence Observation</h3>
+
+<p><strong>RHEL 9.5 Boot Menu Options:</strong></p>
+
+<pre>
+▶ Install Red Hat Enterprise Linux 9.5
+  Test this media & install Red Hat Enterprise Linux 9.5
+  Troubleshoot an existing installation
+</pre>
+
+<h2>8.3 Selecting Install Option</h2>
+<ol>
+    <li>Highlight: "Install Red Hat Enterprise Linux 9.5"</li>
+    <li>Press: Enter</li>
+    <li>System loads Anaconda kernel...</li>
+</ol>
+
+<div class="page-break"></div>
+
+<h1 id="section9">9. Anaconda Installer Walkthrough</h1>
+
+<h2>9.1 Language Selection</h2>
+
+<p><strong>Recommended Settings:</strong></p>
+<ul>
+    <li>Language: English (United States)</li>
+    <li>Time & Date: Configure after installation</li>
+    <li>Keyboard: U.S. English (or native language)</li>
+</ul>
+
+<p>Click: "Continue" to proceed</p>
+
+<h2>9.2 Installation Summary</h2>
+
+<p><strong>Overview Screen Sections:</strong></p>
+<ul>
+    <li><strong>LOCALIZATION</strong>
+        <ul>
+            <li>Keyboard: English (US)</li>
+            <li>Language Settings: English (United States)</li>
+            <li>Time Settings: [Time Zone not configured]</li>
+        </ul>
+    </li>
+    <li><strong>SOFTWARE</strong>
+        <ul>
+            <li>Software Selection: [Not configured]</li>
+            <li>Installation Source: [Local media]</li>
+        </ul>
+    </li>
+    <li><strong>SYSTEM</strong>
+        <ul>
+            <li>Installation Destination: [Not configured]</li>
+            <li>Network Configuration: [Not configured]</li>
+            <li>Root Password: [Not configured]</li>
+            <li>User Creation: [Not configured]</li>
+        </ul>
+    </li>
+</ul>
+
+<h2>9.3 Disk Partitioning (LVM Recommended)</h2>
+
+<h3>Installation Destination</h3>
+
+<p><strong>Selected disks:</strong></p>
+<ul>
+    <li>Dell Virtual Disk (447.14 GB)</li>
+    <li>Model: PERA H750 Adapter</li>
+    <li>Capacity: 447.14 GB</li>
+    <li>Select: "I will configure partitioning."</li>
+</ul>
+
+<h3>Recommended LVM Partition Scheme</h3>
+
+<table>
+    <tr>
+        <th>Mount Point</th>
+        <th>File System</th>
+        <th>Size</th>
+        <th>Notes</th>
+    </tr>
+    <tr>
+        <td>/boot/efi</td>
+        <td>EFI</td>
+        <td>600 MB</td>
+        <td>Required for UEFI</td>
+    </tr>
+    <tr>
+        <td>/boot</td>
+        <td>xfs</td>
+        <td>1-2 GB</td>
+        <td>Boot files</td>
+    </tr>
+    <tr>
+        <td>/</td>
+        <td>xfs</td>
+        <td>40-60 GB</td>
+        <td>Root (adjust for packages)</td>
+    </tr>
+    <tr>
+        <td>/home</td>
+        <td>xfs</td>
+        <td>10+ GB</td>
+        <td>User data</td>
+    </tr>
+    <tr>
+        <td>swap</td>
+        <td>swap</td>
+        <td>8-16 GB</td>
+        <td>2x RAM if &lt; 8GB</td>
+    </tr>
+    <tr>
+        <td>/var</td>
+        <td>xfs</td>
+        <td>20+ GB</td>
+        <td>Logs and temp data</td>
+    </tr>
+    <tr>
+        <td>/tmp</td>
+        <td>xfs</td>
+        <td>10+ GB</td>
+        <td>Temporary files</td>
+    </tr>
+    <tr>
+        <td>/opt</td>
+        <td>xfs</td>
+        <td>20+ GB</td>
+        <td>Third-party software</td>
+    </tr>
+</table>
+
+<div class="page-break"></div>
+
+<h2>9.4 Network Configuration</h2>
+
+<h3>IPv4 Configuration</h3>
+
+<p><strong>IPv4 Settings Tab:</strong></p>
+<ul>
+    <li>Method: Manual (or Automatic via DHCP)</li>
+</ul>
+
+<p><strong>Static IP Configuration:</strong></p>
+<ul>
+    <li>Address: 192.168.1.200</li>
+    <li>Netmask: 255.255.255.0 (/24)</li>
+    <li>Gateway: 192.168.1.1</li>
+    <li>DNS Servers: 192.168.1.10, 192.168.1.11</li>
+    <li>Search Domains: example.com</li>
+</ul>
+
+<h3>Hostname Configuration</h3>
+<ul>
+    <li>Current hostname: localhost.localdomain</li>
+    <li>Desired hostname: rhel95-prod-01.example.com</li>
+    <li>DNS Search Domains: example.com</li>
+</ul>
+
+<h2>9.5 Software Selection</h2>
+
+<h3>Recommended Software Selection</h3>
+
+<p><strong>Option 1: Server with GUI (Standard Enterprise Server)</strong></p>
+<ul>
+    <li>Base Environment: Server with GUI</li>
+    <li>Add-Ons:
+        <ul>
+            <li>✓ System Tools</li>
+            <li>✓ Security Tools</li>
+            <li>(Optional) Network File System Client</li>
+        </ul>
+    </li>
+</ul>
+
+<p><strong>Option 2: Server (Minimal with management tools)</strong></p>
+<ul>
+    <li>Base Environment: Server</li>
+    <li>Add-Ons:
+        <ul>
+            <li>✓ System Tools</li>
+            <li>✓ Security Tools</li>
+            <li>✓ Remote Management for Linux</li>
+            <li>(Optional) Large Systems Support</li>
+        </ul>
+    </li>
+</ul>
+
+<p><strong>Option 3: Minimal Install (Container Host/Dev)</strong></p>
+<ul>
+    <li>Base Environment: Minimal Install</li>
+    <li>Add-Ons: (Optional) System Tools</li>
+</ul>
+
+<div class="page-break"></div>
+
+<h2>9.6 User Settings</h2>
+
+<h3>Root Password</h3>
+<ul>
+    <li>Set a strong password for the root user (system administrator) account</li>
+    <li>Password Strength: Strong (recommended)</li>
+    <li>Option: Lock root account (recommended)</li>
+</ul>
+
+<h3>Creating User Account</h3>
+<ul>
+    <li>Full Name: System Administrator</li>
+    <li>User Name: sysadmin</li>
+    <li>Password: [Set password]</li>
+    <li>[✓] Make this user an administrator</li>
+    <li>[✓] Require a password to use this account (recommended)</li>
+</ul>
+
+<h2>9.7 Installation Progress</h2>
+
+<p><strong>Progress Screen:</strong></p>
+<ul>
+    <li>Installation progress bar showing percentage</li>
+    <li>Current package being installed</li>
+    <li>Package Install Progress list</li>
+    <li>Time Elapsed: HH:MM:SS</li>
+</ul>
+
+<h3>Post-Installation Summary</h3>
+
+<p><strong>Success message:</strong></p>
+<ul>
+    <li>✓ Success!</li>
+    <li>Red Hat Enterprise Linux 9.5 installed</li>
+</ul>
+
+<p><strong>User Settings:</strong></p>
+<ul>
+    <li>Root password: Set</li>
+    <li>User account: sysadmin (admin privileges)</li>
+</ul>
+
+<p><strong>System:</strong></p>
+<ul>
+    <li>Installation Destination: Configured</li>
+    <li>Network: Configured (eth0)</li>
+    <li>Software: Server with GUI</li>
+</ul>
+
+<h2>9.8 First Login</h2>
+
+<h3>Reboot Process</h3>
+<ol>
+    <li>Click "Reboot"</li>
+    <li>Server reboots (remount virtual media if configured)</li>
+    <li>Boot from local disk (not virtual CD)</li>
+    <li>GRUB menu appears</li>
+    <li>RHEL 9.5 boots to login screen</li>
+</ol>
+
+<h3>Initial System Check</h3>
+
+<pre>
+# Verify OS version
+$ cat /etc/os-release
+NAME="Red Hat Enterprise Linux"
+VERSION="9.5 (Plow)"
+ID="rhel"
+VERSION_ID="9.5"
+
+# Check kernel version
+$ uname -r
+5.14.0-503.el9.x86_64
+
+# Check disk partitioning
+$ lsblk
+NAME        MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
+sda           8:0    0 447.1G  0 disk
+├─sda1        8:1    0   600M  0 part /boot/efi
+├─sda2        8:2    0     1G  0 part /boot
+└─sda3        8:3    0 445.5G  0 part
+  ├─rhel_root 253:0    0    50G  0 lvm  /
+  ├─rhel_swap 253:1    0     8G  0 lvm  [SWAP]
+  └─rhel_home 253:2    0    20G  0 lvm  /home
+</pre>
+
+<div class="page-break"></div>
+
+<h1 id="section10">10. Enterprise Best Practices</h1>
+
+<h2>10.1 Pre-Installation Best Practices</h2>
+
+<p><strong>Documentation:</strong></p>
+<ul>
+    <li>Complete server configuration worksheet before starting</li>
+    <li>Document IP addressing scheme and VLAN assignments</li>
+    <li>Record service tag and iDRAC/iLO IP addresses</li>
+    <li>Note DNS, NTP, and network proxy requirements</li>
+</ul>
+
+<p><strong>Software Preparation:</strong></p>
+<ul>
+    <li>Download official RHEL 9.5 ISO from Red Hat Customer Portal</li>
+    <li>Verify ISO checksum (sha256sum):
+        <pre>$ sha256sum rhel-9.5-x86_64-dvd.iso
+abc123... rhel-9.5-x86_64-dvd.iso</pre>
+    </li>
+    <li>Use DVD ISO, not Boot ISO (for offline installation)</li>
+</ul>
+
+<p><strong>Hardware Verification:</strong></p>
+<ul>
+    <li>Update firmware (iDRAC/iLO, PERC, BIOS) before install</li>
+    <li>Test hardware health via remote management</li>
+    <li>Verify RAID configuration meets data protection requirements</li>
+    <li>Ensure server has current IPMI/BMC firmware</li>
+</ul>
+
+<h2>10.2 Post-Installation Best Practices</h2>
+
+<pre>
+# 1. System Registration
+subscription-manager register --username=&lt;username&gt; --password=&lt;password&gt;
+subscription-manager attach --pool=&lt;pool-id&gt;
+subscription-manager repos --enable=rhel-9-for-x86_64-baseos-eus
+
+# 2. Update System
+dnf update -y
+reboot
+
+# 3. Configure Firewalld
+firewall-cmd --permanent --add-service=ssh
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+
+# 4. Enable RHEL Services
+systemctl enable --now rsyslog
+systemctl enable --now chronyd
+systemctl enable --now firewalld
+
+# 5. Install Additional Enterprise Tools
+dnf install -y wget curl net-tools bind-utils strace
+dnf install -y cockpit-system cockpit-storaged
+systemctl enable --now cockpit.socket
+</pre>
+
+<h2>10.3 Security Hardening Checklist</h2>
+<ul>
+    <li><strong>Root Account</strong>
+        <ul>
+            <li>Disable direct root SSH login</li>
+            <li>Use sudo for administrative tasks</li>
+        </ul>
+    </li>
+    <li><strong>SSH Hardening</strong>
+        <ul>
+            <li>Disable password authentication (use keys)</li>
+            <li>Disable root login</li>
+        </ul>
+    </li>
+    <li><strong>Firewall</strong>
+        <ul>
+            <li>Enable firewalld</li>
+            <li>Restrict to management network</li>
+        </ul>
+    </li>
+    <li><strong>SELinux</strong>
+        <ul>
+            <li>Keep enabled (Enforcing mode)</li>
+        </ul>
+    </li>
+    <li><strong>Updates</strong>
+        <ul>
+            <li>Subscribe to errata notifications</li>
+            <li>Schedule regular updates</li>
+        </ul>
+    </li>
+</ul>
+
+<div class="page-break"></div>
+
+<h1 id="section11">11. Common Mistakes in Remote Installs</h1>
+
+<h2>11.1 Virtual Media Issues</h2>
+
+<div class="warning">
+    <strong>MISTAKE: ISO mounted but not detected as boot device</strong>
+</div>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Boot order not set to virtual CD/DVD first</li>
+    <li>Virtual media mount not "Connected" (just "Mapped")</li>
+    <li>Browser caching old iDRAC/iLO session</li>
+    <li>UEFI boot mode vs Legacy boot mode mismatch</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Reboot server after mounting ISO</li>
+    <li>Verify boot order in BIOS before boot</li>
+    <li>Clear browser cache or use Incognito/Private mode</li>
+    <li>Verify boot mode in BIOS matches ISO (UEFI for RHEL 9.x)</li>
+</ul>
+
+<div class="warning">
+    <strong>MISTAKE: Virtual media disconnects during installation</strong>
+</div>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Browser timeout/session expiration</li>
+    <li>Network interruption</li>
+    <li>Management network switch port flapping</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Use stable management network</li>
+    <li>Extend session timeout in iDRAC/iLO settings</li>
+    <li>Do not browse away from remote console during install</li>
+</ul>
+
+<h2>11.2 Boot and Partitioning Mistakes</h2>
+
+<div class="warning">
+    <strong>MISTAKE: "No operating system found" after reboot</strong>
+</div>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Boot order reverted after installation</li>
+    <li>RAID configuration lost/reset</li>
+    <li>Boot loader not installed correctly</li>
+    <li>Disk not properly partitioned for boot</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Reconfigure boot order in BIOS after install</li>
+    <li>Verify RAID Virtual Disk is still "Online"</li>
+    <li>Reinstall bootloader to MBR/EFI partition</li>
+</ul>
+
+<div class="warning">
+    <strong>MISTAKE: Wrong partition scheme for UEFI</strong>
+</div>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Missing EFI System Partition (ESP)</li>
+    <li>ESP not formatted as FAT (not EFI)</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Create /boot/efi as 600MB EFI System Partition</li>
+    <li>Ensure File System is "EFI System Partition" (FAT)</li>
+    <li>Boot in UEFI mode in BIOS settings</li>
+</ul>
+
+<h2>11.3 Network and Configuration Mistakes</h2>
+
+<div class="warning">
+    <strong>MISTAKE: No network connectivity after installation</strong>
+</div>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Wrong VLAN configured</li>
+    <li>Gateway not set</li>
+    <li>DNS not configured</li>
+    <li>Network interface not enabled on boot</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Confirm VLAN ID with network team</li>
+    <li>Add default gateway: <code>ip route add default via &lt;gateway&gt;</code></li>
+    <li>Add DNS: <code>/etc/resolv.conf</code> or via NetworkManager</li>
+    <li>Enable interface: <code>nmcli connection up &lt;interface-name&gt;</code></li>
+</ul>
+
+<div class="warning">
+    <strong>MISTAKE: Cannot register with Red Hat Subscription</strong>
+</div>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Wrong credentials</li>
+    <li>No internet connectivity (requires proxy)</li>
+    <li>Subscription pool already consumed</li>
+    <li>System time incorrect (certificates rejected)</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Verify credentials at access.redhat.com</li>
+    <li>Configure proxy in /etc/rhsm/rhsm.conf if needed</li>
+    <li>Check available subscriptions: <code>subscription-manager list</code></li>
+    <li>Sync NTP: <code>timedatectl set-ntp true</code></li>
+</ul>
+
+<div class="page-break"></div>
+
+<h1 id="section12">12. Troubleshooting Guide</h1>
+
+<h2>12.1 Console Not Loading Issues</h2>
+
+<p><strong>PROBLEM: Remote Console (KVM) won't launch</strong></p>
+
+<p><strong>DIAGNOSTIC STEPS:</strong></p>
+<ol>
+    <li>Check Java/WebSocket plugin status</li>
+    <li>Verify network connectivity - Ping iDRAC/iLO IP</li>
+    <li>Check license (iDRAC requires Enterprise, iLO requires Advanced)</li>
+    <li>Try alternate browser</li>
+    <li>Check security software (proxies may block)</li>
+</ol>
+
+<p><strong>COMMON ERROR MESSAGES:</strong></p>
+<ul>
+    <li>"Unable to launch virtual console" → Solution: Clear browser cache, use HTTPS</li>
+    <li>"Java plugin not available" → Solution: Use HTML5 console or install Java</li>
+    <li>"Session already in use" → Solution: Disconnect other sessions</li>
+</ul>
+
+<h2>12.2 ISO Mounting Issues</h2>
+
+<p><strong>PROBLEM: ISO mounted but system doesn't boot from it</strong></p>
+
+<p><strong>DIAGNOSTIC STEPS:</strong></p>
+<ol>
+    <li>Verify boot order in BIOS</li>
+    <li>Check virtual media status - verify "Connected" not just "Mapped"</li>
+    <li>Try different mounting method - use local file instead of network URL</li>
+    <li>Verify boot mode (UEFI vs Legacy)</li>
+</ol>
+
+<p><strong>PROBLEM: Installation freezes at "Loading initrd"</strong></p>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Corrupted ISO download</li>
+    <li>Slow network causing timeout</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Verify ISO checksum</li>
+    <li>Use local file server for ISO</li>
+    <li>Re-download ISO from Red Hat</li>
+</ul>
+
+<h2>12.3 Boot Failure Issues</h2>
+
+<p><strong>PROBLEM: System boots to "dracut:/#" shell (initramfs emergency)</strong></p>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Missing drivers (RAID controller not recognized)</li>
+    <li>Disk configuration changed</li>
+    <li>Corrupted initramfs</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Boot with "rhel_debug" option for diagnostics</li>
+    <li>Check: <code>lsblk</code>, <code>lvm pvs</code>, <code>cat /proc/mounts</code></li>
+    <li>Rebuild initramfs: <code>dracut -f</code></li>
+</ul>
+
+<p><strong>PROBLEM: "No bootable device found" after installation</strong></p>
+
+<p><strong>DIAGNOSTIC STEPS:</strong></p>
+<ol>
+    <li>Check RAID configuration (is virtual disk online?)</li>
+    <li>Check boot order in BIOS (did it reset?)</li>
+    <li>Check if boot loader installed</li>
+    <li>Verify UEFI boot entry: <code>efibootmgr -v</code></li>
+</ol>
+
+<h2>12.4 Anaconda Installer Issues</h2>
+
+<p><strong>PROBLEM: "Error checking storage configuration"</strong></p>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Disk not properly initialized</li>
+    <li>RAID configuration not detected</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Press Ctrl+Alt+F2 to access shell</li>
+    <li>Run: <code>lsblk</code>, <code>lspci</code>, <code>cat /proc/partitions</code></li>
+</ul>
+
+<p><strong>PROBLEM: Package installation fails ("Package not found")</strong></p>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>ISO not complete (using Boot ISO instead of DVD)</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Use full DVD ISO</li>
+</ul>
+
+<p><strong>PROBLEM: "Out of memory" during installation</strong></p>
+
+<p><strong>CAUSES:</strong></p>
+<ul>
+    <li>Less than 2GB RAM in system</li>
+</ul>
+
+<p><strong>SOLUTION:</strong></p>
+<ul>
+    <li>Minimum 2GB RAM required, 4GB+ recommended</li>
+    <li>At installation boot: add <code>inst.ram=4096</code></li>
+</ul>
+
+<div class="page-break"></div>
+
+<h1 id="section13">13. Post-Installation Validation</h1>
+
+<h2>13.1 System Verification Checklist</h2>
+
+<pre>
+#!/bin/bash
+# RHEL 9.5 Post-Installation Validation Script
+# Run as root after installation
+
+echo "========================================="
+echo "RHEL 9.5 Post-Installation Validation"
+echo "========================================="
+
+# 1. OS Version Check
+echo -e "\n[1] OS Version:"
+cat /etc/os-release | grep -E "NAME|VERSION="
+
+# 2. Kernel Version
+echo -e "\n[2] Kernel Version:"
+uname -r
+
+# 3. Disk Partitioning
+echo -e "\n[3] Disk Partitioning:"
+lsblk -o NAME,TYPE,FSTYPE,SIZE,MOUNTPOINT
+
+# 4. LVM Status
+echo -e "\n[4] LVM Status:"
+pvs && vgs && lvs
+
+# 5. Network Configuration
+echo -e "\n[5] Network Configuration:"
+ip addr show
+
+# 6. Network Routes
+echo -e "\n[6] Network Routes:"
+ip route show
+
+# 7. DNS Resolution
+echo -e "\n[7] DNS Resolution:"
+cat /etc/resolv.conf
+
+# 8. SELinux Status
+echo -e "\n[8] SELinux Status:"
+getenforce
+
+# 9. Firewall Status
+echo -e "\n[9] Firewall Status:"
+firewall-cmd --list-all
+
+# 10. System Services
+echo -e "\n[10] Critical Services Status:"
+systemctl is-active rsyslog chronyd firewalld
+
+# 11. Subscription Status
+echo -e "\n[11] Red Hat Subscription:"
+subscription-manager status 2>/dev/null || echo "Not registered"
+
+# 12. Installed Packages Count
+echo -e "\n[12] Total Installed Packages:"
+rpm -qa | wc -l
+
+# 13. Last Boot
+echo -e "\n[13] System Uptime:"
+uptime
+
+echo -e "\n========================================="
+echo "Validation Complete"
+echo "========================================="
+</pre>
+
+<h2>13.2 Network Connectivity Test</h2>
+
+<pre>
+# Test network connectivity
+echo "=== Network Connectivity Tests ==="
+
+# Ping gateway
+ping -c 3 192.168.1.1
+
+# Ping DNS servers
+ping -c 3 192.168.1.10
+
+# Test DNS resolution
+nslookup google.com
+
+# Test internet connectivity
+curl -I https://access.redhat.com
+
+# Test subscription connectivity
+subscription-manager status
+</pre>
+
+<h2>13.3 Storage Performance Test</h2>
+
+<pre>
+# Storage I/O Performance Test
+echo "=== Storage Performance Test ==="
+
+# Write test
+dd if=/dev/zero of=/tmp/testfile bs=1G count=1 oflag=direct
+
+# Read test
+dd if=/tmp/testfile of=/dev/null bs=1G count=1 iflag=direct
+
+# Cleanup
+rm -f /tmp/testfile
+</pre>
+
+<div class="page-break"></div>
+
+<h1 id="section14">14. Appendix</h1>
+
+<h2>14.1 Keyboard Shortcuts</h2>
+
+<p><strong>DELL iDRAC:</strong></p>
+<ul>
+    <li>Ctrl+Alt+Del → Send Ctrl+Alt+Del to server</li>
+    <li>Ctrl+Alt+Esc → Exit to BIOS/UEFI setup</li>
+    <li>Ctrl+Alt+F1 → Switch to text console (tty1)</li>
+    <li>F2 → Enter BIOS setup (at boot)</li>
+    <li>F11 → One-time boot menu</li>
+</ul>
+
+<p><strong>HP iLO:</strong></p>
+<ul>
+    <li>Ctrl+Alt+Del → Send Ctrl+Alt+Del to server</li>
+    <li>Ctrl+Alt+Esc → Exit to BIOS setup</li>
+    <li>F8 → iLO Configuration (at boot)</li>
+    <li>F9 → System Utilities (at boot)</li>
+    <li>F10 → Boot menu</li>
+</ul>
+
+<p><strong>ANACONDA INSTALLER:</strong></p>
+<ul>
+    <li>Ctrl+Alt+F1 → Main window</li>
+    <li>Ctrl+Alt+F2 → Shell (dracut)</li>
+    <li>Ctrl+Alt+F3 → Installer log</li>
+    <li>Ctrl+Alt+F4 → Hardware info</li>
+</ul>
+
+<h2>14.2 Useful Commands Reference</h2>
+
+<pre>
+# iDRAC Commands (racadm)
+racadm -r &lt;iDRAC-IP&gt; -u root -p &lt;password&gt; get iDRAC.Info
+
+# HP iLO Commands (hponcfg)
+hponcfg -i &lt;iLO-IP&gt; -f config.xml
+
+# IPMI Commands (ipmitool)
+ipmitool -I lanplus -H &lt;BMC-IP&gt; -U ADMIN -P &lt;password&gt; chassis status
+
+# RHEL System Commands
+subscription-manager list --available
+subscription-manager attach --pool=&lt;pool-id&gt;
+dnf updateinfo list
+dnf updateinfo list --security
+</pre>
+
+<h2>14.3 Network Port Requirements</h2>
+
+<table>
+    <tr>
+        <th>Service</th>
+        <th>Port</th>
+    </tr>
+    <tr>
+        <td>iDRAC HTTPS</td>
+        <td>443</td>
+    </tr>
+    <tr>
+        <td>iDRAC SSH</td>
+        <td>22</td>
+    </tr>
+    <tr>
+        <td>iLO HTTPS</td>
+        <td>443</td>
+    </tr>
+    <tr>
+        <td>iLO SSH</td>
+        <td>22</td>
+    </tr>
+    <tr>
+        <td>IPMI Over LAN</td>
+        <td>623 (UDP)</td>
+    </tr>
+    <tr>
+        <td>RHEL SSH</td>
+        <td>22</td>
+    </tr>
+    <tr>
+        <td>RHEL Cockpit</td>
+        <td>9090</td>
+    </tr>
+    <tr>
+        <td>Red Hat CDN</td>
+        <td>443</td>
+    </tr>
+</table>
+
+<h2>14.4 Contact & Support Information</h2>
+
+<p><strong>RED HAT SUPPORT CHANNELS:</strong></p>
+<ul>
+    <li>Web: access.redhat.com</li>
+    <li>Phone: 1-888-RED-HAT1 (US)</li>
+    <li>Knowledgebase: access.redhat.com/knowledge</li>
+    <li>Documentation: access.redhat.com/documentation</li>
+</ul>
+
+<p><strong>VENDOR HARDWARE SUPPORT:</strong></p>
+<ul>
+    <li>Dell: support.dell.com (w/ Service Tag)</li>
+    <li>HP: support.hpe.com</li>
+    <li>Supermicro: supermicro.com/support</li>
+</ul>
+
+<hr>
+
+<h2>Document Revision History</h2>
+
+<table>
+    <tr>
+        <th>Version</th>
+        <th>Date</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>1.0</td>
+        <td>April 2025</td>
+        <td>Initial Release - RHEL 9.5</td>
+    </tr>
+</table>
+
+<hr>
+
+<h2>Completion Checklist</h2>
+
+<p><strong>PRE-INSTALLATION:</strong></p>
+<ul>
+    <li>Server documented with all IP/Network details</li>
+    <li>RHEL 9.5 ISO downloaded and checksum verified</li>
+    <li>iDRAC/iLO/IPMI access verified and credentials ready</li>
+    <li>Virtual media successfully mounted</li>
+    <li>Boot order configured to Virtual CD first</li>
+    <li>RAID configuration completed (if applicable)</li>
+</ul>
+
+<p><strong>DURING INSTALLATION:</strong></p>
+<ul>
+    <li>Language selected (English recommended)</li>
+    <li>Disk partitioning completed with LVM</li>
+    <li>Network configured with correct IP/gateway/DNS</li>
+    <li>Software selection matches requirements</li>
+    <li>Root password set (strong password)</li>
+    <li>User account created (if needed)</li>
+    <li>Installation completed without errors</li>
+</ul>
+
+<p><strong>POST-INSTALLATION:</strong></p>
+<ul>
+    <li>Server rebooted successfully</li>
+    <li>Login works with created credentials</li>
+    <li>Network connectivity confirmed</li>
+    <li>SELinux in Enforcing mode</li>
+    <li>Firewall enabled and configured</li>
+    <li>System registered with Red Hat</li>
+    <li>All packages updated (dnf update)</li>
+    <li>Services enabled (rsyslog, chronyd, firewalld)</li>
+</ul>
+
+<hr>
+
+<p style="text-align: center; margin-top: 50px;">
+<em>This enterprise-grade guide provides comprehensive instructions for installing Red Hat Enterprise Linux 9.5 on bare metal servers using remote console access.</em>
+</p>
+
+<p style="text-align: center;">
+<strong>Document Version:</strong> 1.0<br>
+<strong>Last Updated:</strong> April 2025<br>
+<strong>Author:</strong> Senior RHCA Architect
+</p>
+
+</body>
+</html>
