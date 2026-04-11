@@ -1,0 +1,95 @@
+mkdir -p /var/www/html/rhel97
+
+cd /var/www/html/rhel97
+
+mount -o loop rhel-9.7-x86_64-dvd.iso /mnt
+
+cp -r /mnt/* /var/www/html/rhel97
+
+umount /mnt
+
+subscription-manager register
+
+dnf install -y httpd
+
+systemctl start httpd
+ 
+systemctl enable httpd
+
+firewall-cmd --add-service=http --permanent
+
+firewall-cmd --reload
+
+http://192.168.121.169/rhel97/
+
+ls /var/www/html/rhel97/
+
+systemctl status httpd
+
+
+mkdir -p /etc/httpd/ssl
+
+openssl req -new -x509 -days 3650 -nodes \
+  -out /etc/httpd/ssl/server.crt \
+  -keyout /etc/httpd/ssl/server.key
+
+vi /etc/httpd/conf.d/ssl.conf
+
+<VirtualHost *:443>
+    ServerName 192.168.121.169
+
+    DocumentRoot /var/www/html
+
+    SSLEngine on
+    SSLCertificateFile /etc/httpd/ssl/server.crt
+    SSLCertificateKeyFile /etc/httpd/ssl/server.key
+
+    <Directory /var/www/html/rhel97>
+        Options Indexes FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+</VirtualHost>
+
+
+firewall-cmd --permanent --add-service=https
+firewall-cmd --reload
+
+dnf install -y mod_ss
+
+systemctl restart httpd
+
+https://192.168.121.169/rhel97/
+
+echo "Listen 443 https" >> /etc/httpd/conf/httpd.conf
+echo "ServerName localhost" >> /etc/httpd/conf/httpd.conf
+ss -tulnp | grep 443
+ curl -k https://localhost/
+https://192.168.121.169/rhel97/
+
+/etc/yum.repos.d/rhel97.repo
+
+[rhel97-baseos]
+name=RHEL 9.7 BaseOS
+baseurl=https://192.168.121.169/rhel97/BaseOS/
+enabled=1
+gpgcheck=0
+sslverify=0
+
+
+[rhel97-baseos]
+name=RHEL 9.7 BaseOS
+baseurl=http://192.168.121.169/rhel97/BaseOS/
+enabled=1
+gpgcheck=0
+
+[rhel97-appstream]
+name=RHEL 9.7 AppStream
+baseurl=http://192.168.121.169/rhel97/AppStream/
+enabled=1
+gpgcheck=0
+
+dnf clean all
+dnf makecache
+
+dnf repolist
