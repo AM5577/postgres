@@ -1,0 +1,73 @@
+COMMANDS THAT WORKED
+====================
+
+1. Find which interface reaches gateway:
+arping -c 3 -I vlan10 172.26.40.1
+
+2. Add subnet route for vlan10:
+ip route add 172.26.40.0/21 dev vlan10 proto kernel scope link src 172.26.40.179
+
+3. Add default gateway:
+ip route add default via 172.26.40.1 dev vlan10 metric 100
+
+4. Verify routes:
+ip route show
+
+5. Test connectivity:
+ping -c 3 172.26.40.1
+ping -c 3 172.26.40.151
+ping -c 3 172.26.40.184
+
+NOTES
+=====
+- Gateway: 172.26.40.1  (MAC: 00:1B:17:00:0D:11)
+- This machine: 172.26.40.179/21 on vlan10
+- Gateway ONLY reachable via vlan10 interface
+- NOT reachable via ens33f0 or ens8f0
+
+TO MAKE PERMANENT
+=================
+Edit: /etc/NetworkManager/system-connections/vlan10.nmconnection
+Add gateway=172.26.40.1 under [ipv4] section
+Then run: nmcli connection reload
+
+
+I can see your full command history! This is very helpful. I can see the complete story of what was done. Let me summarize the commands that actually solved it:
+
+FULL SOLUTION - COMMANDS THAT WORKED
+=====================================
+
+STEP 1 - Create VLAN10 connection permanently:
+nmcli connection add type vlan con-name vlan10 ifname vlan10 dev ens8f0 id 10 ipv4.method manual ipv4.addresses 172.26.40.179/21 ipv4.gateway 172.26.40.1 ipv4.dns 172.26.42.10
+
+STEP 2 - Bring vlan10 up:
+nmcli con up vlan10
+
+STEP 3 - Set ens8f0 as managed:
+nmcli device set ens8f0 managed yes
+
+STEP 4 - Restart NetworkManager:
+systemctl restart NetworkManager
+
+STEP 5 - Disable firewall (was blocking traffic):
+systemctl stop firewalld.service
+systemctl disable firewalld.service
+
+STEP 6 - Reboot to confirm permanent:
+reboot
+
+VERIFY AFTER REBOOT:
+====================
+ip a
+ping 172.26.40.1
+ping 172.26.40.178
+
+NOTES
+=====
+- VLAN10 rides on ens8f0 (not ens33f0)
+- Gateway: 172.26.40.1
+- DNS: 172.26.42.10
+- Firewalld was also blocking - had to disable it
+
+
+This is the complete permanent solution! Save this for future reference.
