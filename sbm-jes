@@ -1,0 +1,14 @@
+#!/bin/bash
+set -euo pipefail
+source .env
+docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" -p "$REGISTRY_PASS"
+for ENTRY in "${IMAGES[@]}"; do
+  IFS='|' read -r IMAGE PROJECT PARENT <<< "$ENTRY"
+  NAME=$(basename "$IMAGE" | cut -d: -f1); SBOM="/tmp/sbom-${NAME}.json"
+  docker pull "$IMAGE" && trivy image --format cyclonedx --output "$SBOM" --insecure "$IMAGE"
+  UUID=$(curl -sk "${DT_URL}/api/v1/project/lookup?name=${PROJECT}&version=latest" -H "X-Api-Key: ${API_KEY}" | python3 -c "import json,sys; print(json.load(sys.stdin).get('uuid',''))" 2>/dev/null)
+  [ -z "$UUID" ] && echo "ERROR: Project '${PROJECT}' not found in Dependency-Track." && continue
+  HTTP=$(curl -sk -o /dev/null -w "%{http_code}" -X POST "${DT_URL}/api/v1/bom" -H "X-Api-Key: ${API_KEY}" -F "project=${UUID}" -F "bom=@${SBOM}")
+  echo "Done: $NAME -> HTTP $HTTP"
+done
+ 
