@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+source .env
+
+docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" -p "$REGISTRY_PASS"
+
+for IMAGE in "${IMAGES[@]}"; do
+  NAME=$(basename "$IMAGE" | cut -d: -f1)
+  SBOM="/tmp/sbom-${NAME}.json"
+  echo "Processing: $IMAGE"
+  docker pull "$IMAGE"
+  trivy image --format cyclonedx --output "$SBOM" --insecure "$IMAGE"
+  echo "Uploading: $NAME | UUID: $UUID_PROJECT"
+  HTTP=$(curl -sk -o /dev/null -w "%{http_code}" \
+    -X POST "${DT_URL}/api/v1/bom" \
+    -H "X-Api-Key: ${API_KEY}" \
+    -F "project=${UUID_PROJECT}" \
+    -F "bom=@${SBOM}")
+  echo "Done: $NAME -> HTTP $HTTP"
+done
