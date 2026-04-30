@@ -1,0 +1,90 @@
+================================================================================
+SBOM UPLOAD TO DEPENDENCY-TRACK - FINAL SCRIPT & CONFIG
+================================================================================
+
+
+FILE 1: .env
+================================================================================
+Save as: .env
+
+# Docker Registry credentials
+REGISTRY_HOST="docker.io"
+REGISTRY_USER="your-docker-username"
+REGISTRY_PASS="your-docker-password"
+
+# Dependency-Track
+DT_URL="http://127.0.0.1:8081"
+API_KEY="your-dependency-track-api-key"
+
+# Project UUIDs - copy from DT UI -> Projects -> click project -> copy UUID from URL
+UUID_PROJECT1="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT2="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT3="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT4="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT5="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+# Images to scan
+# Format: "registry/image:tag|project-name|project-uuid"
+IMAGES=(
+  "docker.io/vantage/postgres:16-alpine|postgres|${UUID_PROJECT1}"
+  "docker.io/library/nginx:latest|nginx|${UUID_PROJECT2}"
+  "docker.io/library/redis:7-alpine|redis|${UUID_PROJECT3}"
+  "docker.io/library/mysql:8.0|mysql|${UUID_PROJECT4}"
+  "docker.io/library/alpine:latest|alpine|${UUID_PROJECT5}"
+)
+
+
+FILE 2: sbom-upload.sh
+================================================================================
+Save as: sbom-upload.sh
+
+#!/bin/bash
+set -euo pipefail
+source .env
+docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" -p "$REGISTRY_PASS"
+for ENTRY in "${IMAGES[@]}"; do
+  IFS='|' read -r IMAGE PROJECT UUID <<< "$ENTRY"
+  NAME=$(basename "$IMAGE" | cut -d: -f1); SBOM="/tmp/sbom-${NAME}.json"
+  docker pull "$IMAGE" && trivy image --format cyclonedx --output "$SBOM" --insecure "$IMAGE"
+  echo "Uploading: $NAME | Project: $PROJECT | UUID: $UUID"
+  HTTP=$(curl -sk -o /dev/null -w "%{http_code}" -X POST "${DT_URL}/api/v1/bom" -H "X-Api-Key: ${API_KEY}" -F "project=${UUID}" -F "bom=@${SBOM}")
+  echo "Done: $NAME -> HTTP $HTTP"
+done
+
+
+SETUP INSTRUCTIONS
+================================================================================
+
+1. Fill in .env with your actual values:
+     - REGISTRY_USER / REGISTRY_PASS  -> your Docker credentials
+     - API_KEY                         -> from DT UI: Administration -> Access Management -> Teams
+     - UUID_PROJECT1..5                -> from DT UI: Projects -> click project -> copy from URL
+
+2. Make script executable:
+     chmod +x sbom-upload.sh
+
+3. Run:
+     ./sbom-upload.sh
+
+4. Expected output per image:
+     Uploading: postgres | Project: postgres | UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+     Done: postgres -> HTTP 200
+
+5. Verify in DT UI:
+     http://127.0.0.1:8080 -> Projects -> click project -> Components / Vulnerabilities tabs
+
+
+TROUBLESHOOTING
+================================================================================
+HTTP 200 = Success
+HTTP 401 = Wrong API key
+HTTP 404 = Wrong UUID - project not found
+HTTP 415 = Media type error - do not add Content-Type header manually
+HTTP 000 = Cannot connect - check DT_URL and docker containers are running
+
+Check containers:   docker ps | grep depend
+Test connection:    curl -sk http://127.0.0.1:8081/api/version
+List projects:      curl -sk http://127.0.0.1:8081/api/v1/project -H "X-Api-Key: YOUR_KEY"
+Check SBOM file:    ls -lh /tmp/sbom-*.json
+
+================================================================================
