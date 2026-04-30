@@ -1,0 +1,203 @@
+================================================================================
+SBOM UPLOAD TO DEPENDENCY-TRACK - COMPLETE GUIDE
+================================================================================
+
+WHAT IS THIS?
+-------------
+This solution automatically:
+1. Pulls Docker images from a registry
+2. Scans them with Trivy to generate an SBOM (Software Bill of Materials)
+3. Uploads the SBOM to Dependency-Track for vulnerability tracking
+
+REQUIREMENTS
+------------
+- Docker installed and running
+- Trivy installed (https://aquasecurity.github.io/trivy)
+- Dependency-Track running (frontend: port 8080, API: port 8081)
+- Python3 installed
+- curl installed
+
+
+================================================================================
+FILE 1: .env
+================================================================================
+Save this as: .env (in the same folder as sbom-upload.sh)
+
+# Docker Registry credentials
+REGISTRY_HOST="docker.io"
+REGISTRY_USER="your-docker-username"
+REGISTRY_PASS="your-docker-password"
+
+# Dependency-Track API settings
+# DT_URL: URL of the Dependency-Track API server (port 8081)
+DT_URL="http://127.0.0.1:8081"
+
+# API_KEY: Found in DT UI -> Administration -> Access Management -> Teams -> Your Team -> API Key
+API_KEY="your-dependency-track-api-key"
+
+# Images to scan
+# Format per line: "registry/image:tag|DT-project-name|parent-project-name"
+# - registry/image:tag  : full Docker image path
+# - DT-project-name     : must match exactly the project name you created in DT UI
+# - parent-project-name : leave empty if no parent project
+IMAGES=(
+  "docker.io/vantage/postgres:16-alpine|postgres|"
+)
+
+
+================================================================================
+FILE 2: sbom-upload.sh
+================================================================================
+Save this as: sbom-upload.sh (in the same folder as .env)
+
+#!/bin/bash
+set -euo pipefail
+source .env
+
+docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" -p "$REGISTRY_PASS"
+
+for ENTRY in "${IMAGES[@]}"; do
+  IFS='|' read -r IMAGE PROJECT PARENT <<< "$ENTRY"
+  NAME=$(basename "$IMAGE" | cut -d: -f1)
+  SBOM="/tmp/sbom-${NAME}.json"
+
+  docker pull "$IMAGE"
+  trivy image --format cyclonedx --output "$SBOM" --insecure "$IMAGE"
+
+  # Look up existing project UUID by name
+  UUID=$(curl -sk "${DT_URL}/api/v1/project/lookup?name=${PROJECT}&version=latest" \
+    -H "X-Api-Key: ${API_KEY}" \
+    | python3 -c "import json,sys; print(json.load(sys.stdin)['uuid'])")
+
+  if [ -z "$UUID" ]; then
+    echo "ERROR: Project '${PROJECT}' not found in Dependency-Track. Please create it manually first."
+    continue
+  fi
+
+  echo "Found project UUID: $UUID"
+
+  # Upload SBOM using project UUID
+  HTTP=$(curl -sk -o /dev/null -w "%{http_code}" \
+    -X POST "${DT_URL}/api/v1/bom" \
+    -H "X-Api-Key: ${API_KEY}" \
+    -F "project=${UUID}" \
+    -F "bom=@${SBOM}")
+
+  echo "Done: $NAME -> HTTP $HTTP"
+done
+
+
+================================================================================
+END TO END EXPLANATION
+================================================================================
+
+STEP 1 — SET UP DEPENDENCY-TRACK
+---------------------------------
+1. Make sure Dependency-Track containers are running:
+     docker ps | grep depend
+   You should see:
+     - dependencytrack/frontend   -> port 8080 (UI)
+     - dependencytrack/apiserver  -> port 8081 (API)
+
+2. Open the UI in your browser:
+     http://127.0.0.1:8080
+
+3. Login with default credentials (change after first login):
+     Username: admin
+     Password: admin
+
+
+STEP 2 — GET YOUR API KEY
+--------------------------
+1. In DT UI go to: Administration -> Access Management -> Teams
+2. Click on your team (e.g. "Automation" or "Administrators")
+3. Copy the API Key shown
+4. Paste it into your .env file as API_KEY="..."
+
+
+STEP 3 — CREATE PROJECT IN DEPENDENCY-TRACK
+--------------------------------------------
+1. In DT UI go to: Projects -> Create Project
+2. Fill in:
+     Name:    postgres          (must match IMAGES entry in .env exactly)
+     Version: latest
+3. Click Create
+4. The project UUID will appear in the URL when you open the project:
+     http://127.0.0.1:8080/projects/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+
+
+STEP 4 — CONFIGURE .env FILE
+------------------------------
+Edit your .env file and fill in:
+  REGISTRY_HOST  = docker.io (or your private registry hostname)
+  REGISTRY_USER  = your Docker Hub username
+  REGISTRY_PASS  = your Docker Hub password or access token
+  DT_URL         = http://127.0.0.1:8081
+  API_KEY        = the API key copied from Step 2
+  IMAGES         = list of images to scan (see format above)
+
+
+STEP 5 — PREPARE THE SCRIPT
+-----------------------------
+1. Place both files in the same folder:
+     mkdir /opt/sbom
+     cd /opt/sbom
+     # copy .env and sbom-upload.sh here
+
+2. Make the script executable:
+     chmod +x sbom-upload.sh
+
+
+STEP 6 — RUN THE SCRIPT
+------------------------
+     cd /opt/sbom
+     ./sbom-upload.sh
+
+What happens when you run it:
+  a) Docker logs in to your registry
+  b) For each image in IMAGES list:
+       - Pulls the Docker image
+       - Runs Trivy scan and saves SBOM as /tmp/sbom-<name>.json
+       - Looks up the project UUID from Dependency-Track by name
+       - Uploads the SBOM file to Dependency-Track via API
+       - Prints: Done: postgres -> HTTP 200  (200 = success)
+
+
+STEP 7 — VERIFY IN DEPENDENCY-TRACK UI
+----------------------------------------
+1. Open http://127.0.0.1:8080
+2. Go to Projects -> click your project (e.g. postgres)
+3. You should see:
+     - Components tab: list of all packages found in the image
+     - Vulnerabilities tab: any CVEs detected
+     - Dependencies tab: dependency tree
+
+
+TROUBLESHOOTING
+---------------
+HTTP 200 = Success
+HTTP 400 = Bad request - check SBOM file format or missing fields
+HTTP 401 = Unauthorized - check your API_KEY in .env
+HTTP 404 = Project not found - check project name matches exactly in DT UI
+HTTP 415 = Wrong media type - do not set Content-Type header manually
+HTTP 000 = Cannot connect - check DT_URL and that containers are running
+
+If script fails silently:
+  - Check SBOM file exists:  ls -lh /tmp/sbom-*.json
+  - Check file has content:  head -3 /tmp/sbom-postgres.json
+  - Test API manually:       curl -sk http://127.0.0.1:8081/api/version
+
+
+ADDING MORE IMAGES
+------------------
+Edit .env and add more lines to IMAGES:
+
+IMAGES=(
+  "docker.io/vantage/postgres:16-alpine|postgres|"
+  "docker.io/library/nginx:latest|nginx|"
+  "docker.io/library/redis:7-alpine|redis|"
+)
+
+Make sure each project name (2nd field) is created in DT UI first.
+
+================================================================================
