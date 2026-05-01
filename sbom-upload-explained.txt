@@ -1,0 +1,389 @@
+================================================================================
+SBOM PIPELINE - COMPLETE GUIDE (Easy End to End Explanation)
+================================================================================
+
+
+WHAT IS THIS PIPELINE IN PLAIN ENGLISH?
+================================================================================
+
+Think of it like a security audit for your Docker containers.
+
+  You have Docker images running in production (nginx, postgres, redis etc.)
+  Each image contains hundreds of packages and libraries inside it.
+  Some of those packages have known security vulnerabilities (CVEs).
+  This pipeline finds ALL of them and shows them in one dashboard.
+
+  Step 1 -> Pull the Docker image to your machine
+  Step 2 -> Scan it with Trivy (finds every package inside)
+  Step 3 -> Generate an SBOM (a list of every package + version)
+  Step 4 -> Upload that SBOM to Dependency-Track (the dashboard)
+  Step 5 -> Dependency-Track matches packages against CVE databases
+  Step 6 -> You see all vulnerabilities in one place, organized by image
+
+
+WHAT EACH TOOL DOES
+================================================================================
+
+  DOCKER
+  ------
+  You already know Docker - it runs your containers.
+  Here we use it to PULL images so Trivy can scan them locally.
+  Nothing runs, we just download the image layers.
+
+  TRIVY (by Aqua Security - free & open source)
+  ------
+  A scanner that looks INSIDE a Docker image.
+  It reads every OS package (apt, apk, yum) and every language library
+  (pip, npm, gem, maven) installed in that image.
+  It outputs a CycloneDX JSON file - a standardized list of everything found.
+  Think of it as an X-ray machine for your Docker image.
+
+  CYCLONEDX (the SBOM format)
+  ------
+  SBOM = Software Bill of Materials.
+  Just like a food nutrition label lists every ingredient,
+  a CycloneDX file lists every software component inside your image.
+  It is an industry standard format (OWASP) accepted everywhere.
+  This is what gets uploaded to Dependency-Track.
+
+  DEPENDENCY-TRACK (by OWASP - free & open source)
+  ------
+  A web dashboard that receives your SBOMs.
+  It checks every component against:
+    - NVD (NIST National Vulnerability Database)
+    - OSV (Google's Open Source Vulnerability database)
+    - GitHub Security Advisories
+  It scores each vulnerability (Low / Medium / High / Critical).
+  It tracks changes over time - new CVEs are flagged automatically.
+  Think of it as your security command center.
+
+
+HOW THE DATA FLOWS
+================================================================================
+
+  [Docker Registry]
+       |
+       |  1. docker pull nginx:latest
+       v
+  [Your Machine]
+       |
+       |  2. trivy image --format cyclonedx nginx:latest
+       v
+  [SBOM File: /tmp/sbom-nginx.json]
+       |
+       |  3. curl POST /api/v1/bom (upload the file)
+       v
+  [Dependency-Track API]
+       |
+       |  4. DT parses the SBOM (takes 10-60 seconds per image)
+       v
+  [DT checks CVE databases]
+       |
+       v
+  [Dashboard shows vulnerabilities]
+       |
+       +-- Parent Project: my-stack  (ALL images combined view)
+              |
+              +-- Child: postgres   (only postgres vulns)
+              +-- Child: nginx      (only nginx vulns)
+              +-- Child: redis      (only redis vulns)
+              +-- Child: mysql      (only mysql vulns)
+              +-- Child: alpine     (only alpine vulns)
+
+
+WHY PARENT / CHILD PROJECT STRUCTURE?
+================================================================================
+
+  Without hierarchy -> You have 5 separate projects, no combined view.
+
+  With hierarchy ->
+    Security team opens PARENT project and sees:
+      Total components across ALL images: 1,247
+      Critical vulnerabilities: 3
+      High vulnerabilities: 12
+      (One dashboard for the whole stack)
+
+    Dev team opens CHILD project (their image) and sees:
+      Only their image's components and vulnerabilities.
+      They fix their stuff without noise from other images.
+
+  This is the parent/child link the script does automatically:
+    curl PATCH /api/v1/project/{child-uuid}
+         -d '{"parent": {"uuid": "parent-uuid"}}'
+
+
+THE TWO FILES YOU NEED
+================================================================================
+
+  FILE 1: .env  (your config and secrets)
+  FILE 2: sbom-upload.sh  (the script that does everything)
+
+
+================================================================================
+FILE 1 - .env
+================================================================================
+Save as: .env  (same folder as the script)
+
+REGISTRY_HOST="docker.io"
+REGISTRY_USER="your-docker-username"
+REGISTRY_PASS="your-docker-password"
+
+DT_URL="http://127.0.0.1:8081"
+API_KEY="your-dependency-track-api-key"
+
+UUID_PARENT="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+UUID_PROJECT1="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT2="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT3="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT4="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT5="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+IMAGES=(
+  "docker.io/vantage/postgres:16-alpine|postgres|${UUID_PROJECT1}"
+  "docker.io/library/nginx:latest|nginx|${UUID_PROJECT2}"
+  "docker.io/library/redis:7-alpine|redis|${UUID_PROJECT3}"
+  "docker.io/library/mysql:8.0|mysql|${UUID_PROJECT4}"
+  "docker.io/library/alpine:latest|alpine|${UUID_PROJECT5}"
+)
+
+
+WHAT EACH .env VALUE MEANS
+================================================================================
+
+  REGISTRY_HOST    -> Where your images live. docker.io = Docker Hub.
+                      Private registry? Use: registry.yourcompany.com
+
+  REGISTRY_USER    -> Your Docker Hub username OR robot account username.
+                      In production use a robot/service account, not personal login.
+
+  REGISTRY_PASS    -> Password or access token for the registry.
+                      Go to hub.docker.com -> Account Settings -> Security -> New Token
+
+  DT_URL           -> URL of your Dependency-Track API server.
+                      Note: port 8081 is the API. Port 8080 is the UI.
+                      These are different ports - common mistake!
+
+  API_KEY          -> Your DT access key.
+                      Get it: DT UI -> Administration -> Access Management
+                              -> Teams -> your team -> API Keys -> copy key
+
+  UUID_PARENT      -> The master project that groups all images.
+                      Get it: DT UI -> Projects -> click your parent project
+                              -> look at the URL -> copy the UUID from it
+                      Example URL: http://localhost:8080/#/projects/abc123-def456
+                      Your UUID: abc123-def456...
+
+  UUID_PROJECT1-5  -> Same process, one UUID per child project (per image).
+
+  IMAGES array     -> Each line = one image to scan.
+                      Format: "full-image-path|friendly-name|child-uuid"
+                      The | character separates the three parts.
+
+
+================================================================================
+FILE 2 - sbom-upload.sh  (THE 10-LINE SCRIPT)
+================================================================================
+Save as: sbom-upload.sh  (same folder as .env)
+
+#!/bin/bash
+set -uo pipefail
+source .env
+trap 'rm -f /tmp/sbom-*.json' EXIT
+echo "$REGISTRY_PASS" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
+for ENTRY in "${IMAGES[@]}"; do
+  IFS='|' read -r IMAGE PROJECT UUID <<< "$ENTRY"
+  curl -sk -o /dev/null -X PATCH "${DT_URL}/api/v1/project/${UUID}" -H "X-Api-Key: ${API_KEY}" -H "Content-Type: application/json" -d "{\"parent\":{\"uuid\":\"${UUID_PARENT}\"}}"
+  NAME=$(basename "$IMAGE" | cut -d: -f1); SBOM="/tmp/sbom-${NAME}.json"
+  docker pull "$IMAGE" && trivy image --format cyclonedx --output "$SBOM" --insecure "$IMAGE"
+  HTTP=$(curl -sk -o /dev/null -w "%{http_code}" -X POST "${DT_URL}/api/v1/bom" -H "X-Api-Key: ${API_KEY}" -F "project=${UUID}" -F "bom=@${SBOM}"); echo "$NAME -> $HTTP"
+done
+
+
+WHAT EACH LINE DOES (PLAIN ENGLISH)
+================================================================================
+
+  LINE 1: #!/bin/bash
+  Tells the OS: run this file as a bash script.
+
+  LINE 2: set -uo pipefail
+  Safety settings.
+    -u  = crash if you use a variable that was never set (catches typos)
+    -o pipefail = if any command fails inside a pipe, treat the whole thing as failed
+  Note: we intentionally left out -e so ONE image failing doesn't stop all others.
+
+  LINE 3: source .env
+  Reads your .env file and loads all variables into the script.
+  Same as copy-pasting all your config right here.
+
+  LINE 4: trap 'rm -f /tmp/sbom-*.json' EXIT
+  Cleanup safety net.
+  No matter how the script ends (success, error, crash, Ctrl+C),
+  it will always delete the temporary SBOM files from /tmp/.
+  Prevents yesterday's SBOM from being accidentally re-uploaded tomorrow.
+
+  LINE 5: echo "$REGISTRY_PASS" | docker login ...
+  Logs in to Docker registry to pull private images.
+  Using --password-stdin is safer than typing the password directly
+  because it won't show up in process lists (ps aux) or shell history.
+
+  LINE 6: for ENTRY in "${IMAGES[@]}"; do
+  Loop - runs everything below once for EACH image in your IMAGES list.
+
+  LINE 7: IFS='|' read -r IMAGE PROJECT UUID <<< "$ENTRY"
+  Splits each image entry on the | character into 3 variables:
+    IMAGE   = docker.io/library/nginx:latest
+    PROJECT = nginx
+    UUID    = the child project UUID
+
+  LINE 8: curl -sk -o /dev/null -X PATCH ...parent link...
+  Tells Dependency-Track: "this child project belongs to the parent project."
+  Runs silently (-s), ignores SSL errors (-k), throws away output (-o /dev/null).
+  This is what creates the hierarchy in the DT dashboard.
+
+  LINE 9: docker pull + trivy image
+  Two commands chained with &&:
+    First:  pull the image from the registry to your local machine.
+    Second: scan it with Trivy and save the SBOM to /tmp/sbom-nginx.json
+  If the pull fails, Trivy won't run (that's what && does).
+
+  LINE 10: curl POST /api/v1/bom + echo result
+  Upload the SBOM file to Dependency-Track.
+  -F sends it as a form upload (required by DT API).
+  Captures the HTTP response code and prints it.
+  HTTP 200 = accepted. Anything else = problem.
+
+
+SETUP STEPS (IN ORDER)
+================================================================================
+
+  STEP 1: Install prerequisites
+  ------------------------------
+  # Install Trivy
+  brew install aquasecurity/trivy/trivy        (Mac)
+  apt install trivy                            (Ubuntu/Debian)
+  https://github.com/aquasecurity/trivy/releases  (manual download)
+
+  # Verify
+  trivy --version
+  docker --version
+
+  STEP 2: Set up Dependency-Track
+  --------------------------------
+  If not already running, start it with Docker Compose:
+
+  version: "3"
+  services:
+    dtrack-apiserver:
+      image: dependencytrack/apiserver
+      ports:
+        - "8081:8080"
+    dtrack-frontend:
+      image: dependencytrack/frontend
+      ports:
+        - "8080:8080"
+
+  docker compose up -d
+  Wait 60-90 seconds for DT to fully start.
+  Open: http://localhost:8080
+  Default login: admin / admin  (change immediately)
+
+  STEP 3: Create projects in DT UI
+  ----------------------------------
+  a) Create PARENT project:
+     Projects -> Create Project -> Name: "my-stack" -> Save
+     Click the project -> copy UUID from URL bar
+
+  b) Create one CHILD project per image:
+     Repeat for: postgres, nginx, redis, mysql, alpine
+     Copy each UUID
+
+  STEP 4: Get your API key
+  -------------------------
+  Administration -> Access Management -> Teams
+  -> Automation (or create new team) -> API Keys -> copy key
+
+  STEP 5: Fill in .env
+  ---------------------
+  Paste all UUIDs and credentials into .env
+
+  STEP 6: Run the script
+  -----------------------
+  chmod +x sbom-upload.sh
+  ./sbom-upload.sh
+
+  EXPECTED OUTPUT PER IMAGE:
+  ---------------------------
+  nginx -> 200
+  postgres -> 200
+  redis -> 200
+  mysql -> 200
+  alpine -> 200
+
+
+WHAT HAPPENS AFTER UPLOAD
+================================================================================
+
+  HTTP 200 is returned immediately - this means DT accepted the file.
+  It does NOT mean processing is complete.
+
+  DT processes SBOMs in the background:
+    0-10 sec   -> SBOM parsed, components stored
+    10-60 sec  -> Components matched against CVE databases
+    60+ sec    -> Vulnerabilities appear in the UI
+
+  Wait about 1-2 minutes then refresh the DT UI.
+  Go to parent project -> you will see:
+    Components tab  -> all packages from all images
+    Vulnerabilities -> all CVEs found, sorted by severity
+    Children tab    -> list of all linked child projects
+
+
+TROUBLESHOOTING
+================================================================================
+
+  HTTP 200 = Success
+  HTTP 401 = Wrong API key -> re-copy from DT Administration -> Teams
+  HTTP 404 = Wrong UUID    -> re-copy from DT project URL
+  HTTP 415 = Do not add Content-Type header manually to the upload curl
+  HTTP 000 = Cannot reach DT -> check docker ps, check port 8081
+
+  Children not showing under parent?
+  -> Go to: DT -> Administration -> Access Management
+  -> Enable Portfolio Access Control
+
+  No vulnerabilities appearing?
+  -> Wait 2 minutes, refresh
+  -> Check DT logs: docker logs <apiserver-container-name>
+
+  Trivy failing on private registry?
+  -> Remove --insecure flag if your registry has valid TLS certs
+  -> Add --insecure only for self-signed / internal registries
+
+  Test DT is reachable:
+    curl -sk http://127.0.0.1:8081/api/version
+
+  List your projects via API:
+    curl -sk http://127.0.0.1:8081/api/v1/project \
+         -H "X-Api-Key: YOUR_KEY"
+
+  Check SBOM files were created:
+    ls -lh /tmp/sbom-*.json
+
+
+PRODUCTION CHECKLIST
+================================================================================
+
+  [ ] Use registry robot/service account not personal credentials
+  [ ] Store .env secrets in vault (HashiCorp Vault / AWS Secrets Manager)
+  [ ] Add .env to .gitignore - never commit secrets
+  [ ] Remove --insecure from trivy if registry has valid TLS
+  [ ] Pin image tags (nginx:1.25.3 not nginx:latest) for reproducible scans
+  [ ] Schedule this script to run nightly (new CVEs drop daily)
+  [ ] Set DT policy alerts for new Critical/High CVEs
+  [ ] Rotate DT API key regularly
+  [ ] Back up DT database regularly
+
+================================================================================
+END OF GUIDE
+================================================================================
