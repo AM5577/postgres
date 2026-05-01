@@ -1,0 +1,61 @@
+#!/bin/bash
+set -uo pipefail
+source .env
+trap 'rm -f /tmp/sbom-*.json' EXIT
+echo "$REGISTRY_PASS" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
+for ENTRY in "${IMAGES[@]}"; do
+  IFS='|' read -r IMAGE PROJECT UUID <<< "$ENTRY"
+  curl -sk -o /dev/null -X PATCH "${DT_URL}/api/v1/project/${UUID}" -H "X-Api-Key: ${API_KEY}" -H "Content-Type: application/json" -d "{\"parent\":{\"uuid\":\"${UUID_PARENT}\"}}"
+  NAME=$(basename "$IMAGE" | cut -d: -f1); SBOM="/tmp/sbom-${NAME}.json"
+  docker pull "$IMAGE" && trivy image --format cyclonedx --output "$SBOM" --insecure "$IMAGE"
+  HTTP=$(curl -sk -o /dev/null -w "%{http_code}" -X POST "${DT_URL}/api/v1/bom" -H "X-Api-Key: ${API_KEY}" -F "project=${UUID}" -F "bom=@${SBOM}"); echo "$NAME -> $HTTP"
+done
+
+
+================================================================================
+.env FILE - Fill in your values
+================================================================================
+
+REGISTRY_HOST="docker.io"
+REGISTRY_USER="your-docker-username"
+REGISTRY_PASS="your-docker-password"
+
+DT_URL="http://127.0.0.1:8081"
+API_KEY="your-dependency-track-api-key"
+
+UUID_PARENT="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+UUID_PROJECT1="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT2="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT3="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT4="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+UUID_PROJECT5="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+IMAGES=(
+  "docker.io/vantage/postgres:16-alpine|postgres|${UUID_PROJECT1}"
+  "docker.io/library/nginx:latest|nginx|${UUID_PROJECT2}"
+  "docker.io/library/redis:7-alpine|redis|${UUID_PROJECT3}"
+  "docker.io/library/mysql:8.0|mysql|${UUID_PROJECT4}"
+  "docker.io/library/alpine:latest|alpine|${UUID_PROJECT5}"
+)
+
+
+================================================================================
+SETUP INSTRUCTIONS
+================================================================================
+
+1. Save script lines (top section) as: sbom-upload.sh
+2. Save .env section as: .env  (fill in all values)
+3. chmod +x sbom-upload.sh
+4. ./sbom-upload.sh
+
+HTTP CODES:
+  200 = Success (queued for processing)
+  401 = Wrong API key
+  404 = Wrong project UUID
+  415 = Remove any manual Content-Type header
+  000 = DT not reachable - check docker ps
+
+VERIFY IN DT UI:
+  http://127.0.0.1:8080 -> Parent project -> Children tab
+================================================================================
