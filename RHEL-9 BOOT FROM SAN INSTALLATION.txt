@@ -1,0 +1,2862 @@
+================================================================================
+          RHEL-9 BOOT FROM SAN INSTALLATION ON DS-120 SERVERS
+                  END-TO-END PROCESS GUIDE WITH NETWORK CONFIGURATION
+================================================================================
+
+DOCUMENT VERSION: 2.0
+LAST UPDATED: 2024
+TARGET PLATFORM: DS-120 Servers
+OS VERSION: Red Hat Enterprise Linux 9
+ENHANCEMENT: Complete Network Configuration Guide Added
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+1. Prerequisites and Planning
+2. Network Planning and Design
+3. SAN Storage Configuration
+4. HBA Configuration
+5. BIOS/UEFI Configuration
+6. RHEL-9 Installation Process
+7. Post-Installation Configuration
+8. Network Configuration (COMPREHENSIVE)
+9. Advanced Network Configuration
+10. Verification Steps
+11. Troubleshooting
+12. Rollback Procedures
+
+================================================================================
+SECTION 1: PREREQUISITES AND PLANNING
+================================================================================
+
+1.1 HARDWARE REQUIREMENTS
+-------------------------
+- DS-120 Server with HBA (Fibre Channel Host Bus Adapter)
+- Network Interface Cards (NICs):
+  * Minimum 2x 1GbE ports (recommended 4x for redundancy)
+  * OR 2x 10GbE ports
+  * OR 2x 25GbE ports
+- SAN Storage System (EMC, NetApp, HPE, etc.)
+- Fibre Channel Switches
+- Network Switches (Management, Production, Storage networks)
+- Network connectivity for kickstart (optional)
+
+1.2 SOFTWARE REQUIREMENTS
+-------------------------
+- RHEL-9 ISO image
+- Latest firmware for DS-120
+- Latest HBA drivers and firmware
+- Latest NIC drivers and firmware
+- SAN management software
+- Network management tools
+
+1.3 DOCUMENTATION NEEDED
+------------------------
+- SAN Storage layout diagram
+- Network topology diagram
+- WWPN (World Wide Port Names) of HBA ports
+- IP addressing scheme (all networks)
+- VLAN assignments
+- Storage array serial numbers
+- Zoning configuration details
+- DNS/DHCP configuration details
+- Gateway configurations
+- Routing tables (if multiple networks)
+
+1.4 NETWORK PLANNING INFORMATION
+--------------------------------
+Document the following before installation:
+
+Management Network:
+- IP Address: ________________
+- Subnet Mask: _______________
+- Gateway: ___________________
+- VLAN ID: ___________________
+
+Production Network:
+- IP Address: ________________
+- Subnet Mask: _______________
+- Gateway: ___________________
+- VLAN ID: ___________________
+
+Storage Network (iSCSI if applicable):
+- IP Address: ________________
+- Subnet Mask: _______________
+- Gateway: ___________________
+- VLAN ID: ___________________
+
+Backup Network:
+- IP Address: ________________
+- Subnet Mask: _______________
+- Gateway: ___________________
+- VLAN ID: ___________________
+
+DNS Servers:
+- Primary DNS: _______________
+- Secondary DNS: _____________
+- Tertiary DNS: ______________
+
+NTP Servers:
+- Primary NTP: _______________
+- Secondary NTP: _____________
+
+Domain Information:
+- Domain Name: _______________
+- Search Domains: ____________
+
+1.5 PRE-INSTALLATION CHECKLIST
+-------------------------------
+□ RHEL-9 ISO downloaded and verified (checksum)
+□ HBA installed and cabled to SAN fabric
+□ Network cables connected to appropriate switches
+□ Network ports configured on switches (VLANs, trunking)
+□ SAN LUN allocated (minimum 50GB recommended)
+□ SAN zoning configured
+□ LUN masked/mapped to server WWPNs
+□ IP addresses reserved in IPAM/spreadsheet
+□ DNS entries created (A, PTR records)
+□ DHCP reservations created (if using DHCP)
+□ Firewall rules documented
+□ Network security policies reviewed
+□ Backup of existing data (if applicable)
+□ Maintenance window scheduled
+□ Required credentials available
+□ Network team notified
+□ Change control approved
+
+================================================================================
+SECTION 2: NETWORK PLANNING AND DESIGN
+================================================================================
+
+2.1 NETWORK ARCHITECTURE OVERVIEW
+---------------------------------
+Recommended network segregation for DS-120 servers:
+
+Network Segment Architecture:
+┌─────────────────────────────────────────────────────────────┐
+│                    DS-120 SERVER                            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   │
+│  │  eth0    │  │  eth1    │  │  eth2    │  │  eth3    │   │
+│  │  MGMT    │  │  PROD    │  │  STORAGE │  │  BACKUP  │   │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘   │
+└───────┼─────────────┼─────────────┼─────────────┼─────────┘
+        │             │             │             │
+        │             │             │             │
+   ┌────▼────┐   ┌────▼────┐   ┌────▼────┐   ┌────▼────┐
+   │ MGMT    │   │  PROD   │   │ STORAGE │   │ BACKUP  │
+   │ Switch  │   │ Switch  │   │ Switch  │   │ Switch  │
+   │VLAN 100 │   │VLAN 200 │   │VLAN 300 │   │VLAN 400 │
+   └─────────┘   └─────────┘   └─────────┘   └─────────┘
+
+2.2 NETWORK INTERFACE PLANNING
+------------------------------
+Interface Assignment Strategy:
+
+Physical Interface: eth0 (enp1s0f0)
+- Purpose: Out-of-Band Management / Primary Management
+- Network: Management Network
+- VLAN: 100
+- IP Type: Static
+- Speed: 1Gbps
+- Bonding: No (standalone)
+
+Physical Interface: eth1 (enp1s0f1)
+- Purpose: Production Traffic - Bond Member 1
+- Network: Production Network
+- VLAN: 200
+- IP Type: Static (on bond0)
+- Speed: 10Gbps
+- Bonding: Yes (bond0 - primary)
+
+Physical Interface: eth2 (enp2s0f0)
+- Purpose: Production Traffic - Bond Member 2
+- Network: Production Network
+- VLAN: 200
+- IP Type: Static (on bond0)
+- Speed: 10Gbps
+- Bonding: Yes (bond0 - secondary)
+
+Physical Interface: eth3 (enp2s0f1)
+- Purpose: Storage/Backup - Bond Member 1
+- Network: Storage Network
+- VLAN: 300
+- IP Type: Static (on bond1)
+- Speed: 10Gbps
+- Bonding: Yes (bond1 - primary)
+
+Physical Interface: eth4 (enp3s0f0)
+- Purpose: Storage/Backup - Bond Member 2
+- Network: Storage Network
+- VLAN: 300
+- IP Type: Static (on bond1)
+- Speed: 10Gbps
+- Bonding: Yes (bond1 - secondary)
+
+2.3 BONDING CONFIGURATION PLANNING
+----------------------------------
+Bond0 (Production):
+- Mode: 802.3ad (LACP) - Recommended
+- Or Mode: active-backup (if LACP not available)
+- Primary Interface: eth1
+- Monitoring: MII (Media Independent Interface)
+- MII Monitoring Interval: 100ms
+- Updelay: 200ms
+- Downdelay: 200ms
+
+Bond1 (Storage):
+- Mode: 802.3ad (LACP) - Recommended
+- Or Mode: active-backup
+- Primary Interface: eth3
+- Monitoring: MII
+- MII Monitoring Interval: 100ms
+- Updelay: 200ms
+- Downdelay: 200ms
+
+2.4 VLAN TAGGING STRATEGY
+-------------------------
+VLAN Configuration:
+
+VLAN 100 - Management
+- Subnet: 10.10.100.0/24
+- Gateway: 10.10.100.1
+- Purpose: Server management, monitoring, backups
+
+VLAN 200 - Production
+- Subnet: 10.20.200.0/24
+- Gateway: 10.20.200.1
+- Purpose: Application traffic, client access
+
+VLAN 300 - Storage
+- Subnet: 10.30.300.0/24
+- Gateway: 10.30.300.1 (if needed)
+- Purpose: NFS, iSCSI, backup traffic
+
+VLAN 400 - Backup
+- Subnet: 10.40.400.0/24
+- Gateway: 10.40.400.1
+- Purpose: Dedicated backup network
+
+2.5 IP ADDRESS ALLOCATION
+-------------------------
+Create IP allocation spreadsheet:
+
+Hostname: ds120-rhel9-prod01
+┌──────────────┬─────────────────┬──────────────┬─────────────┬─────────┐
+│ Interface    │ IP Address      │ Subnet Mask  │ Gateway     │ VLAN    │
+├──────────────┼─────────────────┼──────────────┼─────────────┼─────────┤
+│ eth0 (MGMT)  │ 10.10.100.10    │ 255.255.255.0│ 10.10.100.1 │ 100     │
+│ bond0 (PROD) │ 10.20.200.10    │ 255.255.255.0│ 10.20.200.1 │ 200     │
+│ bond1 (STOR) │ 10.30.300.10    │ 255.255.255.0│ 10.30.300.1 │ 300     │
+│ bond2 (BKUP) │ 10.40.400.10    │ 255.255.255.0│ 10.40.400.1 │ 400     │
+└──────────────┴─────────────────┴──────────────┴─────────────┴─────────┘
+
+2.6 ROUTING CONFIGURATION
+-------------------------
+Default Route:
+- Gateway: 10.20.200.1 (via Production network)
+
+Static Routes (if needed):
+- Backup Network Route: 192.168.50.0/24 via 10.40.400.1
+- Remote Site Route: 172.16.0.0/16 via 10.20.200.254
+
+2.7 DNS CONFIGURATION
+--------------------
+DNS Resolution Strategy:
+
+Primary DNS: 10.10.100.53
+Secondary DNS: 10.10.100.54
+Tertiary DNS: 8.8.8.8 (Google Public DNS - optional)
+
+Search Domains:
+- company.local
+- prod.company.local
+- mgmt.company.local
+
+DNS Records to Create:
+Forward Lookup (A Records):
+- ds120-rhel9-prod01.company.local → 10.20.200.10
+- ds120-rhel9-prod01-mgmt.company.local → 10.10.100.10
+- ds120-rhel9-prod01-stor.company.local → 10.30.300.10
+
+Reverse Lookup (PTR Records):
+- 10.100.10.10.in-addr.arpa → ds120-rhel9-prod01-mgmt.company.local
+- 10.200.20.10.in-addr.arpa → ds120-rhel9-prod01.company.local
+- 10.300.30.10.in-addr.arpa → ds120-rhel9-prod01-stor.company.local
+
+2.8 NTP/TIME SYNCHRONIZATION PLANNING
+-------------------------------------
+Time Server Strategy:
+
+Primary NTP: 10.10.100.100 (Internal NTP server)
+Secondary NTP: 10.10.100.101 (Internal NTP backup)
+Tertiary NTP: pool.ntp.org (External fallback)
+
+Time Zone: Set according to datacenter location
+- Example: America/New_York, Europe/London, Asia/Tokyo
+
+2.9 FIREWALL PLANNING
+--------------------
+Required Firewall Rules (to be configured later):
+
+Inbound Rules:
+- SSH (22/tcp) - From management network
+- HTTP (80/tcp) - From production network (if web server)
+- HTTPS (443/tcp) - From production network (if web server)
+- Custom Application Ports - As required
+- ICMP (ping) - From monitoring systems
+- SNMP (161/udp) - From monitoring systems
+- NTP (123/udp) - From NTP servers
+
+Outbound Rules:
+- DNS (53/tcp, 53/udp) - To DNS servers
+- NTP (123/udp) - To NTP servers
+- HTTP/HTTPS (80/tcp, 443/tcp) - For updates
+- SMTP (25/tcp) - For email notifications
+- Syslog (514/tcp, 514/udp) - To log servers
+
+2.10 NETWORK SECURITY PLANNING
+------------------------------
+Security Measures to Implement:
+
+1. Network Segmentation
+   - Separate VLANs for different traffic types
+   - ACLs between network segments
+
+2. Access Control
+   - Firewall rules (firewalld)
+   - SELinux enforcement
+   - TCP Wrappers (if needed)
+
+3. Monitoring
+   - Network traffic monitoring
+   - Intrusion detection
+   - Log aggregation
+
+4. Encryption
+   - SSL/TLS for web services
+   - SSH for remote access
+   - IPsec for VPN (if required)
+
+================================================================================
+SECTION 3: SAN STORAGE CONFIGURATION
+================================================================================
+
+[Previous SAN Storage Configuration section remains the same]
+
+2.1 IDENTIFY HBA WWPN
+---------------------
+Boot the server and access HBA BIOS (typically Ctrl+Q for QLogic or 
+Ctrl+A for Emulex during POST)
+
+Document the WWPNs:
+- Port 1 WWPN: ____:____:____:____:____:____:____:____
+- Port 2 WWPN: ____:____:____:____:____:____:____:____
+
+3.2 SAN STORAGE ALLOCATION
+--------------------------
+On your SAN storage array:
+
+Step 1: Create LUN for RHEL-9 Boot
+   - Size: Minimum 50GB (adjust based on requirements)
+   - RAID Level: RAID 5/6/10 (recommended)
+   - LUN ID: Note the LUN number assigned
+   
+Step 2: Create Storage Group/Host Group
+   - Name: DS120-RHEL9-<hostname>
+   - Add server WWPNs to the group
+
+Step 3: Map LUN to Host Group
+   - Assign LUN to the host group
+   - Note the LUN ID as presented to host
+
+3.3 SAN FABRIC ZONING
+---------------------
+Configure zoning on FC switches:
+
+Option A: Single Initiator Single Target (Recommended)
+   Zone Name: DS120_<hostname>_to_Array
+   Members: 
+   - Server HBA WWPN
+   - Storage Array Target WWPN
+
+Option B: Multiple Initiator Multiple Target
+   (For redundant paths)
+   Zone Name: DS120_<hostname>_Zone1
+   Members:
+   - Server HBA Port1 WWPN
+   - Storage Array Controller1 Port WWPN
+   
+   Zone Name: DS120_<hostname>_Zone2
+   Members:
+   - Server HBA Port2 WWPN
+   - Storage Array Controller2 Port WWPN
+
+Activate zoneset after configuration.
+
+3.4 VERIFY SAN CONNECTIVITY
+---------------------------
+From SAN management interface:
+- Verify host can see LUN
+- Check path redundancy (if configured)
+- Verify no masking errors
+
+================================================================================
+SECTION 4: HBA CONFIGURATION
+================================================================================
+
+[Previous HBA Configuration section remains the same]
+
+4.1 UPDATE HBA FIRMWARE
+-----------------------
+Before installation, ensure latest firmware:
+
+Step 1: Download latest HBA firmware from vendor
+Step 2: Boot to HBA BIOS utility
+Step 3: Flash firmware following vendor procedure
+Step 4: Reboot and verify firmware version
+
+4.2 CONFIGURE HBA BIOS
+----------------------
+During server boot, press appropriate key for HBA BIOS:
+- QLogic: Ctrl + Q
+- Emulex: Ctrl + A
+- Broadcom: Ctrl + S
+
+Settings to configure:
+1. Boot Enabled: YES
+2. Boot LUN: 0 (or as assigned by SAN)
+3. Scan for Devices
+4. Select boot device from discovered LUNs
+5. Set as primary boot device
+6. Save configuration and exit
+
+4.3 MULTIPATH CONFIGURATION (If using redundant paths)
+------------------------------------------------------
+Note: This will be configured post-installation
+- Document all available paths
+- Plan for ALUA (Asymmetric Logical Unit Access) if supported
+
+================================================================================
+SECTION 5: BIOS/UEFI CONFIGURATION
+================================================================================
+
+[Previous BIOS/UEFI Configuration section remains the same]
+
+5.1 ENTER BIOS/UEFI SETUP
+-------------------------
+Power on DS-120 server and press designated key (usually F2, Del, or F12)
+
+5.2 CONFIGURE BOOT ORDER
+------------------------
+Navigate to Boot Configuration:
+
+Boot Mode: UEFI (Recommended for RHEL-9)
+
+Boot Priority Order:
+1. Virtual CD/DVD (for installation media) - TEMPORARY
+2. HBA BIOS / Fibre Channel Boot
+3. Disable other boot options during installation
+
+5.3 OTHER BIOS SETTINGS
+-----------------------
+- Secure Boot: Disabled (or configure for RHEL-9)
+- Virtualization: Enabled (if planning to use virtualization)
+- SRIOV: As required
+- Save settings and proceed
+
+================================================================================
+SECTION 6: RHEL-9 INSTALLATION PROCESS
+================================================================================
+
+6.1 PREPARE INSTALLATION MEDIA
+------------------------------
+Option A: Physical Media
+- Burn RHEL-9 ISO to DVD
+- Insert into server DVD drive
+
+Option B: Virtual Media (iDRAC/iLO/IMM)
+- Access DS-120 remote management interface
+- Mount RHEL-9 ISO as virtual media
+- Set as boot device
+
+Option C: PXE Boot (Advanced)
+- Configure PXE/TFTP server with RHEL-9 boot files
+- Configure DHCP for PXE boot
+
+6.2 BOOT FROM INSTALLATION MEDIA
+--------------------------------
+Step 1: Boot server
+Step 2: Select boot from CD/DVD or Virtual Media
+Step 3: At GRUB menu, select "Install Red Hat Enterprise Linux 9"
+
+Optional: Add boot parameters if needed
+- Press 'e' to edit boot options
+- Add parameters: inst.text, inst.vnc, etc.
+- Press Ctrl+X to boot
+
+6.3 INSTALLATION WIZARD - INITIAL SCREENS
+------------------------------------------
+Language Selection:
+- Select preferred language
+- Click Continue
+
+Installation Summary Screen:
+- Configure all required sections before proceeding
+
+6.4 CONFIGURE INSTALLATION DESTINATION
+---------------------------------------
+CRITICAL SECTION FOR BOOT FROM SAN:
+
+Click "Installation Destination"
+
+Step 1: Storage Device Selection
+   - Under "Specialized & Network Disks", click "Add a disk..."
+   - You should see the SAN LUN (identified by vendor/model)
+   - Example: "EMULEX MULTIPATH 50GB" or "DGC LUNZ"
+   
+   If LUN is not visible:
+   - Click "Rescan Disks"
+   - If still not visible, check SAN zoning and LUN mapping
+
+Step 2: Select SAN LUN
+   - Check the box next to the SAN LUN
+   - Click "Done"
+
+Step 3: Storage Configuration
+   Back on Installation Destination screen:
+   
+   - Ensure ONLY SAN LUN is selected (uncheck local disks)
+   - Storage Configuration: 
+     * "Automatic" - Let installer partition (simple)
+     * "Custom" - Manual partitioning (recommended)
+
+Step 4: Custom Partitioning (Recommended)
+   Select "Custom" and click "Done"
+   
+   Create following partitions on SAN LUN:
+   
+   /boot/efi (UEFI systems)
+   - Mount Point: /boot/efi
+   - Size: 600 MB
+   - File System: EFI System Partition
+   
+   /boot
+   - Mount Point: /boot
+   - Size: 1024 MB (1 GB)
+   - File System: xfs
+   
+   / (root)
+   - Mount Point: /
+   - Size: 30 GB (minimum)
+   - File System: xfs
+   
+   swap
+   - Mount Point: swap
+   - Size: 8 GB (or 1.5x RAM)
+   - File System: swap
+   
+   /home
+   - Mount Point: /home
+   - Size: Remaining space
+   - File System: xfs
+   
+   Click "Done" then "Accept Changes"
+
+6.5 BASIC NETWORK CONFIGURATION (During Installation)
+-----------------------------------------------------
+Click "Network & Host Name"
+
+Step 1: Configure Primary Management Interface (eth0)
+   - Select ethernet interface (usually first interface)
+   - Toggle ON to activate
+   - Click "Configure"
+
+Step 2: Set Static IP Address
+   General Tab:
+   - ☑ Connect automatically with priority
+   - Priority: 0 (highest)
+   
+   IPv4 Settings Tab:
+   - Method: Manual
+   - Click "Add" under Addresses
+   
+   Address Configuration:
+   - Address: 10.10.100.10
+   - Netmask: 255.255.255.0 (or /24)
+   - Gateway: 10.10.100.1
+   
+   DNS Servers (comma-separated):
+   - 10.10.100.53, 10.10.100.54
+   
+   Search Domains (comma-separated):
+   - company.local, prod.company.local
+   
+   Routes (if needed):
+   - Click "Routes..." button
+   - Add static routes if required
+   - ☐ Use this connection only for resources on its network
+     (Uncheck to use as default route)
+   
+   Click "Save"
+
+Step 3: Set Hostname
+   - Hostname field: ds120-rhel9-prod01.company.local
+   - Click "Apply"
+   
+Step 4: Verify Network Configuration
+   - Interface should show IP address
+   - Click "Done"
+
+Note: Additional network interfaces will be configured post-installation
+
+6.6 SOFTWARE SELECTION
+----------------------
+Click "Software Selection"
+
+Base Environment: Select as needed
+- Server with GUI (for graphical interface)
+- Server (minimal installation)
+- Minimal Install (smallest footprint)
+
+Additional Software:
+Select add-ons as required:
+□ System Tools
+□ Security Tools
+□ Network Servers
+□ Development Tools
+□ Network File System Client (for NFS)
+
+For network-heavy environments, also consider:
+□ Remote Management for Linux
+□ System Administration Tools
+
+Click "Done"
+
+6.7 ROOT PASSWORD AND USER CREATION
+-----------------------------------
+Root Password:
+- Click "Root Password"
+- Enter strong password
+- Confirm password
+- Click "Done"
+
+User Creation:
+- Click "User Creation"
+- Full name: System Administrator
+- Username: sysadmin
+- Password: <strong password>
+- ☑ Make this user administrator
+- Click "Done"
+
+6.8 KDUMP CONFIGURATION
+-----------------------
+Click "Kdump"
+- Enable/Disable as per requirements
+- Adjust memory reservation if needed
+- Click "Done"
+
+6.9 BEGIN INSTALLATION
+----------------------
+After all sections are configured:
+- Verify Installation Destination shows SAN LUN
+- Verify Network shows configured IP
+- Click "Begin Installation"
+
+Installation process will:
+1. Format SAN LUN partitions
+2. Install RHEL-9 packages
+3. Install bootloader to SAN LUN
+4. Configure basic network settings
+
+Wait for installation to complete (15-30 minutes typical)
+
+6.10 COMPLETE INSTALLATION
+--------------------------
+When installation completes:
+- Click "Reboot System"
+- Remove installation media (or unmount virtual media)
+
+================================================================================
+SECTION 7: POST-INSTALLATION CONFIGURATION
+================================================================================
+
+7.1 FIRST BOOT
+--------------
+Server should boot from SAN LUN:
+
+Watch boot process:
+- BIOS/UEFI POST
+- HBA BIOS initialization
+- HBA should find SAN boot LUN
+- GRUB bootloader from SAN
+- RHEL-9 kernel loads
+- Network interfaces initialize
+
+If boot fails, see Troubleshooting section.
+
+7.2 INITIAL LOGIN AND REGISTRATION
+-----------------------------------
+Login as root or created user
+
+Register with Red Hat:
+# subscription-manager register --username <RH_username>
+# subscription-manager attach --auto
+
+Or use activation key:
+# subscription-manager register --org=<org_id> --activationkey=<key>
+
+7.3 SYSTEM UPDATE
+-----------------
+Update all packages:
+# dnf update -y
+# reboot
+
+7.4 INSTALL MULTIPATHING (CRITICAL FOR SAN BOOT)
+------------------------------------------------
+Install device-mapper-multipath:
+# dnf install -y device-mapper-multipath
+
+Enable multipathing:
+# mpathconf --enable --with_multipathd y
+
+Start multipathd service:
+# systemctl enable multipathd
+# systemctl start multipathd
+
+Configure multipath for your SAN vendor:
+# vi /etc/multipath.conf
+
+Example for EMC:
+----
+defaults {
+    user_friendly_names yes
+    find_multipaths yes
+}
+
+blacklist {
+    devnode "^(ram|raw|loop|fd|md|dm-|sr|scd|st)[0-9]*"
+    devnode "^hd[a-z]"
+}
+
+multipaths {
+    multipath {
+        wwid    <your_lun_wwid>
+        alias   bootlun
+    }
+}
+----
+
+Reload multipath configuration:
+# systemctl reload multipathd
+
+Verify multipath configuration:
+# multipath -ll
+
+7.5 CONFIGURE DRACUT FOR MULTIPATH BOOT
+---------------------------------------
+Rebuild initramfs with multipath support:
+
+# dracut --force --add multipath --include /etc/multipath /etc/multipath
+
+Verify modules in initramfs:
+# lsinitrd | grep multipath
+
+7.6 UPDATE GRUB CONFIGURATION
+-----------------------------
+Edit GRUB configuration:
+# vi /etc/default/grub
+
+Add or modify GRUB_CMDLINE_LINUX:
+GRUB_CMDLINE_LINUX="rd.multipath=1 crashkernel=auto rd.lvm.lv=rhel/root rd.lvm.lv=rhel/swap net.ifnames=1 biosdevname=0"
+
+Rebuild GRUB configuration:
+
+For UEFI:
+# grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+
+For BIOS:
+# grub2-mkconfig -o /boot/grub2/grub.cfg
+
+7.7 INSTALL NETWORK UTILITIES
+-----------------------------
+Install essential network tools:
+
+# dnf install -y net-tools bind-utils traceroute tcpdump nmap-ncat \
+  mtr iperf3 ethtool bridge-utils NetworkManager-tui \
+  NetworkManager-config-server
+
+7.8 INSTALL HBA DRIVERS AND UTILITIES
+-------------------------------------
+Install vendor-specific HBA management tools:
+
+For QLogic:
+# dnf install -y sg3_utils
+
+For Emulex:
+# Download and install lpfc driver and utilities from Broadcom
+
+For other vendors:
+# Follow vendor documentation
+
+================================================================================
+SECTION 8: NETWORK CONFIGURATION (COMPREHENSIVE)
+================================================================================
+
+8.1 IDENTIFY NETWORK INTERFACES
+-------------------------------
+List all network interfaces:
+
+# ip link show
+# nmcli device status
+# lshw -class network
+
+Output will show interfaces like:
+- enp1s0f0 (eth0 equivalent)
+- enp1s0f1 (eth1 equivalent)
+- enp2s0f0 (eth2 equivalent)
+- enp2s0f1 (eth3 equivalent)
+
+Document interface names and MAC addresses:
+# ip link show | grep -E "^[0-9]|link/ether"
+
+Create interface mapping:
+Interface: enp1s0f0 - MAC: xx:xx:xx:xx:xx:xx - Purpose: Management
+Interface: enp1s0f1 - MAC: xx:xx:xx:xx:xx:xx - Purpose: Production Bond Member
+Interface: enp2s0f0 - MAC: xx:xx:xx:xx:xx:xx - Purpose: Production Bond Member
+Interface: enp2s0f1 - MAC: xx:xx:xx:xx:xx:xx - Purpose: Storage Bond Member
+
+8.2 VERIFY CURRENT NETWORK CONFIGURATION
+----------------------------------------
+Check current network status:
+
+# nmcli connection show
+# ip addr show
+# ip route show
+# cat /etc/resolv.conf
+
+8.3 CONFIGURE MANAGEMENT INTERFACE (Already configured during installation)
+--------------------------------------------------------------------------
+Verify management interface configuration:
+
+# nmcli connection show enp1s0f0
+
+If reconfiguration needed:
+# nmcli connection modify enp1s0f0 \
+  ipv4.addresses 10.10.100.10/24 \
+  ipv4.gateway 10.10.100.1 \
+  ipv4.dns "10.10.100.53 10.10.100.54" \
+  ipv4.dns-search "company.local" \
+  ipv4.method manual \
+  connection.autoconnect yes
+
+# nmcli connection up enp1s0f0
+
+8.4 CONFIGURE NETWORK BONDING FOR PRODUCTION NETWORK
+----------------------------------------------------
+Step 1: Install bonding driver (usually included)
+
+Verify bonding module:
+# modprobe bonding
+# lsmod | grep bonding
+
+Step 2: Create Bond0 (Production Network)
+
+Create bond interface:
+# nmcli connection add type bond \
+  con-name bond0 \
+  ifname bond0 \
+  mode 802.3ad \
+  bond.options "miimon=100,lacp_rate=fast,xmit_hash_policy=layer3+4"
+
+Alternative for active-backup mode:
+# nmcli connection add type bond \
+  con-name bond0 \
+  ifname bond0 \
+  mode active-backup \
+  bond.options "miimon=100,primary=enp1s0f1"
+
+Step 3: Configure Bond0 IP Settings
+
+# nmcli connection modify bond0 \
+  ipv4.addresses 10.20.200.10/24 \
+  ipv4.gateway 10.20.200.1 \
+  ipv4.dns "10.10.100.53 10.10.100.54" \
+  ipv4.dns-search "company.local prod.company.local" \
+  ipv4.method manual \
+  connection.autoconnect yes
+
+Step 4: Add Slave Interfaces to Bond0
+
+Add first slave:
+# nmcli connection add type ethernet \
+  con-name bond0-slave1 \
+  ifname enp1s0f1 \
+  master bond0
+
+Add second slave:
+# nmcli connection add type ethernet \
+  con-name bond0-slave2 \
+  ifname enp2s0f0 \
+  master bond0
+
+Step 5: Bring up Bond0
+
+# nmcli connection up bond0-slave1
+# nmcli connection up bond0-slave2
+# nmcli connection up bond0
+
+Step 6: Verify Bond0 Status
+
+# cat /proc/net/bonding/bond0
+# ip addr show bond0
+# nmcli device status
+
+8.5 CONFIGURE NETWORK BONDING FOR STORAGE NETWORK
+-------------------------------------------------
+Step 1: Create Bond1 (Storage Network)
+
+Create bond interface:
+# nmcli connection add type bond \
+  con-name bond1 \
+  ifname bond1 \
+  mode 802.3ad \
+  bond.options "miimon=100,lacp_rate=fast,xmit_hash_policy=layer3+4"
+
+Step 2: Configure Bond1 IP Settings
+
+# nmcli connection modify bond1 \
+  ipv4.addresses 10.30.300.10/24 \
+  ipv4.method manual \
+  connection.autoconnect yes
+
+Note: No gateway needed if storage network is isolated
+
+Step 3: Add Slave Interfaces to Bond1
+
+Add first slave:
+# nmcli connection add type ethernet \
+  con-name bond1-slave1 \
+  ifname enp2s0f1 \
+  master bond1
+
+Add second slave:
+# nmcli connection add type ethernet \
+  con-name bond1-slave2 \
+  ifname enp3s0f0 \
+  master bond1
+
+Step 4: Bring up Bond1
+
+# nmcli connection up bond1-slave1
+# nmcli connection up bond1-slave2
+# nmcli connection up bond1
+
+Step 5: Verify Bond1 Status
+
+# cat /proc/net/bonding/bond1
+# ip addr show bond1
+
+8.6 CONFIGURE VLAN INTERFACES (If Required)
+-------------------------------------------
+If VLAN tagging is needed on bonds:
+
+Create VLAN interface on Bond0:
+# nmcli connection add type vlan \
+  con-name bond0.200 \
+  ifname bond0.200 \
+  dev bond0 \
+  id 200 \
+  ipv4.addresses 10.20.200.10/24 \
+  ipv4.gateway 10.20.200.1 \
+  ipv4.method manual
+
+Create VLAN interface on Bond1:
+# nmcli connection add type vlan \
+  con-name bond1.300 \
+  ifname bond1.300 \
+  dev bond1 \
+  id 300 \
+  ipv4.addresses 10.30.300.10/24 \
+  ipv4.method manual
+
+Bring up VLAN interfaces:
+# nmcli connection up bond0.200
+# nmcli connection up bond1.300
+
+8.7 CONFIGURE STATIC ROUTES
+---------------------------
+Add static routes if needed:
+
+Add route via production network:
+# nmcli connection modify bond0 \
+  +ipv4.routes "172.16.0.0/16 10.20.200.254"
+
+Add route via storage network:
+# nmcli connection modify bond1 \
+  +ipv4.routes "192.168.50.0/24 10.30.300.1"
+
+Verify routes:
+# ip route show
+# nmcli connection show bond0 | grep ipv4.routes
+
+Make routes persistent:
+# nmcli connection up bond0
+# nmcli connection up bond1
+
+8.8 CONFIGURE DNS RESOLUTION
+----------------------------
+Configure DNS globally:
+
+Edit /etc/resolv.conf (managed by NetworkManager):
+# vi /etc/resolv.conf
+
+Content should be:
+----
+search company.local prod.company.local
+nameserver 10.10.100.53
+nameserver 10.10.100.54
+nameserver 8.8.8.8
+----
+
+To make persistent via NetworkManager:
+# nmcli connection modify enp1s0f0 \
+  ipv4.dns "10.10.100.53 10.10.100.54 8.8.8.8" \
+  ipv4.dns-search "company.local prod.company.local"
+
+# nmcli connection up enp1s0f0
+
+Configure /etc/hosts for local resolution:
+# vi /etc/hosts
+
+Add entries:
+----
+127.0.0.1   localhost localhost.localdomain
+::1         localhost localhost.localdomain
+
+# Management Interface
+10.10.100.10    ds120-rhel9-prod01-mgmt.company.local ds120-rhel9-prod01-mgmt
+
+# Production Interface
+10.20.200.10    ds120-rhel9-prod01.company.local ds120-rhel9-prod01
+
+# Storage Interface
+10.30.300.10    ds120-rhel9-prod01-stor.company.local ds120-rhel9-prod01-stor
+----
+
+Test DNS resolution:
+# nslookup ds120-rhel9-prod01.company.local
+# dig ds120-rhel9-prod01.company.local
+# host ds120-rhel9-prod01.company.local
+
+8.9 CONFIGURE HOSTNAME AND DOMAIN
+---------------------------------
+Set hostname:
+# hostnamectl set-hostname ds120-rhel9-prod01.company.local
+
+Verify hostname:
+# hostnamectl status
+# hostname
+# hostname -f
+
+8.10 CONFIGURE NETWORK TIME PROTOCOL (NTP)
+------------------------------------------
+RHEL 9 uses chrony for time synchronization.
+
+Configure chrony:
+# vi /etc/chrony.conf
+
+Modify server entries:
+----
+# Use internal NTP servers
+server 10.10.100.100 iburst prefer
+server 10.10.100.101 iburst
+
+# Allow external fallback
+pool pool.ntp.org iburst
+
+# Allow NTP client access from local network (if this is NTP server)
+# allow 10.10.100.0/24
+
+# Serve time even if not synchronized to a time source
+# local stratum 10
+
+# Log statistics
+logdir /var/log/chrony
+----
+
+Restart chrony:
+# systemctl restart chronyd
+# systemctl enable chronyd
+
+Verify NTP synchronization:
+# chronyc sources
+# chronyc tracking
+# timedatectl status
+
+Set timezone:
+# timedatectl set-timezone America/New_York
+# timedatectl status
+
+8.11 CONFIGURE NETWORK TUNING PARAMETERS
+----------------------------------------
+Optimize network performance:
+
+Create sysctl configuration:
+# vi /etc/sysctl.d/99-network-tuning.conf
+
+Add network tuning parameters:
+----
+# Increase TCP buffer sizes for high-bandwidth networks
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+
+# Enable TCP window scaling
+net.ipv4.tcp_window_scaling = 1
+
+# Increase the maximum number of connection tracking entries
+net.netfilter.nf_conntrack_max = 1048576
+
+# Increase number of incoming connections
+net.core.somaxconn = 4096
+
+# Increase number of incoming connections backlog
+net.core.netdev_max_backlog = 5000
+
+# Enable TCP Fast Open
+net.ipv4.tcp_fastopen = 3
+
+# TCP keepalive settings
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_keepalive_intvl = 60
+net.ipv4.tcp_keepalive_probes = 3
+
+# Disable IPv6 if not used
+# net.ipv6.conf.all.disable_ipv6 = 1
+# net.ipv6.conf.default.disable_ipv6 = 1
+----
+
+Apply settings:
+# sysctl -p /etc/sysctl.d/99-network-tuning.conf
+
+Verify settings:
+# sysctl -a | grep -E "rmem_max|wmem_max|tcp_window"
+
+8.12 CONFIGURE INTERFACE-SPECIFIC SETTINGS
+------------------------------------------
+Set MTU (Jumbo Frames) for storage network:
+
+# nmcli connection modify bond1 802-3-ethernet.mtu 9000
+# nmcli connection up bond1
+
+Verify MTU:
+# ip link show bond1 | grep mtu
+
+Set interface speed and duplex (if needed):
+# ethtool -s enp1s0f0 speed 10000 duplex full autoneg off
+
+Make permanent by adding to interface config:
+# nmcli connection modify enp1s0f0 \
+  802-3-ethernet.speed 10000 \
+  802-3-ethernet.duplex full
+
+8.13 CONFIGURE NETWORK TEAMING (Alternative to Bonding)
+-------------------------------------------------------
+If using teaming instead of bonding:
+
+Install teamd:
+# dnf install -y teamd NetworkManager-team
+
+Create team interface:
+# nmcli connection add type team \
+  con-name team0 \
+  ifname team0 \
+  config '{"runner": {"name": "lacp"}}'
+
+Configure team IP:
+# nmcli connection modify team0 \
+  ipv4.addresses 10.20.200.10/24 \
+  ipv4.gateway 10.20.200.1 \
+  ipv4.method manual
+
+Add team ports:
+# nmcli connection add type ethernet \
+  con-name team0-port1 \
+  ifname enp1s0f1 \
+  master team0
+
+# nmcli connection add type ethernet \
+  con-name team0-port2 \
+  ifname enp2s0f0 \
+  master team0
+
+Bring up team:
+# nmcli connection up team0-port1
+# nmcli connection up team0-port2
+# nmcli connection up team0
+
+Verify team status:
+# teamdctl team0 state
+
+8.14 CONFIGURE NETWORK ALIASES (Additional IPs)
+-----------------------------------------------
+Add additional IP addresses to interface:
+
+Method 1: Using nmcli
+# nmcli connection modify bond0 \
+  +ipv4.addresses 10.20.200.11/24
+
+# nmcli connection up bond0
+
+Method 2: Create alias interface
+# nmcli connection add type ethernet \
+  con-name bond0:0 \
+  ifname bond0:0 \
+  ipv4.addresses 10.20.200.11/24 \
+  ipv4.method manual
+
+Verify:
+# ip addr show bond0
+
+8.15 CONFIGURE IPv6 (If Required)
+---------------------------------
+Enable and configure IPv6:
+
+# nmcli connection modify bond0 \
+  ipv6.addresses "2001:db8:1::10/64" \
+  ipv6.gateway "2001:db8:1::1" \
+  ipv6.dns "2001:db8:1::53" \
+  ipv6.method manual
+
+Enable IPv6:
+# sysctl -w net.ipv6.conf.all.disable_ipv6=0
+# sysctl -w net.ipv6.conf.default.disable_ipv6=0
+
+Make permanent:
+# vi /etc/sysctl.d/99-ipv6.conf
+----
+net.ipv6.conf.all.disable_ipv6 = 0
+net.ipv6.conf.default.disable_ipv6 = 0
+----
+
+8.16 CONFIGURE NETWORK NAMESPACES (Advanced)
+--------------------------------------------
+Create isolated network namespace:
+
+# ip netns add storage_ns
+
+Add interface to namespace:
+# ip link set enp2s0f1 netns storage_ns
+
+Configure interface in namespace:
+# ip netns exec storage_ns ip addr add 10.30.300.10/24 dev enp2s0f1
+# ip netns exec storage_ns ip link set enp2s0f1 up
+
+Execute commands in namespace:
+# ip netns exec storage_ns ping 10.30.300.1
+
+8.17 NETWORK CONFIGURATION FILES OVERVIEW
+-----------------------------------------
+NetworkManager configuration files location:
+/etc/NetworkManager/system-connections/
+
+Interface configuration files:
+/etc/NetworkManager/system-connections/enp1s0f0.nmconnection
+/etc/NetworkManager/system-connections/bond0.nmconnection
+
+View configuration:
+# cat /etc/NetworkManager/system-connections/bond0.nmconnection
+
+8.18 DISABLE NETWORKMANAGER (If Using Traditional Networking)
+-------------------------------------------------------------
+WARNING: Only if required by application/policy
+
+Stop and disable NetworkManager:
+# systemctl stop NetworkManager
+# systemctl disable NetworkManager
+
+Enable traditional network service:
+# systemctl enable network
+# systemctl start network
+
+Configure interfaces in:
+/etc/sysconfig/network-scripts/ifcfg-<interface>
+
+Example ifcfg-bond0:
+----
+DEVICE=bond0
+TYPE=Bond
+BONDING_MASTER=yes
+BOOTPROTO=none
+ONBOOT=yes
+IPADDR=10.20.200.10
+PREFIX=24
+GATEWAY=10.20.200.1
+DNS1=10.10.100.53
+DNS2=10.10.100.54
+BONDING_OPTS="mode=802.3ad miimon=100 lacp_rate=fast"
+----
+
+Example ifcfg-enp1s0f1 (slave):
+----
+DEVICE=enp1s0f1
+TYPE=Ethernet
+BOOTPROTO=none
+ONBOOT=yes
+MASTER=bond0
+SLAVE=yes
+----
+
+================================================================================
+SECTION 9: ADVANCED NETWORK CONFIGURATION
+================================================================================
+
+9.1 CONFIGURE FIREWALL (FIREWALLD)
+----------------------------------
+RHEL 9 uses firewalld by default.
+
+Check firewall status:
+# systemctl status firewalld
+# firewall-cmd --state
+
+Start and enable firewalld:
+# systemctl enable firewalld
+# systemctl start firewalld
+
+List current configuration:
+# firewall-cmd --list-all
+
+9.1.1 Configure Zones
+---------------------
+Create custom zones for different networks:
+
+Create management zone:
+# firewall-cmd --permanent --new-zone=management
+# firewall-cmd --permanent --zone=management --add-interface=enp1s0f0
+# firewall-cmd --permanent --zone=management --add-service=ssh
+# firewall-cmd --permanent --zone=management --add-service=cockpit
+# firewall-cmd --permanent --zone=management --add-source=10.10.100.0/24
+
+Create production zone:
+# firewall-cmd --permanent --new-zone=production
+# firewall-cmd --permanent --zone=production --add-interface=bond0
+# firewall-cmd --permanent --zone=production --add-service=http
+# firewall-cmd --permanent --zone=production --add-service=https
+# firewall-cmd --permanent --zone=production --add-source=10.20.200.0/24
+
+Create storage zone (trusted):
+# firewall-cmd --permanent --zone=trusted --add-interface=bond1
+
+Reload firewall:
+# firewall-cmd --reload
+
+9.1.2 Add Services
+------------------
+Add standard services:
+# firewall-cmd --permanent --zone=public --add-service=ssh
+# firewall-cmd --permanent --zone=public --add-service=http
+# firewall-cmd --permanent --zone=public --add-service=https
+
+Add custom ports:
+# firewall-cmd --permanent --zone=public --add-port=8080/tcp
+# firewall-cmd --permanent --zone=public --add-port=9000-9100/tcp
+
+Add port range:
+# firewall-cmd --permanent --zone=public --add-port=60000-61000/tcp
+
+9.1.3 Configure Rich Rules
+--------------------------
+Allow SSH from specific network:
+# firewall-cmd --permanent --zone=public --add-rich-rule='
+  rule family="ipv4" 
+  source address="10.10.100.0/24" 
+  service name="ssh" 
+  accept'
+
+Block specific IP:
+# firewall-cmd --permanent --zone=public --add-rich-rule='
+  rule family="ipv4" 
+  source address="192.168.1.100" 
+  reject'
+
+Rate limit SSH connections:
+# firewall-cmd --permanent --zone=public --add-rich-rule='
+  rule service name="ssh" 
+  limit value="10/m" 
+  accept'
+
+9.1.4 Configure Port Forwarding
+-------------------------------
+Forward port 80 to 8080:
+# firewall-cmd --permanent --zone=public --add-forward-port=port=80:proto=tcp:toport=8080
+
+Forward to different host:
+# firewall-cmd --permanent --zone=public --add-forward-port=port=80:proto=tcp:toaddr=10.20.200.20:toport=80
+
+Enable masquerading (required for forwarding):
+# firewall-cmd --permanent --zone=public --add-masquerade
+
+9.1.5 Reload and Verify Firewall
+--------------------------------
+Reload firewall:
+# firewall-cmd --reload
+
+List all zones:
+# firewall-cmd --get-active-zones
+# firewall-cmd --list-all-zones
+
+Check specific zone:
+# firewall-cmd --zone=public --list-all
+
+9.2 CONFIGURE IPTABLES (Alternative to Firewalld)
+-------------------------------------------------
+If using iptables instead of firewalld:
+
+Disable firewalld:
+# systemctl stop firewalld
+# systemctl disable firewalld
+# systemctl mask firewalld
+
+Install iptables:
+# dnf install -y iptables-services
+
+Enable iptables:
+# systemctl enable iptables
+# systemctl start iptables
+
+Basic iptables configuration:
+# iptables -P INPUT DROP
+# iptables -P FORWARD DROP
+# iptables -P OUTPUT ACCEPT
+
+# Allow loopback
+# iptables -A INPUT -i lo -j ACCEPT
+
+# Allow established connections
+# iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Allow SSH
+# iptables -A INPUT -p tcp --dport 22 -j ACCEPT
+
+# Allow HTTP/HTTPS
+# iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+# iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+
+# Allow ICMP (ping)
+# iptables -A INPUT -p icmp -j ACCEPT
+
+Save iptables rules:
+# iptables-save > /etc/sysconfig/iptables
+# service iptables save
+
+9.3 CONFIGURE TCP WRAPPERS
+--------------------------
+Configure /etc/hosts.allow:
+# vi /etc/hosts.allow
+
+----
+# Allow SSH from management network
+sshd: 10.10.100.0/255.255.255.0
+
+# Allow all from localhost
+ALL: 127.0.0.1
+
+# Allow specific services from specific hosts
+httpd: 10.20.200.0/255.255.255.0
+----
+
+Configure /etc/hosts.deny:
+# vi /etc/hosts.deny
+
+----
+# Deny all by default
+ALL: ALL
+----
+
+Test TCP wrappers:
+# tcpdmatch sshd 10.10.100.50
+
+9.4 CONFIGURE SELINUX FOR NETWORK SERVICES
+------------------------------------------
+Check SELinux status:
+# sestatus
+# getenforce
+
+Set SELinux booleans for network services:
+
+Allow httpd to connect to network:
+# setsebool -P httpd_can_network_connect on
+
+Allow httpd to connect to database:
+# setsebool -P httpd_can_network_connect_db on
+
+List all network-related booleans:
+# getsebool -a | grep network
+
+Configure SELinux port labeling:
+# semanage port -a -t http_port_t -p tcp 8080
+
+View SELinux port types:
+# semanage port -l | grep http_port_t
+
+9.5 CONFIGURE NETWORK MONITORING
+--------------------------------
+Install network monitoring tools:
+# dnf install -y iftop nethogs iptraf-ng nload bmon
+
+Monitor bandwidth by interface:
+# iftop -i bond0
+
+Monitor bandwidth by process:
+# nethogs bond0
+
+Interactive IP traffic monitor:
+# iptraf-ng
+
+Real-time network load:
+# nload bond0
+
+Configure SNMP for monitoring:
+# dnf install -y net-snmp net-snmp-utils
+
+Configure SNMP:
+# vi /etc/snmp/snmpd.conf
+
+----
+# Community string
+com2sec notConfigUser  default       public
+
+# Group definition
+group   notConfigGroup v1           notConfigUser
+group   notConfigGroup v2c          notConfigUser
+
+# View definition
+view    systemview    included   .1.3.6.1.2.1.1
+view    systemview    included   .1.3.6.1.2.1.25.1.1
+
+# Access control
+access  notConfigGroup ""      any       noauth    exact  systemview none none
+
+# System information
+syslocation "DataCenter-01-Rack-05"
+syscontact "admin@company.local"
+----
+
+Start SNMP:
+# systemctl enable snmpd
+# systemctl start snmpd
+
+Test SNMP:
+# snmpwalk -v2c -c public localhost system
+
+9.6 CONFIGURE NETWORK LOGGING
+-----------------------------
+Configure rsyslog for network logging:
+# vi /etc/rsyslog.d/network.conf
+
+----
+# Log all network-related messages
+:msg, contains, "bond0" /var/log/network-bond0.log
+:msg, contains, "bond1" /var/log/network-bond1.log
+
+# Log firewall messages
+:msg, contains, "firewalld" /var/log/firewall.log
+
+# Stop processing after logging
+& stop
+----
+
+Restart rsyslog:
+# systemctl restart rsyslog
+
+Configure log rotation:
+# vi /etc/logrotate.d/network
+
+----
+/var/log/network-*.log {
+    daily
+    rotate 7
+    compress
+    missingok
+    notifempty
+    create 0600 root root
+}
+----
+
+9.7 CONFIGURE NETWORK BRIDGES (For Virtualization)
+--------------------------------------------------
+Create bridge interface:
+# nmcli connection add type bridge \
+  con-name br0 \
+  ifname br0 \
+  ipv4.addresses 10.50.50.10/24 \
+  ipv4.method manual
+
+Add interface to bridge:
+# nmcli connection add type ethernet \
+  con-name br0-slave1 \
+  ifname enp3s0f0 \
+  master br0
+
+Bring up bridge:
+# nmcli connection up br0-slave1
+# nmcli connection up br0
+
+Verify bridge:
+# bridge link show
+# ip addr show br0
+
+9.8 CONFIGURE NETWORK QUALITY OF SERVICE (QoS)
+----------------------------------------------
+Install traffic control tools:
+# dnf install -y iproute-tc
+
+Configure traffic shaping on interface:
+
+# Add root qdisc
+tc qdisc add dev bond0 root handle 1: htb default 30
+
+# Add classes
+tc class add dev bond0 parent 1: classid 1:1 htb rate 1gbit
+tc class add dev bond0 parent 1:1 classid 1:10 htb rate 800mbit ceil 1gbit
+tc class add dev bond0 parent 1:1 classid 1:20 htb rate 200mbit ceil 400mbit
+
+# Add filters
+tc filter add dev bond0 protocol ip parent 1:0 prio 1 u32 \
+  match ip dport 80 0xffff flowid 1:10
+
+tc filter add dev bond0 protocol ip parent 1:0 prio 2 u32 \
+  match ip dport 443 0xffff flowid 1:10
+
+View QoS configuration:
+# tc -s qdisc show dev bond0
+# tc -s class show dev bond0
+
+9.9 CONFIGURE LINK AGGREGATION ON SWITCH SIDE
+---------------------------------------------
+Configuration needed on network switches (vendor-specific):
+
+Cisco Switch Configuration Example:
+----
+interface Port-channel1
+ description Bond to DS-120 Server
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,300
+
+interface GigabitEthernet1/0/1
+ description Bond Member 1 - DS-120
+ channel-group 1 mode active
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,300
+
+interface GigabitEthernet1/0/2
+ description Bond Member 2 - DS-120
+ channel-group 1 mode active
+ switchport mode trunk
+ switchport trunk allowed vlan 100,200,300
+----
+
+Verify on switch:
+# show etherchannel summary
+# show interfaces port-channel 1
+
+9.10 CONFIGURE NETWORK AUTOMATION SCRIPTS
+-----------------------------------------
+Create network check script:
+# vi /usr/local/bin/network-check.sh
+
+----
+#!/bin/bash
+# Network connectivity check script
+
+# Log file
+LOGFILE="/var/log/network-check.log"
+
+# Function to log messages
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> $LOGFILE
+}
+
+# Check interfaces
+for iface in bond0 bond1; do
+    if ip link show $iface | grep -q "state UP"; then
+        log_message "$iface is UP"
+    else
+        log_message "ERROR: $iface is DOWN"
+        # Send alert
+        echo "Network interface $iface is DOWN on $(hostname)" | \
+          mail -s "Network Alert" admin@company.local
+    fi
+done
+
+# Check gateway connectivity
+for gw in 10.10.100.1 10.20.200.1; do
+    if ping -c 3 -W 2 $gw > /dev/null 2>&1; then
+        log_message "Gateway $gw is reachable"
+    else
+        log_message "ERROR: Gateway $gw is unreachable"
+    fi
+done
+
+# Check bond status
+for bond in bond0 bond1; do
+    if [ -f /proc/net/bonding/$bond ]; then
+        status=$(cat /proc/net/bonding/$bond | grep "MII Status" | head -1)
+        log_message "Bond $bond status: $status"
+    fi
+done
+----
+
+Make executable:
+# chmod +x /usr/local/bin/network-check.sh
+
+Add to cron:
+# crontab -e
+
+Add line:
+*/5 * * * * /usr/local/bin/network-check.sh
+
+9.11 CONFIGURE NETWORK PERFORMANCE TESTING
+------------------------------------------
+Install iperf3:
+# dnf install -y iperf3
+
+Server mode (on remote host):
+# iperf3 -s
+
+Client mode (test from DS-120):
+# iperf3 -c <remote_host> -t 30 -i 5
+
+Test with multiple streams:
+# iperf3 -c <remote_host> -P 4
+
+Test UDP:
+# iperf3 -c <remote_host> -u -b 1G
+
+Test reverse direction:
+# iperf3 -c <remote_host> -R
+
+9.12 CONFIGURE NETWORK HIGH AVAILABILITY
+----------------------------------------
+Install and configure keepalived for VRRP:
+# dnf install -y keepalived
+
+Configure keepalived:
+# vi /etc/keepalived/keepalived.conf
+
+----
+vrrp_instance VI_1 {
+    state MASTER
+    interface bond0
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass SecretPassword
+    }
+    virtual_ipaddress {
+        10.20.200.100/24 dev bond0
+    }
+}
+----
+
+Start keepalived:
+# systemctl enable keepalived
+# systemctl start keepalived
+
+Verify virtual IP:
+# ip addr show bond0 | grep 10.20.200.100
+
+================================================================================
+SECTION 10: VERIFICATION STEPS
+================================================================================
+
+10.1 VERIFY BOOT DEVICE
+-----------------------
+Check current boot device:
+# lsblk
+# df -h
+
+Boot partition should be on SAN LUN (multipath device)
+
+10.2 VERIFY MULTIPATH STATUS
+----------------------------
+# multipath -ll
+
+Output should show:
+- All paths to boot LUN
+- Active/passive path status
+- No failed paths
+
+# multipath -v2
+
+Should show detailed path information.
+
+10.3 VERIFY HBA STATUS
+---------------------
+For QLogic:
+# systool -c fc_host -v
+
+For Emulex:
+# cat /sys/class/scsi_host/host*/device/fc_host/host*/port_state
+
+Output should show "Online" for all ports.
+
+10.4 VERIFY SAN LUN VISIBILITY
+------------------------------
+# ls -l /dev/disk/by-id/
+
+Should show SAN LUN with WWID
+
+# lsscsi
+
+Should display all SCSI devices including SAN LUNs
+
+10.5 VERIFY FILESYSTEM MOUNTS
+-----------------------------
+# mount | grep "^/dev"
+
+Verify all filesystems mounted from SAN LUN.
+
+10.6 VERIFY NETWORK INTERFACES
+------------------------------
+List all interfaces:
+# ip link show
+# nmcli device status
+
+Check interface status:
+# ip addr show
+# nmcli connection show
+
+Verify bond status:
+# cat /proc/net/bonding/bond0
+# cat /proc/net/bonding/bond1
+
+Check for errors:
+# ip -s link show bond0
+# ethtool -S bond0
+
+10.7 VERIFY NETWORK CONNECTIVITY
+--------------------------------
+Test management network:
+# ping -c 4 10.10.100.1
+# ping -c 4 10.10.100.53
+
+Test production network:
+# ping -I bond0 -c 4 10.20.200.1
+# ping -I bond0 -c 4 google.com
+
+Test storage network:
+# ping -I bond1 -c 4 10.30.300.1
+
+10.8 VERIFY DNS RESOLUTION
+--------------------------
+# nslookup ds120-rhel9-prod01.company.local
+# dig ds120-rhel9-prod01.company.local
+# host google.com
+
+Check /etc/resolv.conf:
+# cat /etc/resolv.conf
+
+10.9 VERIFY ROUTING
+-------------------
+Check routing table:
+# ip route show
+# route -n
+
+Test specific route:
+# traceroute -n 8.8.8.8
+# tracepath google.com
+
+10.10 VERIFY NTP SYNCHRONIZATION
+--------------------------------
+# chronyc sources -v
+# chronyc tracking
+# timedatectl status
+
+Time should be synchronized.
+
+10.11 VERIFY FIREWALL
+---------------------
+# firewall-cmd --state
+# firewall-cmd --list-all-zones
+# systemctl status firewalld
+
+Test port connectivity:
+# nc -zv localhost 22
+# nc -zv localhost 80
+
+10.12 VERIFY SELINUX
+-------------------
+# sestatus
+# getenforce
+
+Should show "Enforcing" (recommended)
+
+10.13 CHECK SYSTEM LOGS
+-----------------------
+Review logs for any errors:
+# journalctl -xb | grep -i error
+# journalctl -xb | grep -i multipath
+# journalctl -xb | grep -i network
+# dmesg | grep -i scsi
+# dmesg | grep -i network
+
+10.14 VERIFY NETWORK PERFORMANCE
+--------------------------------
+Test bandwidth:
+# iperf3 -c <iperf_server>
+
+Check interface statistics:
+# sar -n DEV 1 10
+# ifstat -i bond0 1
+
+10.15 VERIFY REGISTRATION AND UPDATES
+-------------------------------------
+# subscription-manager status
+# dnf check-update
+
+10.16 PERFORMANCE TEST
+----------------------
+Test disk I/O performance:
+# dd if=/dev/zero of=/tmp/testfile bs=1M count=1024
+# dd if=/tmp/testfile of=/dev/null bs=1M
+
+Check for acceptable throughput.
+
+10.17 NETWORK STRESS TEST
+-------------------------
+Generate network traffic:
+# iperf3 -c <remote_host> -t 60 -P 10
+
+Monitor during test:
+# iftop -i bond0
+# nload bond0
+
+10.18 DOCUMENT CONFIGURATION
+----------------------------
+Create configuration documentation:
+
+# ip addr show > /root/network-config-$(date +%Y%m%d).txt
+# ip route show >> /root/network-config-$(date +%Y%m%d).txt
+# nmcli connection show >> /root/network-config-$(date +%Y%m%d).txt
+# multipath -ll >> /root/network-config-$(date +%Y%m%d).txt
+# cat /proc/net/bonding/bond* >> /root/network-config-$(date +%Y%m%d).txt
+
+Document the following for future reference:
+- SAN LUN WWID
+- Multipath device name
+- HBA WWPNs
+- All IP addresses assigned
+- VLAN assignments
+- Bond configurations
+- Static routes
+- Firewall rules
+- Network configuration
+- Installed packages and versions
+
+================================================================================
+SECTION 11: TROUBLESHOOTING
+================================================================================
+
+11.1 SERVER DOES NOT BOOT FROM SAN
+----------------------------------
+[Previous troubleshooting content remains the same...]
+
+Problem: Server doesn't recognize SAN LUN at boot
+
+Checks:
+1. Verify HBA BIOS boot is enabled
+2. Verify SAN LUN is mapped correctly
+3. Check FC cable connections
+4. Verify zoning
+5. Check BIOS boot order
+
+Solution Steps:
+# Rescan FC bus
+echo "- - -" > /sys/class/scsi_host/host<X>/scan
+
+11.2 NETWORK INTERFACE NOT COMING UP
+------------------------------------
+Problem: Network interface shows "down" status
+
+Checks:
+1. Check physical cable connection
+   # ethtool enp1s0f0 | grep "Link detected"
+   
+2. Check switch port status
+   Verify on network switch
+   
+3. Check NetworkManager status
+   # systemctl status NetworkManager
+   
+4. Check interface configuration
+   # nmcli connection show enp1s0f0
+
+Solution:
+# Bring interface up manually
+nmcli connection up enp1s0f0
+
+# Restart NetworkManager
+systemctl restart NetworkManager
+
+# Check for errors in logs
+journalctl -u NetworkManager -n 50
+
+11.3 BOND INTERFACE NOT WORKING
+-------------------------------
+Problem: Bond interface not aggregating traffic
+
+Checks:
+1. Verify bond mode
+   # cat /proc/net/bonding/bond0 | grep -i mode
+   
+2. Check slave interfaces
+   # cat /proc/net/bonding/bond0 | grep "Slave Interface"
+   
+3. Verify switch configuration (LACP)
+   Check if switch has port-channel configured
+   
+4. Check for errors
+   # journalctl | grep bond0
+
+Solution:
+# Reload bond configuration
+nmcli connection down bond0
+nmcli connection down bond0-slave1
+nmcli connection down bond0-slave2
+
+nmcli connection up bond0-slave1
+nmcli connection up bond0-slave2
+nmcli connection up bond0
+
+# Verify bond status
+cat /proc/net/bonding/bond0
+
+11.4 CANNOT PING GATEWAY
+------------------------
+Problem: Unable to ping default gateway
+
+Checks:
+1. Verify IP configuration
+   # ip addr show
+   
+2. Check routing table
+   # ip route show
+   
+3. Verify gateway is correct
+   # nmcli connection show bond0 | grep ipv4.gateway
+   
+4. Check ARP table
+   # arp -a
+   
+5. Verify switch configuration
+
+Solution:
+# Add static ARP entry (temporary)
+arp -s 10.20.200.1 <gateway_mac_address>
+
+# Flush ARP cache
+ip neigh flush all
+
+# Reload network configuration
+nmcli connection down bond0
+nmcli connection up bond0
+
+11.5 DNS RESOLUTION FAILURE
+---------------------------
+Problem: Cannot resolve hostnames
+
+Checks:
+1. Check /etc/resolv.conf
+   # cat /etc/resolv.conf
+   
+2. Test DNS servers
+   # dig @10.10.100.53 google.com
+   
+3. Verify network connectivity to DNS
+   # ping 10.10.100.53
+   
+4. Check DNS configuration
+   # nmcli connection show enp1s0f0 | grep dns
+
+Solution:
+# Manually set DNS
+nmcli connection modify enp1s0f0 \
+  ipv4.dns "10.10.100.53 10.10.100.54"
+
+# Restart NetworkManager
+systemctl restart NetworkManager
+
+# Test DNS resolution
+nslookup google.com
+
+11.6 SLOW NETWORK PERFORMANCE
+-----------------------------
+Problem: Poor network throughput
+
+Checks:
+1. Check interface speed/duplex
+   # ethtool enp1s0f0 | grep Speed
+   
+2. Check for errors
+   # ip -s link show bond0
+   # ethtool -S bond0 | grep error
+   
+3. Check MTU settings
+   # ip link show bond0 | grep mtu
+   
+4. Monitor bandwidth
+   # iftop -i bond0
+   
+5. Check for packet drops
+   # netstat -i
+
+Solution:
+# Set MTU to 9000 (Jumbo Frames)
+nmcli connection modify bond0 802-3-ethernet.mtu 9000
+nmcli connection up bond0
+
+# Disable offloading features (test)
+ethtool -K bond0 tso off gso off
+
+# Tune TCP parameters
+sysctl -w net.core.rmem_max=134217728
+sysctl -w net.core.wmem_max=134217728
+
+11.7 VLAN TAGGING NOT WORKING
+-----------------------------
+Problem: VLAN traffic not passing
+
+Checks:
+1. Verify VLAN interface creation
+   # ip link show | grep vlan
+   
+2. Check VLAN ID
+   # nmcli connection show bond0.200 | grep vlan.id
+   
+3. Verify switch trunk configuration
+   Check if VLAN is allowed on trunk
+   
+4. Test with tcpdump
+   # tcpdump -i bond0 -e vlan
+
+Solution:
+# Recreate VLAN interface
+nmcli connection delete bond0.200
+
+nmcli connection add type vlan \
+  con-name bond0.200 \
+  ifname bond0.200 \
+  dev bond0 \
+  id 200
+
+# Verify VLAN tagging
+tcpdump -i bond0 -e -n vlan 200
+
+11.8 FIREWALL BLOCKING TRAFFIC
+------------------------------
+Problem: Cannot access services despite correct network configuration
+
+Checks:
+1. Check firewall status
+   # firewall-cmd --list-all
+   
+2. Verify service/port is allowed
+   # firewall-cmd --list-services
+   # firewall-cmd --list-ports
+   
+3. Check for blocking rules
+   # firewall-cmd --list-rich-rules
+
+Solution:
+# Add service temporarily
+firewall-cmd --add-service=http
+
+# Add service permanently
+firewall-cmd --permanent --add-service=http
+firewall-cmd --reload
+
+# Add custom port
+firewall-cmd --permanent --add-port=8080/tcp
+firewall-cmd --reload
+
+# Disable firewall (testing only)
+systemctl stop firewalld
+
+11.9 MULTICAST NOT WORKING
+--------------------------
+Problem: Multicast traffic not received
+
+Checks:
+1. Verify multicast routing
+   # ip mroute show
+   
+2. Check IGMP membership
+   # netstat -g
+   
+3. Verify switch IGMP snooping
+
+Solution:
+# Enable multicast routing
+echo "1" > /proc/sys/net/ipv4/ip_forward
+
+# Join multicast group
+ip maddr add 239.0.0.1 dev bond0
+
+# Test multicast
+iperf3 -c 239.0.0.1 -u -B 10.20.200.10
+
+11.10 IPV6 CONNECTIVITY ISSUES
+------------------------------
+Problem: IPv6 not working
+
+Checks:
+1. Verify IPv6 is enabled
+   # sysctl net.ipv6.conf.all.disable_ipv6
+   
+2. Check IPv6 addresses
+   # ip -6 addr show
+   
+3. Verify IPv6 routing
+   # ip -6 route show
+
+Solution:
+# Enable IPv6
+sysctl -w net.ipv6.conf.all.disable_ipv6=0
+
+# Configure IPv6 address
+nmcli connection modify bond0 \
+  ipv6.addresses "2001:db8:1::10/64" \
+  ipv6.method manual
+
+# Test IPv6 connectivity
+ping6 2001:db8:1::1
+
+================================================================================
+SECTION 12: ROLLBACK PROCEDURES
+================================================================================
+
+[Previous rollback procedures remain the same...]
+
+12.1 NETWORK CONFIGURATION ROLLBACK
+-----------------------------------
+Backup network configuration before changes:
+
+# Backup current configuration
+mkdir -p /root/network-backup-$(date +%Y%m%d)
+cp -r /etc/NetworkManager/system-connections/* /root/network-backup-$(date +%Y%m%d)/
+ip addr show > /root/network-backup-$(date +%Y%m%d)/ip-addr.txt
+ip route show > /root/network-backup-$(date +%Y%m%d)/ip-route.txt
+
+Restore network configuration:
+
+# Restore connection files
+cp /root/network-backup-YYYYMMDD/* /etc/NetworkManager/system-connections/
+
+# Reload NetworkManager
+nmcli connection reload
+
+# Restart interfaces
+nmcli connection down bond0
+nmcli connection up bond0
+
+12.2 FIREWALL ROLLBACK
+----------------------
+Backup firewall configuration:
+# firewall-cmd --list-all > /root/firewall-backup-$(date +%Y%m%d).txt
+
+Restore previous firewall state:
+# Use firewall configuration file backup
+cp /root/firewall-backup-YYYYMMDD.xml /etc/firewalld/zones/public.xml
+firewall-cmd --reload
+
+12.3 PREPARE FOR ROLLBACK
+-------------------------
+Before making major changes, create snapshots if supported by SAN:
+
+On Storage Array:
+- Create snapshot of boot LUN
+- Document snapshot name and timestamp
+
+12.4 COMPLETE SYSTEM ROLLBACK
+-----------------------------
+If complete rebuild required:
+
+1. Backup critical data:
+   - /etc
+   - /home
+   - /var (application data)
+   - Database dumps
+   - Network configurations
+
+2. Unmap current LUN
+3. Allocate new LUN or reformat existing
+4. Follow installation procedure from beginning
+
+================================================================================
+ADDITIONAL NOTES AND BEST PRACTICES
+================================================================================
+
+NETWORK BEST PRACTICES:
+----------------------
+1. Always use bonding/teaming for production networks
+2. Separate networks by function (Management, Production, Storage)
+3. Use VLANs for network segmentation
+4. Implement proper firewall rules
+5. Enable and monitor SELinux
+6. Use static IPs for servers
+7. Document all network configurations
+8. Test failover scenarios regularly
+9. Monitor network performance continuously
+10. Keep network firmware updated
+
+REGULAR MAINTENANCE:
+-------------------
+Daily:
+- Check network connectivity
+- Review network logs for errors
+- Monitor bandwidth utilization
+
+Weekly:
+- Check multipath status
+- Review system logs for SAN errors
+- Verify bond status
+- Test DNS resolution
+
+Monthly:
+- Verify all paths are active
+- Test path failover
+- Review HBA statistics
+- Test network failover
+- Review firewall logs
+- Update network documentation
+
+Quarterly:
+- Check for firmware updates (HBA, SAN, switches, NICs)
+- Review and update documentation
+- Test disaster recovery procedures
+- Performance baseline testing
+- Security audit
+
+SECURITY CONSIDERATIONS:
+-----------------------
+- Implement LUN masking/zoning strictly
+- Use separate zones for different security levels
+- Encrypt data at rest if required
+- Secure FC switch management interfaces
+- Regular audit of SAN access controls
+- Use firewall zones appropriately
+- Implement rate limiting for services
+- Monitor for unauthorized access
+- Use strong authentication
+- Keep security patches current
+
+PERFORMANCE TUNING:
+------------------
+- Tune multipath path_selector algorithm
+- Adjust HBA queue depths
+- Configure appropriate I/O scheduler (mq-deadline for SAN)
+- Monitor and adjust FC switch buffer credits
+- Consider SR-IOV for better performance
+- Optimize network buffer sizes
+- Use Jumbo Frames for storage networks
+- Tune TCP parameters for high-bandwidth networks
+- Monitor and adjust MTU settings
+- Implement QoS for critical traffic
+
+================================================================================
+APPENDIX A: NETWORK COMMANDS REFERENCE
+================================================================================
+
+NETWORK MANAGER COMMANDS:
+------------------------
+# Show all connections
+nmcli connection show
+
+# Show device status
+nmcli device status
+
+# Modify connection
+nmcli connection modify <name> <setting> <value>
+
+# Bring interface up/down
+nmcli connection up <name>
+nmcli connection down <name>
+
+# Create bond
+nmcli connection add type bond con-name bond0 ifname bond0
+
+# Add slave to bond
+nmcli connection add type ethernet con-name bond0-slave1 ifname eth0 master bond0
+
+# Create VLAN
+nmcli connection add type vlan con-name bond0.100 ifname bond0.100 dev bond0 id 100
+
+# Reload configurations
+nmcli connection reload
+
+IP COMMANDS:
+-----------
+# Show IP addresses
+ip addr show
+
+# Show routing table
+ip route show
+
+# Show ARP table
+ip neigh show
+
+# Show network statistics
+ip -s link show
+
+# Add IP address
+ip addr add 10.20.200.10/24 dev bond0
+
+# Add route
+ip route add 192.168.1.0/24 via 10.20.200.1
+
+# Flush ARP cache
+ip neigh flush all
+
+BOND COMMANDS:
+-------------
+# Show bond status
+cat /proc/net/bonding/bond0
+
+# Show bond slave interfaces
+cat /proc/net/bonding/bond0 | grep "Slave Interface"
+
+# Show bond mode
+cat /proc/net/bonding/bond0 | grep "Bonding Mode"
+
+ETHTOOL COMMANDS:
+----------------
+# Show interface information
+ethtool enp1s0f0
+
+# Show interface statistics
+ethtool -S enp1s0f0
+
+# Set interface speed/duplex
+ethtool -s enp1s0f0 speed 10000 duplex full
+
+# Show offload features
+ethtool -k enp1s0f0
+
+# Disable TSO
+ethtool -K enp1s0f0 tso off
+
+FIREWALL COMMANDS:
+-----------------
+# Show firewall status
+firewall-cmd --state
+
+# List all rules
+firewall-cmd --list-all
+
+# Add service
+firewall-cmd --permanent --add-service=http
+
+# Add port
+firewall-cmd --permanent --add-port=8080/tcp
+
+# Reload firewall
+firewall-cmd --reload
+
+# Add rich rule
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.100.0/24" accept'
+
+DIAGNOSTIC COMMANDS:
+-------------------
+# Test connectivity
+ping -c 4 <host>
+
+# Trace route
+traceroute <host>
+tracepath <host>
+
+# DNS lookup
+nslookup <hostname>
+dig <hostname>
+host <hostname>
+
+# Port scan
+nmap <host>
+
+# Test port connectivity
+nc -zv <host> <port>
+telnet <host> <port>
+
+# Packet capture
+tcpdump -i bond0 -n
+tcpdump -i bond0 port 80
+
+# Monitor bandwidth
+iftop -i bond0
+nload bond0
+nethogs bond0
+
+# Show connections
+netstat -tupln
+ss -tupln
+
+# Show routing
+netstat -rn
+route -n
+
+PERFORMANCE COMMANDS:
+--------------------
+# Network throughput test
+iperf3 -c <server>
+
+# Bandwidth monitor
+sar -n DEV 1 10
+
+# Interface statistics
+ifstat -i bond0 1
+
+# Traffic monitoring
+iptraf-ng
+
+# MTR (traceroute + ping)
+mtr <host>
+
+================================================================================
+APPENDIX B: NETWORK CONFIGURATION FILE TEMPLATES
+================================================================================
+
+BOND CONFIGURATION FILE:
+-----------------------
+File: /etc/NetworkManager/system-connections/bond0.nmconnection
+
+----
+[connection]
+id=bond0
+uuid=<auto-generated>
+type=bond
+interface-name=bond0
+autoconnect=yes
+
+[bond]
+mode=802.3ad
+miimon=100
+
+[ipv4]
+address1=10.20.200.10/24,10.20.200.1
+dns=10.10.100.53;10.10.100.54;
+dns-search=company.local;
+method=manual
+
+[ipv6]
+method=disabled
+----
+
+VLAN CONFIGURATION FILE:
+------------------------
+File: /etc/NetworkManager/system-connections/bond0.200.nmconnection
+
+----
+[connection]
+id=bond0.200
+uuid=<auto-generated>
+type=vlan
+interface-name=bond0.200
+autoconnect=yes
+
+[vlan]
+parent=bond0
+id=200
+
+[ipv4]
+address1=10.20.200.10/24
+method=manual
+----
+
+STATIC ROUTE FILE:
+-----------------
+File: /etc/sysconfig/network-scripts/route-bond0
+
+----
+172.16.0.0/16 via 10.20.200.254
+192.168.50.0/24 via 10.20.200.1
+----
+
+SYSCTL NETWORK TUNING:
+---------------------
+File: /etc/sysctl.d/99-network-tuning.conf
+
+----
+# TCP Buffer Sizes
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.ipv4.tcp_rmem = 4096 87380 67108864
+net.ipv4.tcp_wmem = 4096 65536 67108864
+
+# TCP Window Scaling
+net.ipv4.tcp_window_scaling = 1
+
+# Connection Tracking
+net.netfilter.nf_conntrack_max = 1048576
+
+# Connection Backlog
+net.core.somaxconn = 4096
+net.core.netdev_max_backlog = 5000
+
+# TCP Fast Open
+net.ipv4.tcp_fastopen = 3
+
+# TCP Keepalive
+net.ipv4.tcp_keepalive_time = 600
+net.ipv4.tcp_keepalive_intvl = 60
+net.ipv4.tcp_keepalive_probes = 3
+----
+
+FIREWALLD ZONE CONFIGURATION:
+-----------------------------
+File: /etc/firewalld/zones/production.xml
+
+----
+<?xml version="1.0" encoding="utf-8"?>
+<zone>
+  <short>Production</short>
+  <description>Production network zone</description>
+  <interface name="bond0"/>
+  <source address="10.20.200.0/24"/>
+  <service name="http"/>
+  <service name="https"/>
+  <service name="ssh"/>
+  <port port="8080" protocol="tcp"/>
+  <rule family="ipv4">
+    <source address="10.20.200.0/24"/>
+    <service name="ssh"/>
+    <accept/>
+  </rule>
+</zone>
+----
+
+================================================================================
+APPENDIX C: NETWORK TROUBLESHOOTING FLOWCHARTS
+================================================================================
+
+NETWORK CONNECTIVITY FLOWCHART:
+-------------------------------
+1. Can you ping localhost (127.0.0.1)?
+   NO -> Check loopback interface, OS issue
+   YES -> Continue to 2
+
+2. Can you ping gateway on same subnet?
+   NO -> Check IP configuration, cable, switch port
+   YES -> Continue to 3
+
+3. Can you ping external host by IP?
+   NO -> Check routing, firewall, upstream network
+   YES -> Continue to 4
+
+4. Can you resolve DNS names?
+   NO -> Check /etc/resolv.conf, DNS server connectivity
+   YES -> Network is fully functional
+
+BOND TROUBLESHOOTING FLOWCHART:
+-------------------------------
+1. Is bond interface UP?
+   NO -> nmcli connection up bond0
+   YES -> Continue to 2
+
+2. Are both slave interfaces UP?
+   NO -> nmcli connection up bond0-slave1/slave2
+   YES -> Continue to 3
+
+3. Is switch port-channel configured?
+   NO -> Configure LACP on switch
+   YES -> Continue to 4
+
+4. Are both links active in bond?
+   NO -> Check cable, switch configuration
+   YES -> Bond is working correctly
+
+PERFORMANCE TROUBLESHOOTING FLOWCHART:
+-------------------------------------
+1. Is link speed correct (ethtool)?
+   NO -> Check auto-negotiation, switch settings
+   YES -> Continue to 2
+
+2. Are there interface errors (ip -s link)?
+   YES -> Check cable quality, switch errors
+   NO -> Continue to 3
+
+3. Is MTU correct (especially for storage)?
+   NO -> Set MTU to 9000 for storage networks
+   YES -> Continue to 4
+
+4. Are TCP buffers optimized?
+   NO -> Tune /etc/sysctl.d/ parameters
+   YES -> Continue to 5
+
+5. Test with iperf3
+   Poor results -> Check for network congestion, QoS
+   Good results -> Performance issue elsewhere
+
+================================================================================
+APPENDIX D: NETWORK MONITORING SCRIPT
+================================================================================
+
+File: /usr/local/bin/network-monitor.sh
+
+----
+#!/bin/bash
+#
+# Comprehensive Network Monitoring Script for RHEL-9
+# Monitors interfaces, bonds, connectivity, and logs issues
+#
+
+# Configuration
+LOGFILE="/var/log/network-monitor.log"
+ALERT_EMAIL="admin@company.local"
+INTERFACES="bond0 bond1 enp1s0f0"
+GATEWAYS="10.10.100.1 10.20.200.1"
+DNS_SERVERS="10.10.100.53 10.10.100.54"
+TEST_HOSTS="google.com company.local"
+
+# Function to log messages
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a $LOGFILE
+}
+
+# Function to send alert
+send_alert() {
+    echo "$1" | mail -s "Network Alert: $(hostname)" $ALERT_EMAIL
+    log_message "ALERT SENT: $1"
+}
+
+# Check interface status
+check_interfaces() {
+    log_message "Checking interface status..."
+    for iface in $INTERFACES; do
+        if ip link show $iface 2>/dev/null | grep -q "state UP"; then
+            log_message "OK: $iface is UP"
+        else
+            log_message "ERROR: $iface is DOWN"
+            send_alert "Interface $iface is DOWN on $(hostname)"
+        fi
+        
+        # Check for errors
+        errors=$(ip -s link show $iface 2>/dev/null | grep errors | head -1 | awk '{print $3}')
+        if [ "$errors" -gt 100 ]; then
+            log_message "WARNING: $iface has $errors errors"
+            send_alert "Interface $iface has $errors errors on $(hostname)"
+        fi
+    done
+}
+
+# Check bond status
+check_bonds() {
+    log_message "Checking bond status..."
+    for bond in bond0 bond1; do
+        if [ -f /proc/net/bonding/$bond ]; then
+            # Check MII Status
+            status=$(cat /proc/net/bonding/$bond | grep "MII Status" | head -1 | awk '{print $3}')
+            log_message "Bond $bond MII Status: $status"
+            
+            if [ "$status" != "up" ]; then
+                send_alert "Bond $bond is not up on $(hostname)"
+            fi
+            
+            # Check for failed slaves
+            failed=$(cat /proc/net/bonding/$bond | grep -c "MII Status: down")
+            if [ $failed -gt 0 ]; then
+                log_message "WARNING: Bond $bond has $failed failed slave(s)"
+                send_alert "Bond $bond has $failed failed slave interface(s) on $(hostname)"
+            fi
+        fi
+    done
+}
+
+# Check gateway connectivity
+check_gateways() {
+    log_message "Checking gateway connectivity..."
+    for gw in $GATEWAYS; do
+        if ping -c 3 -W 2 $gw > /dev/null 2>&1; then
+            log_message "OK: Gateway $gw is reachable"
+        else
+            log_message "ERROR: Gateway $gw is unreachable"
+            send_alert "Gateway $gw is unreachable from $(hostname)"
+        fi
+    done
+}
+
+# Check DNS resolution
+check_dns() {
+    log_message "Checking DNS resolution..."
+    for dns in $DNS_SERVERS; do
+        if ping -c 2 -W 2 $dns > /dev/null 2>&1; then
+            log_message "OK: DNS server $dns is reachable"
+        else
+            log_message "ERROR: DNS server $dns is unreachable"
+            send_alert "DNS server $dns is unreachable from $(hostname)"
+        fi
+    done
+    
+    for host in $TEST_HOSTS; do
+        if nslookup $host > /dev/null 2>&1; then
+            log_message "OK: DNS resolution for $host successful"
+        else
+            log_message "ERROR: DNS resolution failed for $host"
+            send_alert "DNS resolution failed for $host on $(hostname)"
+        fi
+    done
+}
+
+# Check multipath (if applicable)
+check_multipath() {
+    if systemctl is-active multipathd > /dev/null 2>&1; then
+        log_message "Checking multipath status..."
+        failed_paths=$(multipath -ll 2>/dev/null | grep -c "failed")
+        if [ $failed_paths -gt 0 ]; then
+            log_message "WARNING: $failed_paths multipath path(s) failed"
+            send_alert "Multipath has $failed_paths failed path(s) on $(hostname)"
+        else
+            log_message "OK: All multipath paths active"
+        fi
+    fi
+}
+
+# Main execution
+log_message "========== Network Monitoring Check Started =========="
+check_interfaces
+check_bonds
+check_gateways
+check_dns
+check_multipath
+log_message "========== Network Monitoring Check Completed =========="
+----
+
+Make executable:
+# chmod +x /usr/local/bin/network-monitor.sh
+
+Add to cron (every 5 minutes):
+# crontab -e
+*/5 * * * * /usr/local/bin/network-monitor.sh
+
+================================================================================
+DOCUMENT END
+================================================================================
+
+For additional support:
+- Red Hat Support: https://access.redhat.com
+- Red Hat Network Documentation: https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/configuring_and_managing_networking/
+- Storage Vendor Documentation
+- HBA Vendor Support
+- Network Switch Vendor Documentation
+
+Document prepared for DS-120 servers running RHEL-9 with SAN boot configuration
+and comprehensive network configuration.
+
+Always test procedures in non-production environment first.
+
+Last Updated: 2024
+Version: 2.0 - Network Configuration Enhanced
+
+================================================================================
