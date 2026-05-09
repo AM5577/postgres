@@ -1,0 +1,128 @@
+Subject: Pre-Requisites Required for RHEL 9.7 Installation on DS-120 (Boot from SAN)
+
+Dear [Customer Name],
+
+We are planning to proceed with the installation of Red Hat Enterprise Linux (RHEL) 9.7 
+on the DS-120 server(s) using Boot from SAN configuration.
+
+To ensure a smooth and successful installation, please provide the following 
+pre-requisites and confirmations:
+
+----------------------------------------------------------------------
+1. SERVER DETAILS
+----------------------------------------------------------------------
+
+- Server Hostname (FQDN):
+- Server Serial Number:
+- CPU Details:
+- Total RAM:
+- BIOS/UEFI Version:
+- HBA Model:
+- HBA Firmware Version:
+- HBA WWPN (Port 1):
+- HBA WWPN (Port 2):
+- NIC Details (Model and MAC addresses):
+
+----------------------------------------------------------------------
+2. SAN STORAGE DETAILS
+----------------------------------------------------------------------
+
+- Storage Vendor and Model:
+- Boot LUN Size (Minimum 50GB recommended):
+- RAID Level:
+- LUN ID:
+- LUN WWID (if available):
+
+Please confirm:
+[ ] Boot LUN created
+[ ] LUN mapped to server WWPNs
+[ ] FC Zoning completed and active
+[ ] Dual path configured (if multipath required)
+[ ] Storage team validation completed
+
+----------------------------------------------------------------------
+3. NETWORK CONFIGURATION
+----------------------------------------------------------------------
+
+For each required network (Management / Production / Storage):
+
+Management Network:
+- VLAN ID:
+- IP Address:
+- Subnet Mask / Prefix:
+- Gateway:
+- DNS Servers:
+- Domain Name:
+
+Production Network (if separate):
+- VLAN ID:
+- IP Address:
+- Subnet Mask:
+- Gateway:
+
+Storage Network (if applicable):
+- VLAN ID:
+- IP Address:
+- Subnet Mask:
+
+Additional Requirements:
+- Bonding required? (Yes/No)
+- If Yes, specify mode (802.3ad / Active-Backup):
+- Jumbo Frames required? (MTU 9000 Yes/No):
+
+Please confirm switch-side configuration (VLAN and LACP if bonding used).
+
+----------------------------------------------------------------------
+4. RED HAT SUBSCRIPTION DETAILS
+----------------------------------------------------------------------
+
+- Subscription Method:
+  ( ) Red Hat Login Credentials
+  ( ) Activation Key
+  ( ) Disconnected/Air-Gapped
+
+- Organization ID (if applicable):
+
+----------------------------------------------------------------------
+5. SECURITY AND ACCESS REQUIREMENTS
+----------------------------------------------------------------------
+
+- SSH access source network:
+- Required inbound ports (if any):
+- SELinux preference (Enforcing recommended):
+- NTP Server(s):
+
+----------------------------------------------------------------------
+6. MAINTENANCE WINDOW
+----------------------------------------------------------------------
+
+- Change Ticket Number:
+- Installation Date:
+- Maintenance Window (Start Time / End Time / Time Zone):
+- Rollback Plan Confirmed (Yes/No):
+
+----------------------------------------------------------------------
+7. BACKUP CONFIRMATION
+----------------------------------------------------------------------
+
+Please confirm before installation:
+
+[ ] Existing system backup completed (if applicable)
+[ ] SAN snapshot of Boot LUN taken
+[ ] Rollback procedure agreed with stakeholders
+
+----------------------------------------------------------------------
+
+Kindly provide the above information at your earliest convenience so that we can 
+schedule and proceed with the installation.
+
+If required, we can arrange a coordination call with your Storage and Network 
+teams to validate SAN zoning, LUN masking, and network readiness.
+
+Thank you.
+
+Best Regards,
+[Your Name]
+[Your Title]
+[Company Name]
+[Contact Information]

@@ -1,0 +1,894 @@
+================================================================================
+PROFESSIONAL EMAIL TEMPLATE
+================================================================================
+
+Subject: PRE-REQUISITES FOR RHEL-9.7 SAN BOOT INSTALLATION ON DS-120 SERVERS
+
+Dear [Customer Name/IT Manager],
+
+We are pleased to assist you with the installation of Red Hat Enterprise Linux 9.7 
+on your DS-120 servers with boot from SAN configuration. To ensure a smooth and 
+successful deployment, we require specific information and pre-requisites from your 
+organization.
+
+This email outlines all the necessary information, hardware confirmations, and 
+network details needed before we proceed with the installation.
+
+Please review each section carefully and provide the requested information at your 
+earliest convenience. If you have any questions regarding these requirements, 
+please do not hesitate to contact us.
+
+================================================================================
+SECTION 1: CONTACT INFORMATION
+================================================================================
+
+Primary Contact:
+Name: _________________________________
+Title: _________________________________
+Email: _________________________________
+Phone: _________________________________
+
+Secondary Contact (Technical):
+Name: _________________________________
+Title: _________________________________
+Email: _________________________________
+Phone: _________________________________
+
+Approval Authority:
+Name: _________________________________
+Title: _________________________________
+Email: _________________________________
+
+Change Control Contact:
+Name: _________________________________
+Title: _________________________________
+Email: _________________________________
+Phone: _________________________________
+
+================================================================================
+SECTION 2: SERVER AND HARDWARE SPECIFICATIONS
+================================================================================
+
+2.1 SERVER SPECIFICATIONS
+--------------------------
+Please provide the following information for EACH DS-120 server to be installed:
+
+Server 1:
+- Hostname (FQDN): ___________________________________
+- Current/Target IP Address (Management): _______________
+- Serial Number: ___________________________________
+- Current OS (if any): ___________________________________
+- Hardware Configuration:
+  * CPU Model: ___________________________________
+  * Number of CPUs: ___________________________________
+  * Total RAM: ___________________________________
+  * Total Storage Capacity: ___________________________________
+
+Server 2:
+[Repeat above for each server]
+
+2.2 HBA (HOST BUS ADAPTER) INFORMATION
+--------------------------------------
+Please provide details for each HBA installed:
+
+Server 1 - HBA Details:
+- HBA Model: ___________________________________
+- HBA Vendor (QLogic/Emulex/Broadcom): ___________________________________
+- HBA Firmware Version (current): ___________________________________
+- Number of Ports: ___________________________________
+- Port 1 WWPN (World Wide Port Name): ___________________________________
+- Port 2 WWPN: ___________________________________
+- PCIe Slot Location: ___________________________________
+- Link Speed Negotiated:
+  * Port 1: _______________ (2Gbps/4Gbps/8Gbps/16Gbps)
+  * Port 2: _______________ (2Gbps/4Gbps/8Gbps/16Gbps)
+
+Server 2 - HBA Details:
+[Repeat above for each server/HBA]
+
+2.3 NETWORK INTERFACE CARD (NIC) SPECIFICATIONS
+-----------------------------------------------
+Please list all network interfaces available:
+
+Server 1 - Network Interfaces:
+- NIC 1 Model: ___________________________________
+  * MAC Address: ___________________________________
+  * Speed Capability: ___________________________________
+  * Driver Currently Loaded: ___________________________________
+  * Firmware Version: ___________________________________
+
+- NIC 2 Model: ___________________________________
+  * MAC Address: ___________________________________
+  * Speed Capability: ___________________________________
+
+- NIC 3 Model: ___________________________________
+  * MAC Address: ___________________________________
+  * Speed Capability: ___________________________________
+
+- NIC 4 Model: ___________________________________
+  * MAC Address: ___________________________________
+  * Speed Capability: ___________________________________
+
+Server 2 - Network Interfaces:
+[Repeat above]
+
+2.4 FIRMWARE INFORMATION
+------------------------
+Current firmware versions (to be updated):
+- BIOS/UEFI Version: ___________________________________
+- HBA Firmware Version: ___________________________________
+- NIC Firmware Version(s): ___________________________________
+- RAID Controller Firmware (if any): ___________________________________
+
+Are you able to update firmware during maintenance window? YES / NO
+
+================================================================================
+SECTION 3: SAN STORAGE CONFIGURATION
+================================================================================
+
+3.1 STORAGE ARRAY INFORMATION
+-----------------------------
+- Storage Array Vendor: ___________________________________
+- Storage Array Model: ___________________________________
+- Storage Array Serial Number: ___________________________________
+- Array Management IP/Hostname: ___________________________________
+- Array Firmware Version: ___________________________________
+
+3.2 FIBRE CHANNEL CONNECTIVITY
+------------------------------
+- Number of FC paths desired:
+  * Single Path: ☐
+  * Dual Path (Redundant): ☐
+  * Multi-Path with ALUA: ☐
+
+- FC Switch Vendor: ___________________________________
+- FC Switch Model: ___________________________________
+- Switch Port Numbers (Server 1, Port 1): ___________________________________
+- Switch Port Numbers (Server 1, Port 2): ___________________________________
+- Switch Port Numbers (Server 2, Port 1): ___________________________________
+- Switch Port Numbers (Server 2, Port 2): ___________________________________
+
+3.3 LUN ALLOCATION DETAILS
+--------------------------
+For each server, please confirm LUN allocation:
+
+Server 1:
+- Required Boot LUN Size: ___________________________________
+- Required RAID Level: ___________________________________
+- LUN ID Assigned by Array: ___________________________________
+- LUN WWID/Serial Number: ___________________________________
+- LUN Name: ___________________________________
+- Allocated by Storage Team? YES / NO
+- Date Allocated: ___________________________________
+
+Server 2:
+[Repeat above]
+
+3.4 SAN ZONING CONFIGURATION
+----------------------------
+Has FC zoning been configured? YES / NO
+
+If YES, please provide:
+- Zone Name(s): ___________________________________
+- Zone Members: ___________________________________
+- Zone Status (Active/Inactive): ___________________________________
+- Zoning Done by: ___________________________________
+- Date Completed: ___________________________________
+
+If NO, can your team configure zoning? YES / NO / Requires 3rd Party
+
+3.5 LUN MASKING/MAPPING STATUS
+------------------------------
+Has LUN masking been configured? YES / NO
+
+If YES, please provide:
+- Host Group/Initiator Group Name: ___________________________________
+- WWPNs in Group: ___________________________________
+- Mapped LUN Numbers: ___________________________________
+- Mapping Verified? YES / NO
+- Date Completed: ___________________________________
+
+If NO, can your team perform LUN masking? YES / NO / Requires 3rd Party
+
+3.6 STORAGE CONNECTIVITY VERIFICATION
+-------------------------------------
+Have the following been verified?
+
+☐ Server can see SAN fabric (link lights on HBA)
+☐ HBA can detect storage array target ports
+☐ LUN is visible from storage array management interface
+☐ Multi-path verification (if applicable)
+☐ No zoning conflicts
+☐ No LUN masking issues
+
+Verified by: ___________________________________
+Verified Date: ___________________________________
+
+================================================================================
+SECTION 4: NETWORK CONFIGURATION REQUIREMENTS
+================================================================================
+
+4.1 NETWORK TOPOLOGY
+-------------------
+How many separate networks do you require?
+
+☐ Single Network (Management + Production + Storage combined)
+☐ Dual Network (Separate Management and Production)
+☐ Multiple Networks (Segmented by function):
+  ☐ Management Network
+  ☐ Production Network
+  ☐ Storage Network
+  ☐ Backup Network
+  ☐ Other (specify): ___________________________________
+
+4.2 MANAGEMENT NETWORK CONFIGURATION
+------------------------------------
+Network Name: Management Network
+
+IP Address Scheme:
+- Subnet: ___________________________________
+- VLAN ID: ___________________________________
+- Gateway: ___________________________________
+- Primary DNS: ___________________________________
+- Secondary DNS: ___________________________________
+- Search Domain(s): ___________________________________
+
+Server 1 Management IP Details:
+- IP Address: ___________________________________
+- Hostname: ___________________________________
+- NIC to Use: ___________________________________
+- Bond or Single Interface: ___________________________________
+
+Server 2 Management IP Details:
+- IP Address: ___________________________________
+- Hostname: ___________________________________
+- NIC to Use: ___________________________________
+- Bond or Single Interface: ___________________________________
+
+4.3 PRODUCTION NETWORK CONFIGURATION
+-----------------------------------
+Network Name: Production Network
+
+IP Address Scheme:
+- Subnet: ___________________________________
+- VLAN ID: ___________________________________
+- Gateway: ___________________________________
+
+Server 1 Production IP Details:
+- Primary IP Address: ___________________________________
+- Bonding Required: YES / NO
+- If YES, which NICs: ___________________________________
+- Bond Mode (802.3ad/Active-Backup): ___________________________________
+
+Server 2 Production IP Details:
+- Primary IP Address: ___________________________________
+- Bonding Required: YES / NO
+- If YES, which NICs: ___________________________________
+
+4.4 STORAGE NETWORK CONFIGURATION
+--------------------------------
+Network Name: Storage Network
+
+IP Address Scheme:
+- Subnet: ___________________________________
+- VLAN ID: ___________________________________
+- Gateway (if needed): ___________________________________
+
+Server 1 Storage IP Details:
+- IP Address: ___________________________________
+- Bonding Required: YES / NO
+- If YES, which NICs: ___________________________________
+- Jumbo Frames (MTU 9000): YES / NO
+
+Server 2 Storage IP Details:
+- IP Address: ___________________________________
+- Bonding Required: YES / NO
+- If YES, which NICs: ___________________________________
+
+4.5 BACKUP NETWORK CONFIGURATION (Optional)
+------------------------------------------
+Network Name: Backup Network
+
+IP Address Scheme:
+- Subnet: ___________________________________
+- VLAN ID: ___________________________________
+- Gateway: ___________________________________
+
+Server 1 Backup IP Details:
+- IP Address: ___________________________________
+
+Server 2 Backup IP Details:
+- IP Address: ___________________________________
+
+4.6 NETWORK SWITCH CONFIGURATION
+-------------------------------
+Switch Details:
+
+Management Network Switch:
+- Model: ___________________________________
+- Trunk Configured: YES / NO
+- VLANs Configured: ___________________________________
+- Port Numbers: ___________________________________
+
+Production Network Switch:
+- Model: ___________________________________
+- Link Aggregation/Port-Channel: YES / NO
+- Port-Channel ID: ___________________________________
+- LACP Enabled: YES / NO
+- Port Numbers: ___________________________________
+
+Storage Network Switch:
+- Model: ___________________________________
+- Link Aggregation/Port-Channel: YES / NO
+- Port-Channel ID: ___________________________________
+- Port Numbers: ___________________________________
+
+Has your network team verified switch configuration? YES / NO
+Verified by: ___________________________________
+Date: ___________________________________
+
+================================================================================
+SECTION 5: DNS AND NAMING REQUIREMENTS
+================================================================================
+
+5.1 DNS SERVER INFORMATION
+--------------------------
+Primary DNS Server:
+- Hostname/IP: ___________________________________
+- Port: ___________________________________
+
+Secondary DNS Server:
+- Hostname/IP: ___________________________________
+- Port: ___________________________________
+
+Tertiary DNS Server (Optional):
+- Hostname/IP: ___________________________________
+
+5.2 DOMAIN NAME INFORMATION
+---------------------------
+Primary Domain: ___________________________________
+DNS Search Domains: ___________________________________
+                    ___________________________________
+
+5.3 DNS RECORD CREATION
+-----------------------
+Will your DNS administrator create the following records?
+
+Server 1:
+- A Record (main): ___________________________________
+  Created: YES / NO / Date: _______________
+  
+- A Record (management VLAN): ___________________________________
+  Created: YES / NO / Date: _______________
+  
+- A Record (storage VLAN): ___________________________________
+  Created: YES / NO / Date: _______________
+  
+- PTR Record: ___________________________________
+  Created: YES / NO / Date: _______________
+
+Server 2:
+[Repeat above]
+
+DNS Records Verified: YES / NO
+Verified by: ___________________________________
+Date: ___________________________________
+
+================================================================================
+SECTION 6: NTP/TIME SYNCHRONIZATION
+================================================================================
+
+6.1 NTP SERVER CONFIGURATION
+---------------------------
+Primary NTP Server: ___________________________________
+Secondary NTP Server: ___________________________________
+Tertiary NTP Server (Optional): ___________________________________
+
+Time Zone for Servers: ___________________________________
+Network supports NTP UDP port 123: YES / NO
+
+6.2 NTP ACCESSIBILITY
+---------------------
+Can servers access NTP servers from current network location? YES / NO
+If NO, firewall rules needed? YES / NO
+
+NTP Configuration verified by: ___________________________________
+Date: ___________________________________
+
+================================================================================
+SECTION 7: FIREWALL AND SECURITY
+================================================================================
+
+7.1 FIREWALL REQUIREMENTS
+------------------------
+Will the servers be protected by:
+☐ Hardware Firewall
+☐ Software Firewall (firewalld on Linux)
+☐ Both
+
+7.2 REQUIRED INBOUND PORTS
+--------------------------
+Please indicate which ports need to be open for your environment:
+
+Management Access:
+☐ SSH (22/tcp) - From: ___________________________________
+☐ Cockpit (9090/tcp) - From: ___________________________________
+☐ SNMP (161/udp) - From: ___________________________________
+☐ IPMI/iLO/iDRAC (varies) - Port: ___________________________________
+
+Application Specific (please list):
+☐ HTTP (80/tcp) - From: ___________________________________
+☐ HTTPS (443/tcp) - From: ___________________________________
+☐ Custom Port: ___________________________________
+☐ Custom Port: ___________________________________
+☐ Custom Port: ___________________________________
+
+7.3 OUTBOUND REQUIREMENTS
+------------------------
+Please confirm servers need outbound access to:
+☐ DNS (53/tcp, 53/udp) - To: ___________________________________
+☐ NTP (123/udp) - To: ___________________________________
+☐ HTTP/HTTPS (80/tcp, 443/tcp) - For package updates
+☐ Syslog (514/tcp, 514/udp) - To: ___________________________________
+☐ Email/SMTP (25/tcp) - To: ___________________________________
+☐ SNMP Trap (162/udp) - To: ___________________________________
+☐ Other: ___________________________________
+
+7.4 SELINUX POLICY
+-----------------
+SELinux Configuration Preference:
+☐ Enforcing (Recommended - strict security)
+☐ Permissive (Logging only)
+☐ Disabled (Not recommended)
+
+SELinux Policy Decision by: ___________________________________
+Date: ___________________________________
+
+7.5 AUTHENTICATION REQUIREMENTS
+------------------------------
+Will servers use:
+☐ Local Authentication (local users only)
+☐ LDAP/Active Directory
+☐ Kerberos
+☐ Other: ___________________________________
+
+If using centralized authentication:
+- Server Name/IP: ___________________________________
+- Port: ___________________________________
+- Base DN: ___________________________________
+- Search Domain: ___________________________________
+
+Has centralized auth been tested from this network? YES / NO
+
+================================================================================
+SECTION 8: MONITORING AND MANAGEMENT
+================================================================================
+
+8.1 MONITORING AGENTS
+--------------------
+Will you require monitoring agents installed?
+
+☐ Zabbix Agent
+☐ Nagios/Icinga
+☐ Splunk Forwarder
+☐ ELK Stack
+☐ DataDog
+☐ New Relic
+☐ Other: ___________________________________
+
+Monitoring Server/Collector IP: ___________________________________
+Port: ___________________________________
+Credentials Required: YES / NO
+
+8.2 LOG AGGREGATION
+-------------------
+Will logs be sent to a central log server?
+
+☐ Yes, to: ___________________________________
+  Port: ___________________________________
+  Protocol: ☐ Syslog ☐ JSON ☐ Splunk ☐ Other
+
+☐ No, local logging only
+
+8.3 CONFIGURATION MANAGEMENT
+----------------------------
+Will systems be managed by configuration management tools?
+
+☐ Ansible
+☐ Puppet
+☐ Chef
+☐ SaltStack
+☐ Other: ___________________________________
+☐ None
+
+If YES, please provide:
+- Management Server: ___________________________________
+- Configuration details: ___________________________________
+
+================================================================================
+SECTION 9: BACKUP AND DISASTER RECOVERY
+================================================================================
+
+9.1 BACKUP REQUIREMENTS
+-----------------------
+Backup Solution in Use: ___________________________________
+
+Full System Backup Required: YES / NO
+Backup Schedule: ___________________________________
+Backup Retention: ___________________________________
+
+Backup Agent Already Installed: YES / NO
+Backup Agent Version: ___________________________________
+
+Backup Server Details:
+- IP/Hostname: ___________________________________
+- Port: ___________________________________
+- Credentials: Will be provided separately ___________________________________
+
+9.2 SNAPSHOT REQUIREMENTS
+------------------------
+Will SAN snapshots be taken before installation? YES / NO
+
+If YES:
+- Snapshot Name Convention: ___________________________________
+- Snapshot Retention: ___________________________________
+- Snapshot Created by: ___________________________________
+- Date Snapshot Created: ___________________________________
+
+================================================================================
+SECTION 10: OPERATING SYSTEM REQUIREMENTS
+================================================================================
+
+10.1 RHEL-9.7 INSTALLATION MEDIA
+--------------------------------
+Do you have RHEL-9.7 ISO available?
+
+☐ Yes - Location: ___________________________________
+☐ No - We will provide it
+☐ ISO checksum for validation: ___________________________________
+
+10.2 RED HAT SUBSCRIPTION
+------------------------
+Red Hat Subscription Method:
+☐ Subscription Manager (with valid login)
+☐ Activation Key: ___________________________________
+☐ Disconnected (air-gapped environment)
+
+Red Hat Credentials:
+- Username: ___________________________________
+- Organization: ___________________________________
+
+10.3 ADDITIONAL PACKAGES
+------------------------
+Will additional packages/repositories be required?
+
+☐ Yes, please list:
+  Package 1: ___________________________________
+  Package 2: ___________________________________
+  Package 3: ___________________________________
+  Custom Repository URL: ___________________________________
+
+☐ No, standard RHEL-9.7 packages sufficient
+
+10.4 PARTITIONING REQUIREMENTS
+------------------------------
+Preferred Partitioning Scheme:
+☐ Automatic (installer default)
+☐ Custom - Please specify sizes:
+  /boot: ___________________________________
+  /boot/efi: ___________________________________
+  /: ___________________________________
+  /home: ___________________________________
+  /var: ___________________________________
+  /tmp: ___________________________________
+  swap: ___________________________________
+
+Encryption Required: YES / NO
+If YES, encryption type: ___________________________________
+
+================================================================================
+SECTION 11: MAINTENANCE WINDOW
+================================================================================
+
+11.1 INSTALLATION SCHEDULE
+--------------------------
+Proposed Installation Date(s):
+Server 1: ___________________________________
+Server 2: ___________________________________
+
+Maintenance Window:
+- Start Time: ___________________________________
+- End Time: ___________________________________
+- Time Zone: ___________________________________
+- Duration Allowed: ___________________________________
+
+Fallback/Rollback Plan Required: YES / NO
+Rollback Completion Time: ___________________________________
+
+11.2 CHANGE CONTROL
+-------------------
+Change Control Ticket Number(s): ___________________________________
+Change Advisory Board (CAB) Approval Required: YES / NO
+Approval Status: ___________________________________
+Approval Date: ___________________________________
+
+11.3 NOTIFICATION REQUIREMENTS
+-----------------------------
+Who needs to be notified before/during/after installation?
+
+Before Installation:
+- Name/Email: ___________________________________
+- Name/Email: ___________________________________
+
+During Installation:
+- Name/Email: ___________________________________
+- On-Site Contact: ___________________________________
+- Remote Support Contact: ___________________________________
+
+After Installation:
+- Name/Email: ___________________________________
+
+================================================================================
+SECTION 12: ADDITIONAL REQUIREMENTS
+================================================================================
+
+12.1 KDUMP (KERNEL DUMP) CONFIGURATION
+-------------------------------------
+Enable Kdump: YES / NO
+Kdump Reservation (MB): ___________________________________
+Dump Target Location: ___________________________________
+
+12.2 VIRTUALIZATION SUPPORT
+---------------------------
+Will servers run virtual machines? YES / NO
+
+If YES:
+- Hypervisor: ___________________________________
+- KVM/QEMU: YES / NO
+- Containers (Docker/Podman): YES / NO
+
+Enable CPU Virtualization: YES / NO
+Enable IOMMU: YES / NO
+
+12.3 PERFORMANCE REQUIREMENTS
+-----------------------------
+Any specific performance expectations?
+
+- Target Boot Time: ___________________________________
+- Target Network Throughput: ___________________________________
+- Target I/O Throughput: ___________________________________
+- CPU/Memory Performance Baseline: ___________________________________
+
+12.4 COMPLIANCE REQUIREMENTS
+---------------------------
+Any compliance standards required?
+
+☐ PCI-DSS (Payment Card Industry)
+☐ HIPAA (Healthcare)
+☐ SOC 2 (Service Organization Control)
+☐ NIST (National Institute of Standards)
+☐ FIPS 140-2 (Cryptography)
+☐ Other: ___________________________________
+
+Compliance Documentation Required: YES / NO
+
+================================================================================
+SECTION 13: DOCUMENTATION AND SUPPORT
+================================================================================
+
+13.1 DOCUMENTATION HANDOVER
+--------------------------
+Please confirm you have/will provide:
+
+☐ Network Topology Diagram
+☐ SAN Storage Layout Diagram
+☐ IP Addressing Spreadsheet
+☐ DNS Records List
+☐ Firewall Rule Documentation
+☐ Switch Configuration Backup
+☐ Hardware Warranty Information
+☐ Software License Information
+
+13.2 KNOWLEDGE TRANSFER
+----------------------
+Training/Knowledge Transfer Required: YES / NO
+
+If YES:
+- Number of Personnel: ___________________________________
+- Training Focus Areas: ___________________________________
+- Post-Installation Support Duration: ___________________________________
+
+13.3 SUPPORT CONTACT
+-------------------
+Post-Installation Support Contact:
+- Name: ___________________________________
+- Email: ___________________________________
+- Phone: ___________________________________
+- Availability: ___________________________________
+
+================================================================================
+SECTION 14: SPECIAL CONSIDERATIONS
+================================================================================
+
+14.1 ENVIRONMENT-SPECIFIC NOTES
+-------------------------------
+Please note any special requirements, restrictions, or considerations:
+
+☐ Air-Gapped/Disconnected Environment
+☐ Special Network Routing Requirements
+☐ Legacy Application Compatibility
+☐ Third-Party Integration Required
+☐ Special Performance Tuning Needed
+☐ Compliance/Audit Requirements
+
+Details: 
+_________________________________________________________________
+_________________________________________________________________
+_________________________________________________________________
+
+14.2 KNOWN ISSUES OR LIMITATIONS
+-------------------------------
+Are there any known issues with your current environment?
+
+_________________________________________________________________
+_________________________________________________________________
+_________________________________________________________________
+
+14.3 VENDOR CONTACTS
+-------------------
+In case of vendor-specific issues:
+
+HBA Vendor Support Contact:
+- Company: ___________________________________
+- Case Number (if applicable): ___________________________________
+- Contact: ___________________________________
+
+Storage Array Vendor Support:
+- Company: ___________________________________
+- Case Number (if applicable): ___________________________________
+- Contact: ___________________________________
+
+Network Switch Support:
+- Company: ___________________________________
+- Contact: ___________________________________
+
+================================================================================
+SECTION 15: SIGN-OFF AND VERIFICATION
+================================================================================
+
+15.1 PRE-REQUISITES CHECKLIST
+----------------------------
+Please verify that all required information has been provided:
+
+☐ Server specifications complete
+☐ HBA information provided
+☐ NIC specifications documented
+☐ SAN storage allocation confirmed
+☐ FC zoning configured
+☐ LUN masking configured
+☐ Network configuration details provided
+☐ DNS configuration confirmed
+☐ Firewall requirements defined
+☐ Monitoring requirements specified
+☐ Maintenance window scheduled
+☐ Change control approval obtained
+☐ Backup/snapshot plan confirmed
+☐ All contact information provided
+
+15.2 INFORMATION ACCURACY CONFIRMATION
+-------------------------------------
+I certify that the information provided above is accurate and complete to the 
+best of my knowledge.
+
+Customer Representative Name (Print): ___________________________________
+
+Customer Representative Title: ___________________________________
+
+Customer Representative Signature: ___________________________________
+
+Date: ___________________________________
+
+Email: ___________________________________
+
+Phone: ___________________________________
+
+Installation Team Acknowledgment:
+
+Installation Team Lead Name: ___________________________________
+
+Installation Team Signature: ___________________________________
+
+Date Received: ___________________________________
+
+Date All Information Confirmed: ___________________________________
+
+================================================================================
+SECTION 16: DOCUMENT VERSION AND CHANGES
+================================================================================
+
+Document Version: RHEL-9.7 SAN Boot on DS-120 - Pre-Requisites V1.0
+Created Date: ___________________________________
+Last Updated: ___________________________________
+
+Changes/Addendums:
+Date: _____________ Change: _____________________________________________
+Date: _____________ Change: _____________________________________________
+Date: _____________ Change: _____________________________________________
+
+================================================================================
+SECTION 17: SUBMISSION INSTRUCTIONS
+================================================================================
+
+PLEASE RETURN THIS COMPLETED FORM TO:
+
+Email: support@company.com
+Subject: RHEL-9.7 SAN Boot Pre-Requisites - [Customer Name] - [Date]
+
+Attachments Required:
+1. This completed pre-requisites form
+2. Network topology diagram (if available)
+3. SAN storage layout diagram (if available)
+4. IP addressing spreadsheet
+5. Firewall rule documentation (if applicable)
+6. Any vendor documentation specific to your environment
+
+DEADLINE FOR SUBMISSION: [INSERT DATE]
+
+If you need an extension or have questions, please contact:
+Name: ___________________________________
+Email: ___________________________________
+Phone: ___________________________________
+
+================================================================================
+ADDITIONAL NOTES
+================================================================================
+
+IMPORTANT REMINDERS:
+
+1. All information must be complete before installation can proceed.
+2. Network switch and SAN storage teams must confirm their configurations.
+3. Change control approval is mandatory in most environments.
+4. Have a rollback plan in place before the installation window.
+5. Ensure adequate backup/snapshots are taken before installation.
+6. Keep all documentation for future reference and audits.
+7. Notify all relevant stakeholders of the installation schedule.
+8. Ensure proper access and credentials are available during installation.
+9. Have remote access tools configured and tested before the window.
+10. Perform thorough testing in a non-production environment first.
+
+================================================================================
+SUPPORT RESOURCES
+================================================================================
+
+For technical questions regarding RHEL-9.7 installation:
+- Red Hat Enterprise Linux 9 Documentation: 
+  https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/
+
+For DS-120 specific documentation:
+- Contact your server vendor for driver downloads and documentation
+
+For SAN configuration:
+- Contact your storage vendor's support team
+
+For network configuration:
+- Contact your network administrator or network team
+
+For general support:
+- Email: support@company.com
+- Phone: [Support Phone Number]
+- Hours: [Support Hours]
+
+================================================================================
+
+Thank you for providing the required information. We look forward to a successful 
+installation of RHEL-9.7 on your DS-120 servers with boot from SAN.
+
+Best regards,
+
+[Your Name]
+[Your Title]
+[Company Name]
+[Contact Information]
+[Date]
+
+================================================================================
