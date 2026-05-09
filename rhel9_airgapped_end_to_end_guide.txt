@@ -1,0 +1,306 @@
+END-TO-END GUIDE
+How to Install RHEL 9 in a Disconnected/Air-Gapped Environment
+================================================================
+
+TABLE OF CONTENTS
+-----------------
+1. What is Air-Gapped Installation
+2. Requirements
+3. Download RHEL 9 ISO
+4. Create Bootable USB
+5. BIOS/UEFI Boot Configuration
+6. Install RHEL 9
+7. Select Disconnected/Air-Gapped
+8. Configure Storage
+9. Configure Network
+10. Create User and Root Password
+11. Begin Installation
+12. First Boot
+13. Mount ISO Locally
+14. Configure Offline Repositories
+15. Verify DNF Repositories
+16. Install Packages Offline
+17. Optional Internal Repository Server
+18. Troubleshooting
+19. Useful Commands
+
+
+1. WHAT IS AIR-GAPPED INSTALLATION
+----------------------------------
+Disconnected/Air-Gapped means:
+- The server has NO internet access.
+- The system cannot reach Red Hat CDN or RHSM servers.
+- Packages and updates are installed from:
+  - ISO images
+  - Internal repositories
+  - USB/DVD media
+  - Local repository servers
+
+Typical environments:
+- Government
+- Banking
+- Secure datacenters
+- Military
+- Factory production networks
+
+
+2. REQUIREMENTS
+---------------
+You need:
+- Valid Red Hat subscription
+- Another internet-connected system to download ISO
+- USB drive (16GB recommended)
+- Target server/VM
+- RHEL 9 DVD ISO
+
+
+3. DOWNLOAD RHEL 9 ISO
+----------------------
+From internet-connected machine:
+
+Official site:
+https://access.redhat.com/downloads
+
+Download:
+rhel-9.x-x86_64-dvd.iso
+
+
+4. CREATE BOOTABLE USB
+----------------------
+
+LINUX:
+------
+Find USB device:
+lsblk
+
+Write ISO:
+sudo dd if=rhel-9.iso of=/dev/sdX bs=4M status=progress oflag=sync
+
+Replace:
+sdX = your USB device
+
+WINDOWS:
+--------
+Use tools:
+- Rufus
+- Balena Etcher
+
+
+5. BIOS/UEFI BOOT CONFIGURATION
+-------------------------------
+1. Insert USB
+2. Reboot server
+3. Open BIOS/Boot Menu
+4. Select USB boot device
+5. Start RHEL installer
+
+
+6. INSTALL RHEL 9
+-----------------
+At boot menu select:
+
+Install Red Hat Enterprise Linux 9
+
+
+7. SELECT DISCONNECTED/AIR-GAPPED
+---------------------------------
+During installation:
+
+Subscription Method:
+( ) Red Hat Login Credentials
+( ) Activation Key
+(✓) Disconnected/Air-Gapped
+
+Select:
+Disconnected/Air-Gapped
+
+This disables online subscription checks.
+
+
+8. CONFIGURE STORAGE
+--------------------
+Choose:
+- Automatic partitioning
+OR
+- Custom partitioning
+
+Recommended minimum:
+- /boot = 1 GB
+- / = 20+ GB
+- swap = based on RAM
+
+
+9. CONFIGURE NETWORK
+--------------------
+Air-gapped systems usually:
+- Use internal network only
+OR
+- No network at all
+
+Optional:
+Configure static IP if internal repository server exists.
+
+
+10. CREATE USER AND ROOT PASSWORD
+---------------------------------
+Set:
+- Root password
+- Admin user account
+
+
+11. BEGIN INSTALLATION
+----------------------
+Click:
+Begin Installation
+
+Wait until installation completes.
+
+Then reboot.
+
+
+12. FIRST BOOT
+--------------
+Login using:
+- root
+OR
+- created user
+
+Verify OS:
+cat /etc/redhat-release
+
+
+13. MOUNT ISO LOCALLY
+---------------------
+Create mount point:
+mkdir -p /mnt/rhel9
+
+Mount ISO:
+mount -o loop rhel-9.iso /mnt/rhel9
+
+OR DVD:
+mount /dev/cdrom /mnt/rhel9
+
+
+14. CONFIGURE OFFLINE REPOSITORIES
+----------------------------------
+Create repository file:
+
+vi /etc/yum.repos.d/rhel9-local.repo
+
+Add:
+
+[BaseOS]
+name=RHEL9 BaseOS
+baseurl=file:///mnt/rhel9/BaseOS
+enabled=1
+gpgcheck=0
+
+[AppStream]
+name=RHEL9 AppStream
+baseurl=file:///mnt/rhel9/AppStream
+enabled=1
+gpgcheck=0
+
+
+15. VERIFY DNF REPOSITORIES
+---------------------------
+Clean cache:
+dnf clean all
+
+Verify:
+dnf repolist
+
+Expected output:
+BaseOS
+AppStream
+
+
+16. INSTALL PACKAGES OFFLINE
+----------------------------
+Examples:
+
+Install Apache:
+dnf install httpd
+
+Install vim:
+dnf install vim
+
+Install net-tools:
+dnf install net-tools
+
+
+17. OPTIONAL INTERNAL REPOSITORY SERVER
+---------------------------------------
+Large enterprises usually create:
+- Internal yum repositories
+- Satellite Server
+- Local HTTP package servers
+
+Typical architecture:
+
+Internet Zone
+      |
+      v
+Patch Download Server
+      |
+(manual transfer)
+      |
+      v
+Air-Gapped Repo Server
+      |
+      v
+RHEL Servers
+
+
+18. TROUBLESHOOTING
+-------------------
+
+Problem:
+"No repositories available"
+
+Solution:
+- Verify ISO mounted correctly
+- Verify repo file path
+- Run:
+  dnf clean all
+
+
+Problem:
+"Cannot find package"
+
+Solution:
+- Package may not exist in mounted ISO
+- Check AppStream enabled
+
+
+Problem:
+"Mount failed"
+
+Solution:
+- Verify ISO path
+- Verify loop module loaded
+
+
+19. USEFUL COMMANDS
+-------------------
+
+Check mounted ISO:
+mount | grep rhel
+
+List repositories:
+dnf repolist
+
+Check OS version:
+cat /etc/redhat-release
+
+Check disk:
+lsblk
+
+Check network:
+ip addr
+
+Check hostname:
+hostnamectl
+
+
+END OF DOCUMENT
