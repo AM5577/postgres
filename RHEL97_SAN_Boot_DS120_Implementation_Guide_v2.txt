@@ -1,0 +1,3937 @@
+================================================================================
+                    PRODUCTION-GRADE IMPLEMENTATION GUIDE
+      RHEL 9.7 Installation on Hitachi DS120 with SAN Boot from Hitachi Storage
+                          via BMC Remote Management
+================================================================================
+
+Document Version: 1.1 (Consolidated)
+Last Updated: 2024
+Classification: Internal - Production Infrastructure
+Change Control: Requires CAB Approval
+
+================================================================================
+DOCUMENT CONTROL
+================================================================================
+
++----------+------+------------------+-------------------------------------------+
+| Version  | Date | Author           | Changes                                   |
++----------+------+------------------+-------------------------------------------+
+| 1.0      | 2024 | Infrastructure   | Initial Production Release                |
+|          |      | Team             |                                           |
+| 1.1      | 2024 | Infrastructure   | Consolidated; added missing sections:     |
+|          |      | Team             | GRUB repair, UEFI shell, dracut options,  |
+|          |      |                  | subscription offline, chrony detail,      |
+|          |      |                  | tuned profiles, AIDE, rsyslog remote,     |
+|          |      |                  | kdump, emergency boot, LUN expansion,     |
+|          |      |                  | NIC rename, host-based IDS notes          |
++----------+------+------------------+-------------------------------------------+
+
+APPROVAL MATRIX
+---------------
+
++---------------------------+-------------+-------------+------------+
+| Role                      | Name        | Signature   | Date       |
++---------------------------+-------------+-------------+------------+
+| Linux Infrastructure Lead | ___________ | ___________ | __________ |
+| Storage Architect         | ___________ | ___________ | __________ |
+| Network Architect         | ___________ | ___________ | __________ |
+| Security Team Lead        | ___________ | ___________ | __________ |
+| Change Advisory Board     | ___________ | ___________ | __________ |
++---------------------------+-------------+-------------+------------+
+
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+ 1.  Architecture Overview
+ 2.  Hardware and Software Prerequisites
+ 3.  SAN Storage Preparation
+ 4.  FC Switch Zoning Configuration
+ 5.  LUN Provisioning and Masking
+ 6.  HBA BIOS Configuration for SAN Boot
+ 7.  BIOS and BMC Configuration
+ 8.  Remote Installation using BMC Virtual Media
+ 9.  RHEL 9.7 Installation Procedure
+10.  Storage Partitioning and Mount Point Standards
+11.  Multipath Configuration
+12.  Network Configuration and Bonding
+13.  Security Hardening
+14.  Post-Installation Validation
+15.  Additional Post-Install Configuration  [** NEW / EXPANDED **]
+16.  Rollback Procedure
+17.  Production Acceptance Checklist
+18.  Operational Handover Checklist
+19.  Troubleshooting Guide
+20.  Appendices
+
+
+================================================================================
+SECTION 1: ARCHITECTURE OVERVIEW
+================================================================================
+
+1.1 SOLUTION ARCHITECTURE
+--------------------------
+
+                     Production Infrastructure
+
+    +------------------+                    +------------------+
+    | Management       |                    | Production       |
+    | Network          |                    | Network          |
+    | (BMC/iLO/IPMI)   |                    | (Data Traffic)   |
+    | 10.10.10.0/24    |                    | 192.168.100.0/24 |
+    +--------+---------+                    +--------+---------+
+             |                                       |
+      +------v---------------------------------------v------+
+      |         Hitachi DS120 Rack Server                   |
+      |  +-------+  +-------+  +--------+  +-------+        |
+      |  |  BMC  |  |  NIC  |  |  NIC   |  |  HBA  |        |
+      |  | iLO/  |  | Port  |  | Port   |  | Dual  |        |
+      |  | IPMI  |  |   1   |  |   2    |  | Port  |        |
+      |  +---+---+  +---+---+  +---+----+  +---+---+        |
+      +------+----------+----------+-----------+-------------+
+             |          |          |           |
+      +------v------+  +-----v-----+   +-------v-----------+
+      | Management  |  |  Network  |   |  FC SAN Fabric    |
+      |   Switch    |  |  Switches |   |  Dual Fabric      |
+      +-------------+  +-----------+   +-------+-----------+
+                                               |
+                                    +----------+----------+
+                                    |                     |
+                             +------v------+      +-------v-----+
+                             | FC Switch A |      | FC Switch B |
+                             | (Fabric A)  |      | (Fabric B)  |
+                             +------+------+      +------+------+
+                                    |                    |
+                                    +----------+---------+
+                                               |
+                                       +-------v--------+
+                                       | Hitachi VSP    |
+                                       | Storage Array  |
+                                       | Boot LUN 600GB |
+                                       +----------------+
+
+1.2 COMPONENT RESPONSIBILITIES
+-------------------------------
+
++------------------+----------------------------------------+----------------+
+| Component        | Purpose                                | Redundancy     |
++------------------+----------------------------------------+----------------+
+| Hitachi DS120    | Compute host for production workloads  | N/A            |
+| BMC/iLO          | Remote server management, virtual media| Single point   |
+| Dual HBA Ports   | Fibre Channel connectivity to SAN      | Dual-fabric    |
+| FC Switch Fabric | Primary SAN fabric                     | Active-Active  |
+| Hitachi Storage  | Enterprise storage provisioning        | RAID-protected |
+| Boot LUN         | OS installation target (SAN boot)      | RAID 10        |
+| Network Bonding  | Network redundancy and aggregation     | Active-Backup  |
++------------------+----------------------------------------+----------------+
+
+1.3 BOOT PROCESS FLOW
+----------------------
+
+Server Power On
+     |
+     v
+UEFI Firmware Initialization
+     |
+     v
+Secure Boot Validation
+     |
+     v
+HBA Option ROM Load
+     |
+     v
+FC Fabric Login (Both Fabrics)
+     |
+     v
+WWPN/LUN Discovery
+     |
+     v
+Boot LUN Selection (Primary Path)
+     |
+     v
+GRUB2 Bootloader (from /boot on SAN)
+     |
+     v
+Kernel Load with initramfs
+     |
+     v
+dracut initramfs execution
+     |
+     v
+Multipath daemon initialization
+     |
+     v
+Root filesystem mount (LVM on SAN LUN)
+     |
+     v
+systemd initialization
+     |
+     v
+OS Boot Complete
+
+1.4 DESIGN CONSIDERATIONS
+--------------------------
+
+HIGH AVAILABILITY:
+  - Dual FC HBA ports for path redundancy
+  - Dual FC fabric connectivity (no single point of failure)
+  - Multipath I/O (MPIO) for automatic path failover
+  - Network bonding for NIC redundancy
+
+PERFORMANCE:
+  - FC 16Gb/32Gb link speed
+  - RAID 10 for boot LUN (optimal performance and protection)
+  - XFS filesystem for all mount points
+  - LVM for flexible storage management
+
+SECURITY:
+  - UEFI Secure Boot enabled
+  - SELinux enforcing mode
+  - Firewalld enabled with minimal ruleset
+  - SSH hardening (key-based auth, protocol v2)
+  - LUN masking to prevent unauthorized access
+  - Zoning to isolate server HBA WWPNs
+
+COMPLIANCE:
+  - Production partitioning standards enforced
+  - Audit logging to dedicated partition
+  - Centralized time synchronization (chrony)
+  - Comprehensive logging (rsyslog + journald)
+
+
+================================================================================
+SECTION 2: HARDWARE AND SOFTWARE PREREQUISITES
+================================================================================
+
+2.1 HITACHI DS120 SERVER SPECIFICATIONS
+----------------------------------------
+
+MINIMUM REQUIREMENTS:
+
++----------------+--------------------------------+------------------------+
+| Component      | Specification                  | Verification Command   |
++----------------+--------------------------------+------------------------+
+| CPU            | Intel Xeon, 64-bit             | lscpu (post-install)   |
+| RAM            | 32 GB min (64 GB recommended)  | free -h                |
+| HBA            | Dual-port FC 16Gb or higher    | lspci | grep -i fibre  |
+| Firmware       | BIOS/UEFI latest stable        | BMC Web Interface      |
+| BMC            | iLO 5 or equivalent            | BMC Web Interface      |
+| Network        | Dual 1GbE or 10GbE NICs        | ip link                |
++----------------+--------------------------------+------------------------+
+
+PRE-INSTALLATION HARDWARE VERIFICATION:
+  Access BMC/iLO interface: https://10.10.10.100
+  Document the following:
+    - Server Model and Serial Number: _______________
+    - BIOS Version: _______________
+    - BMC Firmware Version: _______________
+    - Network MAC Addresses: _______________
+    - FC HBA WWPNs (both ports):
+        HBA Port 0: 50:01:43:80:12:34:56:78
+        HBA Port 1: 50:01:43:80:12:34:56:79
+
+2.2 FC HBA REQUIREMENTS AND FIRMWARE
+--------------------------------------
+
+SUPPORTED HBA MODELS (Examples):
+  - Emulex LPe31002 (16Gb Dual-port)
+  - Emulex LPe35002 (32Gb Dual-port)
+  - QLogic QLE2692 (16Gb Dual-port)
+  - QLogic QLE2742 (32Gb Dual-port)
+
+FIRMWARE COMPATIBILITY MATRIX:
+
++------------------+------------------+----------------------+--------------+
+| HBA Model        | Min Firmware     | Recommended Firmware | RHEL 9.7     |
++------------------+------------------+----------------------+--------------+
+| Emulex LPe31002  | 12.2.x           | 14.0.x               | inbox lpfc   |
+| QLogic QLE2692   | 8.08.x           | 8.10.x               | inbox qla2xxx|
++------------------+------------------+----------------------+--------------+
+
+2.3 SOFTWARE REQUIREMENTS
+--------------------------
+
+  RHEL 9.7 ISO: Download from https://access.redhat.com
+  Verify SHA256 checksum before use.
+
+  Required subscriptions:
+    subscription-manager register --username <u> --password <p>
+    subscription-manager attach --pool=<pool_id>
+    subscription-manager repos --enable=rhel-9-for-x86_64-baseos-rpms
+    subscription-manager repos --enable=rhel-9-for-x86_64-appstream-rpms
+
+  Key packages (installed post-OS):
+    dnf install -y device-mapper-multipath sg3_utils lsscsi chrony \
+      tuned rsyslog audit vim wget curl net-tools bind-utils tcpdump
+
+2.4 NETWORK REQUIREMENTS
+--------------------------
+
+IP ADDRESSING PLAN:
+
++------------+----------------------+------+-----------------+--------------+
+| Interface  | Purpose              | VLAN | IP Range        | Gateway      |
++------------+----------------------+------+-----------------+--------------+
+| BMC/iLO    | Out-of-band mgmt     | 10   | 10.10.10.0/24   | 10.10.10.1   |
+| bond0      | Production network   | 100  | 192.168.100.0/24| 192.168.100.1|
+| bond0:0    | Management VLAN      | 50   | 10.20.50.0/24   | 10.20.50.1   |
++------------+----------------------+------+-----------------+--------------+
+
+DNS AND NTP:
+  DNS Primary:   10.10.10.53
+  DNS Secondary: 10.10.10.54
+  NTP Primary:   ntp1.example.com
+  NTP Secondary: ntp2.example.com
+
+2.5 STORAGE REQUIREMENTS
+--------------------------
+
++------------------+------------------------------------------+
+| Parameter        | Requirement                              |
++------------------+------------------------------------------+
+| FC Speed         | 16Gb or 32Gb                             |
+| Fabric Type      | Dual-fabric (A and B)                    |
+| Zoning           | Single initiator, single target per zone |
+| Boot LUN Size    | 600 GB minimum                           |
+| Boot LUN RAID    | RAID 10 (recommended)                    |
+| Storage Array    | Hitachi VSP or compatible                |
++------------------+------------------------------------------+
+
+LUN LAYOUT:
+  LUN 0: 600 GB - OS Boot LUN - RAID 10
+  LUN 1+: Variable - Application data - Per app requirement
+
+2.6 PRE-IMPLEMENTATION CHECKLIST
+---------------------------------
+
+[ ] 1. Server Hardware Verification
+    - Model: Hitachi DS120
+    - Serial number documented: _______________
+    - RAM: _____ GB
+    - CPU model: _______________
+
+[ ] 2. BMC/iLO Access
+    - BMC IP: _______________
+    - Credentials tested: YES/NO
+    - Virtual media support verified: YES/NO
+    - Remote console tested: YES/NO
+
+[ ] 3. FC HBA Verification
+    - HBA model: _______________
+    - HBA firmware version: _______________
+    - Port 0 WWPN: _______________
+    - Port 1 WWPN: _______________
+    - WWPNs in CMDB: YES/NO
+
+[ ] 4. Network Configuration
+    - Management IP reserved: _______________
+    - Production IP reserved: _______________
+    - DNS entries created: YES/NO
+    - VLAN trunk on switch: YES/NO
+
+[ ] 5. Storage Prerequisites
+    - Boot LUN provisioned: YES/NO
+    - Boot LUN ID: _______________
+    - Boot LUN size: _____ GB
+    - LUN masked to server WWPNs: YES/NO
+
+[ ] 6. FC Fabric Zoning
+    - Fabric A zone created: YES/NO
+    - Fabric B zone created: YES/NO
+    - Zoning tested and active: YES/NO
+
+[ ] 7. Software Prerequisites
+    - RHEL 9.7 ISO downloaded: YES/NO
+    - ISO SHA256 verified: YES/NO
+    - ISO uploaded to BMC virtual media: YES/NO
+    - Red Hat subscription available: YES/NO
+
+[ ] 8. Documentation
+    - Change request approved: CR# _______________
+    - Implementation window scheduled: _______________
+    - Rollback plan reviewed: YES/NO
+    - Stakeholders notified: YES/NO
+
+[ ] 9. Access and Credentials
+    - Storage admin access: YES/NO
+    - FC switch admin access: YES/NO
+    - BMC access: YES/NO
+    - Red Hat portal access: YES/NO
+
+[ ] 10. Backup and Recovery
+    - Boot LUN snapshot capability verified: YES/NO
+    - Rollback procedure documented: YES/NO
+    - Emergency contact list available: YES/NO
+
+
+================================================================================
+SECTION 3: SAN STORAGE PREPARATION
+================================================================================
+
+3.1 HITACHI STORAGE ARRAY CONFIGURATION
+-----------------------------------------
+
+Access Hitachi Storage Navigator or use raidcom CLI.
+
+VERIFY STORAGE POOL:
+  raidcom -login <username> <password>
+  raidcom get pool -key opt
+  # Pool status should be NORMAL
+
+CREATE BOOT LUN (600 GB, RAID 10):
+  raidcom add ldev -pool <pool_id> -ldev_id <next_ldev> \
+    -capacity 600G -emulation OPEN-V -compress disable
+
+  # Example result:
+  # LDEV_ID: 0x0100   CAPACITY: 614400 MB   EMULATION: OPEN-V   STATUS: NML
+
+ENABLE CACHE AND ALUA:
+  raidcom modify ldev -ldev_id 0x0100 -cache enable
+  raidcom modify ldev -ldev_id 0x0100 -cache_mode write_back
+  raidcom modify ldev -ldev_id 0x0100 -read_cache enable
+  raidcom modify ldev -ldev_id 0x0100 -alua enable
+
+VERIFY LUN:
+  raidcom get ldev -ldev_id 0x0100
+
+Document:
+  LDEV ID: _______________ | Capacity: 600 GB | Pool: _______________
+
+3.2 STORAGE CONTROLLER PORT IDENTIFICATION
+-------------------------------------------
+
+  raidcom get port
+
+  Expected format:
+    PORT   TYPE   ATTRIBUTE   SPEED   WWPN
+    CL1-A  FIBRE  TAR         16Gb    50060b0000123456
+    CL1-B  FIBRE  TAR         16Gb    50060b0000123457
+    CL2-A  FIBRE  TAR         16Gb    50060b0000123458
+    CL2-B  FIBRE  TAR         16Gb    50060b0000123459
+
+  All ports must show STATUS: ONLINE
+
+Document controller WWPNs:
+  Controller A Port 0A: _______________
+  Controller A Port 1A: _______________
+  Controller B Port 0B: _______________
+  Controller B Port 1B: _______________
+
+3.3 OPTIONAL: PRE-INSTALL SNAPSHOT
+-------------------------------------
+
+  raidcom add snapshot -ldev_id 0x0100 \
+    -snapshot_name bootlun_prod-app-01_pre_install
+
+  raidcom get snapshot -ldev_id 0x0100
+
+  Document Snapshot ID: _______________
+
+3.4 BOOT LUN PREPARATION CHECKLIST
+-------------------------------------
+
+[ ] LUN created (LDEV: 0x0100, 600 GB, RAID 10)
+[ ] Cache enabled (Write-Back, Read cache)
+[ ] ALUA enabled
+[ ] All controller ports ONLINE
+[ ] Snapshot created (optional but recommended)
+[ ] LDEV documented in CMDB
+
+
+================================================================================
+SECTION 4: FC SWITCH ZONING CONFIGURATION
+================================================================================
+
+4.1 BROCADE FC SWITCH — FABRIC A
+----------------------------------
+
+  ssh admin@fc-switch-a.example.com
+
+  # Backup current config
+  configupload -all
+
+  # Create WWPN aliases
+  alicreate "prod-app-01_hba0", "50:01:43:80:12:34:56:78"
+  alicreate "storage_ctrlA_port0", "50:06:0b:00:00:12:34:56"
+
+  # Create zone (single initiator, single target)
+  zonecreate "prod-app-01_hba0_to_storage_ctrlA", \
+    "prod-app-01_hba0; storage_ctrlA_port0"
+
+  # Add to active config
+  cfgadd "fabric_a_prod_cfg", "prod-app-01_hba0_to_storage_ctrlA"
+
+  # Enable and save
+  cfgenable "fabric_a_prod_cfg"
+  cfgsave
+
+  # Verify
+  cfgshow | grep "prod-app-01_hba0_to_storage_ctrlA"
+  nsshow | grep "50:01:43:80:12:34:56:78"
+
+4.2 BROCADE FC SWITCH — FABRIC B
+----------------------------------
+
+  ssh admin@fc-switch-b.example.com
+  configupload -all
+
+  alicreate "prod-app-01_hba1", "50:01:43:80:12:34:56:79"
+  alicreate "storage_ctrlB_port1", "50:06:0b:00:00:12:34:57"
+
+  zonecreate "prod-app-01_hba1_to_storage_ctrlB", \
+    "prod-app-01_hba1; storage_ctrlB_port1"
+
+  cfgadd "fabric_b_prod_cfg", "prod-app-01_hba1_to_storage_ctrlB"
+  cfgenable "fabric_b_prod_cfg"
+  cfgsave
+
+4.3 CISCO MDS ALTERNATIVE
+---------------------------
+
+  config terminal
+  device-alias database
+    device-alias name prod-app-01_hba0 pwwn 50:01:43:80:12:34:56:78
+    device-alias name storage_ctrlA_port0 pwwn 50:06:0b:00:00:12:34:56
+  device-alias commit
+
+  zone name prod-app-01_hba0_to_storage_ctrlA vsan 100
+    member device-alias prod-app-01_hba0
+    member device-alias storage_ctrlA_port0
+  exit
+
+  zoneset name fabric_a_prod_zoneset vsan 100
+    member prod-app-01_hba0_to_storage_ctrlA
+  exit
+
+  zoneset activate name fabric_a_prod_zoneset vsan 100
+  copy running-config startup-config
+
+4.4 ZONING CHECKLIST
+----------------------
+
+[ ] Fabric A: config backed up, aliases created, zone created, active, saved
+[ ] Fabric B: config backed up, aliases created, zone created, active, saved
+[ ] Server HBA Port 0 logged into Fabric A (nsshow verified)
+[ ] Server HBA Port 1 logged into Fabric B (nsshow verified)
+[ ] Storage ports logged into fabrics
+[ ] Configuration backed up to management server
+
+
+================================================================================
+SECTION 5: LUN PROVISIONING AND MASKING
+================================================================================
+
+5.1 CREATE HOST GROUP (FABRIC A — CONTROLLER CL1-A)
+-----------------------------------------------------
+
+  raidcom add host_grp -port CL1-A -host_grp_name prod-app-01_HG
+  raidcom modify host_grp -port CL1-A-0 -host_grp_name prod-app-01_HG \
+    -host_mode LINUX
+  raidcom modify host_grp -port CL1-A-0 -host_grp_name prod-app-01_HG \
+    -host_mode_opt 54 -host_mode_opt 12
+
+  # Add server HBA WWPN (Fabric A)
+  raidcom add hba_wwn -port CL1-A-0 -hba_wwn 50:01:43:80:12:34:56:78 \
+    -host_grp_name prod-app-01_HG
+
+  # Map boot LUN
+  raidcom add lun -port CL1-A-0 -ldev_id 0x0100 -lun_id 0
+
+  # Verify
+  raidcom get lun -port CL1-A-0
+
+5.2 CREATE HOST GROUP (FABRIC B — CONTROLLER CL2-B)
+-----------------------------------------------------
+
+  raidcom add host_grp -port CL2-B -host_grp_name prod-app-01_HG
+  raidcom modify host_grp -port CL2-B-0 -host_grp_name prod-app-01_HG \
+    -host_mode LINUX
+  raidcom modify host_grp -port CL2-B-0 -host_grp_name prod-app-01_HG \
+    -host_mode_opt 54 -host_mode_opt 12
+
+  raidcom add hba_wwn -port CL2-B-0 -hba_wwn 50:01:43:80:12:34:56:79 \
+    -host_grp_name prod-app-01_HG
+
+  raidcom add lun -port CL2-B-0 -ldev_id 0x0100 -lun_id 0
+
+  NOTE: LUN ID must be 0 on both fabrics for consistency.
+
+5.3 SCSI IDENTIFIER DOCUMENTATION
+------------------------------------
+
+  NAA ID format for Hitachi:
+    naa.6006048000000000<serial><ldev_id>
+
+  Example:
+    Serial: 123456, LDEV: 0x0100
+    NAA ID: naa.60060480000001234560100
+
+  Document Boot LUN NAA: _______________
+
+5.4 LUN PROVISIONING CHECKLIST
+---------------------------------
+
+[ ] Boot LUN: LDEV 0x0100, 600 GB, RAID 10, cache on, ALUA on
+[ ] Host Group Fabric A: LINUX mode, opts 12/54, WWPN added, LUN 0 mapped
+[ ] Host Group Fabric B: LINUX mode, opts 12/54, WWPN added, LUN 0 mapped
+[ ] Both paths verified (raidcom get lun -port ... -lun_id 0)
+[ ] NAA ID documented
+[ ] Storage configuration backed up
+
+
+================================================================================
+SECTION 6: HBA BIOS CONFIGURATION FOR SAN BOOT
+================================================================================
+
+6.1 ACCESS METHODS
+-------------------
+
+  Physical POST: Press Ctrl+E (Emulex) or Ctrl+Q (QLogic) during HBA POST
+  Via BMC: Remote Console → power cycle → watch for HBA BIOS prompt
+
+6.2 EMULEX HBA CONFIGURATION (Ctrl+E)
+----------------------------------------
+
+  1. Configure This Adapter's Parameters
+     - Enable Adapter BIOS: Enabled
+     - Boot LUN: 0
+     - Connection Options → Link Speed: Auto-Negotiate
+     - Persistent Binding: Yes
+     - Boot Retry Count: 3, Retry Delay: 5 seconds
+  2. Boot Device Configuration
+     - Select target WWPN: 50:06:0b:00:00:12:34:56 (storage controller)
+     - LUN: 0 → Confirm (Y)
+  3. Save Changes and Exit
+
+  Verify (re-enter utility):
+    Adapter BIOS: Enabled | Boot Enabled: Yes
+    Boot WWPN: 50:06:0b:00:00:12:34:56 | Boot LUN: 0
+
+6.3 QLOGIC HBA CONFIGURATION (Ctrl+Q)
+----------------------------------------
+
+  1. Configuration Settings
+     - Host Adapter BIOS: Enabled
+     - Boot Device: Enabled
+     - Boot LUN Number: 0
+  2. Selectable Boot Settings
+     - Boot from SAN: Enabled
+     - Select Target: WWPN 50:06:0b:00:00:12:34:56, LUN 0
+  3. Fibre Channel Settings
+     - Connection Options: Auto
+     - Data Rate: Auto-Negotiate
+  4. Save Settings and Exit
+
+6.4 BOOT PRIORITY (BOTH HBA PORTS)
+--------------------------------------
+
+  UEFI Boot Manager → Boot Option Priorities:
+    #1: FC HBA Port 0 (Fabric A) — Primary
+    #2: FC HBA Port 1 (Fabric B) — Failover
+    #3: Network PXE (optional)
+    #4: UEFI Shell
+
+6.5 HBA CONFIGURATION CHECKLIST
+----------------------------------
+
+[ ] Port 0 (Fabric A): BIOS enabled, boot enabled, WWPN set, LUN 0, link online
+[ ] Port 1 (Fabric B): BIOS enabled, boot enabled, WWPN set, LUN 0, link online
+[ ] Boot LUN visible on both fabrics (HITACHI OPEN-V, 600 GB)
+[ ] UEFI boot priority configured (Port 0 first, Port 1 second)
+[ ] Persistent binding enabled
+[ ] Screenshots captured, configuration documented
+
+
+================================================================================
+SECTION 7: BIOS AND BMC CONFIGURATION
+================================================================================
+
+7.1 BMC INITIAL SETUP
+-----------------------
+
+  Access: https://10.10.10.100 (default after IP assignment)
+  First login tasks:
+    - Change default admin password immediately
+    - Configure static IP (10.10.10.100 / 255.255.255.0 / GW 10.10.10.1)
+    - Enable SSL/TLS; disable Telnet and HTTP
+    - Set session timeout to 15 minutes
+    - Verify BMC firmware version; update if required
+
+  Redfish API backup (optional):
+    curl -k -u admin:password \
+      -X GET https://10.10.10.100/redfish/v1/Systems/1/Bios \
+      -o bios_config_backup.json
+
+7.2 UEFI BIOS SETTINGS FOR SAN BOOT
+--------------------------------------
+
+  Press F2 / DEL during POST to enter UEFI Setup.
+
+  CRITICAL SETTINGS:
+
+  Boot → Boot Mode: UEFI (required for RHEL 9.7)
+  Boot → CSM Support: Disabled (pure UEFI)
+  Security → Secure Boot: Enabled (standard mode; disable temporarily if issues)
+  Boot → Boot Order:
+    1. FC HBA Port 0 (Fabric A)
+    2. FC HBA Port 1 (Fabric B)
+    3. Network PXE (optional)
+
+  Advanced → CPU Configuration:
+    Hyper-Threading: Enabled
+    Virtualization Technology (VT-x): Enabled
+    VT-d (IOMMU): Enabled
+
+  Advanced → Power Management:
+    ACPI Support: Enabled
+    Power-On After Power Fail: Last State
+
+  Advanced → PCI Configuration:
+    Above 4G Decoding: Enabled
+    PCIe Native ASPM: Disabled (prevents FC HBA stability issues)
+
+  Main → System Date/Time: Set to UTC
+
+  Exit → Save Changes and Exit
+
+7.3 BIOS SETTINGS SUMMARY
+---------------------------
+
++-------------------+------------------------+------------------------------+
+| Setting           | Value                  | Rationale                    |
++-------------------+------------------------+------------------------------+
+| Boot Mode         | UEFI                   | Required for RHEL 9.7        |
+| CSM Support       | Disabled               | Pure UEFI, no legacy         |
+| Secure Boot       | Enabled                | Security (after install)     |
+| Boot Priority 1   | FC HBA Port 0          | Primary boot path            |
+| Boot Priority 2   | FC HBA Port 1          | Failover boot path           |
+| Hyper-Threading   | Enabled                | Multi-threaded performance   |
+| VT-x              | Enabled                | Virtualization               |
+| VT-d (IOMMU)      | Enabled                | Device passthrough           |
+| ACPI Support      | Enabled                | Power management, OS compat  |
+| Power-On After    | Last State             | Auto-restart after outage    |
+| PCIe ASPM         | Disabled               | FC HBA stability             |
+| System Clock      | UTC                    | Consistent time across infra |
++-------------------+------------------------+------------------------------+
+
+7.4 BIOS AND BMC CHECKLIST
+----------------------------
+
+[ ] BMC IP, credentials, timeout, SSL configured
+[ ] BMC firmware up-to-date
+[ ] UEFI boot mode, CSM disabled
+[ ] Secure Boot enabled (standard mode)
+[ ] Boot order: Port 0 → Port 1
+[ ] CPU: HT, VT-x, VT-d enabled
+[ ] Power Management: Last State
+[ ] PCI: ASPM disabled, Above 4G enabled
+[ ] System time set to UTC
+[ ] BIOS configuration exported and stored
+
+
+================================================================================
+SECTION 8: REMOTE INSTALLATION USING BMC VIRTUAL MEDIA
+================================================================================
+
+8.1 PREPARE RHEL 9.7 ISO
+--------------------------
+
+  Download from: https://access.redhat.com
+  File: rhel-9.7-x86_64-dvd.iso (~10 GB)
+
+  Verify checksum:
+    sha256sum rhel-9.7-x86_64-dvd.iso
+    (compare with checksum published on Red Hat portal)
+
+  If checksums do not match, DO NOT use the ISO — re-download.
+
+  Optional kickstart hosting:
+    mkdir -p /var/www/html/kickstart
+    cp ks.cfg /var/www/html/kickstart/prod-app-01-ks.cfg
+    curl http://mgmt-server.example.com/kickstart/prod-app-01-ks.cfg
+
+8.2 MOUNT ISO VIA BMC VIRTUAL MEDIA
+--------------------------------------
+
+  BMC Web Interface → Remote Console → Virtual Media
+
+  1. Choose File → select rhel-9.7-x86_64-dvd.iso
+  2. Enable "Boot on Next Server Reset"
+  3. Enable "Write Protect"
+  4. Click Connect → Status: Connected
+
+  Alternative: Remote HTTP ISO
+    BMC Virtual Media → Remote ISO via HTTP/HTTPS
+    URL: http://mgmt-server.example.com/iso/rhel-9.7-x86_64-dvd.iso
+
+8.3 LAUNCH REMOTE CONSOLE
+---------------------------
+
+  BMC Web Interface → Remote Console → Launch HTML5 Console
+  (or Java/Native client per BMC vendor)
+
+  Best practices:
+    - Use wired connection; latency < 50ms
+    - Single concurrent session per BMC
+    - Increase BMC session timeout during installation
+    - Use HTTPS; use VPN for remote access
+
+8.4 BOOT SERVER FROM VIRTUAL MEDIA
+-------------------------------------
+
+  1. BMC → Power Control → Power On (or use IPMI):
+     ipmitool -I lanplus -H 10.10.10.100 -U admin -P <pass> power on
+
+  2. Watch POST:
+     - HBA BIOS detects boot LUN → confirm 600 GB HITACHI OPEN-V visible
+
+  3. GRUB from ISO appears:
+     "Install Red Hat Enterprise Linux 9.7"
+
+  4. If using kickstart, press [Tab] to edit boot line and append:
+     inst.ks=http://mgmt-server.example.com/kickstart/prod-app-01-ks.cfg
+
+  5. Press Enter → Anaconda installer loads
+
+8.5 POST-INSTALLATION VIRTUAL MEDIA
+--------------------------------------
+
+  After installation completes:
+  1. BMC Virtual Media → Disconnect CD/DVD-ROM
+  2. Verify system boots from SAN (GRUB menu from SAN)
+  3. Document:
+       Installation start time: _______________
+       Installation end time: _______________
+       Duration: _____ minutes
+       Kickstart used: YES/NO
+
+8.6 VIRTUAL MEDIA CHECKLIST
+-----------------------------
+
+[ ] ISO downloaded and SHA256 verified
+[ ] ISO connected via BMC Virtual Media
+[ ] Boot on next reset enabled
+[ ] Remote console launched and functional
+[ ] Server booted from virtual media
+[ ] Installer loaded successfully
+[ ] Post-install: virtual media disconnected
+[ ] Server booted from SAN LUN
+
+
+================================================================================
+SECTION 9: RHEL 9.7 INSTALLATION PROCEDURE
+================================================================================
+
+9.1 INITIAL BOOT SCREEN
+-------------------------
+
+  GRUB from ISO:
+    > Install Red Hat Enterprise Linux 9.7   ← SELECT THIS
+      Test this media & install RHEL 9.7
+      Troubleshooting -->
+
+  Press Enter. Anaconda loads.
+
+9.2 LANGUAGE SELECTION
+------------------------
+
+  Select: English (United States)
+  Click: Continue
+
+9.3 TIME & DATE
+----------------
+
+  Region: Americas (or datacenter region)
+  City: Appropriate timezone
+
+  Enable "Use network time (NTP)"
+  Click "Configure NTP..." → Add corporate NTP servers:
+    ntp1.example.com
+    ntp2.example.com
+
+  Click Done.
+
+9.4 INSTALLATION DESTINATION
+------------------------------
+
+  Device Selection:
+    ☑ Hitachi OPEN-V (600 GB, /dev/mapper/mpatha — multipath)
+
+  Partitioning: ● Custom   ← REQUIRED FOR PRODUCTION
+
+  Click Done → Manual Partitioning screen opens.
+
+  Partitioning Scheme: LVM
+
+  ADD MOUNT POINTS IN ORDER:
+
+  1. /boot/efi
+     - Size: 1 GiB
+     - Device Type: Standard Partition
+     - File System: EFI System Partition (vfat)
+     *** MUST BE STANDARD PARTITION — NOT LVM ***
+
+  2. /boot
+     - Size: 2 GiB
+     - Device Type: Standard Partition
+     - File System: xfs
+     *** MUST BE STANDARD PARTITION — NOT LVM ***
+
+  3. swap
+     - Size: 32 GiB
+     - Device Type: LVM
+     - File System: swap
+
+  4. /
+     - Size: 100 GiB
+     - Device Type: LVM (Volume Group: rhel)
+     - File System: xfs
+
+  5. /usr           — 50 GiB  — LVM — xfs
+  6. /var           — 150 GiB — LVM — xfs
+  7. /var/log       — 50 GiB  — LVM — xfs
+  8. /var/log/audit — 20 GiB  — LVM — xfs
+  9. /tmp           — 20 GiB  — LVM — xfs
+ 10. /home          — 20 GiB  — LVM — xfs
+ 11. /opt           — 50 GiB  — LVM — xfs
+ 12. /srv           — 100 GiB — LVM — xfs
+ 13. /data          — (leave blank/grow) — LVM — xfs — USES REMAINING SPACE
+
+  Total allocation: ~595+ GB of 600 GB
+
+  Click Done → Review Summary of Changes → Accept Changes
+
+9.5 NETWORK & HOST NAME
+-------------------------
+
+  Host name: prod-app-01.example.com → Click Apply
+
+  Select ens160 → Configure...
+  IPv4 Settings tab:
+    Method: Manual
+    Address: 192.168.100.10 | Netmask: 24 | Gateway: 192.168.100.1
+    DNS servers: 10.10.10.53, 10.10.10.54
+    Search domains: example.com
+  IPv6 Settings: Method → Ignore
+  Save → Toggle ens160 to ON
+
+  ens192: Leave for post-install bonding configuration.
+
+  Click Done.
+
+9.6 SOFTWARE SELECTION
+------------------------
+
+  Base Environment: Minimal Install   ← RECOMMENDED
+  Additional software:
+    ☑ Standard
+    ☑ Security Tools
+    ☑ System Tools
+
+  Click Done.
+
+9.7 ROOT PASSWORD
+------------------
+
+  Set strong root password (14+ characters, mixed case, numbers, symbols).
+  Uncheck "Lock root account"
+  Uncheck "Allow root SSH login with password"
+  Click Done.
+
+9.8 USER CREATION
+------------------
+
+  Full name: Admin User
+  Username: adminuser
+  ☑ Make this user administrator (adds to wheel group)
+  ☑ Require a password
+  Set strong password.
+  Click Done.
+
+9.9 SECURITY POLICY
+---------------------
+
+  Recommendation: Leave Off during installation.
+  Apply via OpenSCAP post-installation for full control.
+
+9.10 BEGIN INSTALLATION
+------------------------
+
+  Final pre-installation verification:
+  [ ] Time zone configured with NTP
+  [ ] Disk: 600 GB SAN LUN, custom partitioning
+  [ ] All 13 mount points confirmed
+  [ ] Network: hostname, IP, DNS
+  [ ] Root password and adminuser set
+  [ ] Software: Minimal Install
+
+  Click: Begin Installation
+
+  Installation phases:
+    1. Package installation: 20–30 minutes
+    2. Post-install configuration: 5–10 minutes
+       - GRUB2 installed to SAN boot LUN
+       - initramfs generated with multipath support
+    3. Complete → prompt to reboot
+
+  BEFORE CLICKING REBOOT:
+    Disconnect BMC virtual media (CD/DVD-ROM)
+
+  Click Reboot.
+
+9.11 FIRST BOOT FROM SAN
+--------------------------
+
+  Expected boot sequence:
+  1. UEFI POST
+  2. HBA Option ROM → fabric login → boot LUN detected
+  3. GRUB2 menu from SAN LUN
+  4. Kernel loads; initramfs starts multipath
+  5. Root filesystem mounted from /dev/mapper/rhel-root
+  6. systemd initializes all services
+  7. Login prompt appears
+
+  Key kernel messages to watch:
+    multipath: Loading dm-multipath module
+    mpatha: 360060480000012345601 dm-0 HITACHI,OPEN-V
+    policy='service-time 0' prio=50 status=active
+    VFS: Mounted root (xfs filesystem)
+    Hostname set to <prod-app-01.example.com>
+
+  Login: root (or adminuser)
+
+
+================================================================================
+SECTION 10: STORAGE PARTITIONING AND MOUNT POINT STANDARDS
+================================================================================
+
+10.1 PARTITION LAYOUT VERIFICATION
+-------------------------------------
+
+  lsblk
+
+  Expected (abbreviated):
+    sda (Fabric A path)
+    sdb (Fabric B path)
+    mpatha (multipath device, 600G)
+    ├─mpatha1 (1G)   /boot/efi
+    ├─mpatha2 (2G)   /boot
+    └─mpatha3 (597G) PV for rhel VG
+      ├─rhel-swap   (32G)   [SWAP]
+      ├─rhel-root   (100G)  /
+      ├─rhel-usr    (50G)   /usr
+      ├─rhel-var    (150G)  /var
+      ├─rhel-var_log (50G)  /var/log
+      ├─rhel-var_log_audit (20G) /var/log/audit
+      ├─rhel-tmp    (20G)   /tmp
+      ├─rhel-home   (20G)   /home
+      ├─rhel-opt    (50G)   /opt
+      ├─rhel-srv    (100G)  /srv
+      └─rhel-data   (~105G) /data
+
+  multipath -ll
+  # Both paths should be active ready running
+
+  df -hT
+  # All mount points mounted, xfs type (except /boot/efi = vfat, swap)
+
+  pvs / vgs / lvs
+  # PV: /dev/mapper/mpatha3 in VG: rhel
+
+  cat /etc/fstab
+  # All entries use /dev/mapper paths
+
+10.2 MOUNT POINT PURPOSE SUMMARY
+-----------------------------------
+
+  /boot/efi (1G)       — UEFI bootloader; do not manually modify
+  /boot (2G)           — Kernels and initramfs; keep < 80% full
+  swap (32G)           — Virtual memory; ideal usage = 0%
+  / (100G)             — OS root; alert if > 80%
+  /usr (50G)           — Binaries, libraries; grows with packages
+  /var (150G)          — Variable data, cache, spools
+  /var/log (50G)       — System/app logs; implement log rotation
+  /var/log/audit (20G) — Audit daemon logs; compliance requirement
+  /tmp (20G)           — Temporary files; noexec,nosuid,nodev recommended
+  /home (20G)          — User home directories
+  /opt (50G)           — Third-party and vendor applications
+  /srv (100G)          — Web/FTP/service data
+  /data (~105G)        — Primary application/database data storage
+
+10.3 LVM EXPANSION PROCEDURE
+------------------------------
+
+  # Check VG free space
+  vgdisplay rhel | grep "Free"
+
+  # If no free space — add new LUN and extend VG:
+  pvcreate /dev/mapper/mpathb
+  vgextend rhel /dev/mapper/mpathb
+
+  # Extend LV (example: /data +50G)
+  lvextend -L +50G /dev/rhel/data
+
+  # Grow XFS filesystem (online, no downtime)
+  xfs_growfs /data
+
+  # Verify
+  df -h /data
+
+10.4 FSTAB SECURITY MOUNT OPTIONS
+------------------------------------
+
+  /tmp:
+    /dev/mapper/rhel-tmp  /tmp  xfs  defaults,noexec,nosuid,nodev  0 0
+
+  /home:
+    /dev/mapper/rhel-home  /home  xfs  defaults,nosuid,nodev  0 0
+
+  Apply without reboot:
+    mount -o remount /tmp
+    mount -o remount /home
+
+10.5 PARTITION CHECKLIST
+--------------------------
+
+[ ] Multipath device mpatha: 600 GB, both paths active
+[ ] /boot/efi: 1 GB, standard partition, vfat/EFI
+[ ] /boot: 2 GB, standard partition, xfs
+[ ] LVM PV: /dev/mapper/mpatha3, VG: rhel
+[ ] All 11 logical volumes present at correct sizes
+[ ] All mount points mounted and in /etc/fstab using /dev/mapper paths
+[ ] noexec,nosuid,nodev applied to /tmp and /home
+[ ] Monitoring alerts configured for disk usage thresholds
+
+
+================================================================================
+SECTION 11: MULTIPATH CONFIGURATION
+================================================================================
+
+11.1 INSTALL AND ENABLE MULTIPATH
+------------------------------------
+
+  rpm -qa | grep -i multipath
+  # or install:
+  dnf install -y device-mapper-multipath
+
+  systemctl enable --now multipathd
+
+11.2 PRODUCTION /etc/multipath.conf
+--------------------------------------
+
+  cp /etc/multipath.conf /etc/multipath.conf.orig
+  vi /etc/multipath.conf
+
+  --- BEGIN /etc/multipath.conf ---
+
+  defaults {
+      polling_interval        10
+      path_selector           "service-time 0"
+      path_grouping_policy    multibus
+      user_friendly_names     yes
+      path_checker            tur
+      failback                immediate
+      no_path_retry           5
+      queue_without_daemon    no
+      rr_min_io               100
+      fast_io_fail_tmo        5
+      dev_loss_tmo            120
+      flush_on_last_del       yes
+      max_fds                 8192
+      retain_attached_hw_handler yes
+      detect_prio             yes
+      force_sync              yes
+  }
+
+  blacklist {
+      device {
+          vendor  ".*"
+          product ".*"
+      }
+  }
+
+  blacklist_exceptions {
+      device {
+          vendor  "HITACHI"
+          product "OPEN-V"
+      }
+  }
+
+  devices {
+      device {
+          vendor                  "HITACHI"
+          product                 "OPEN-V"
+          path_grouping_policy    multibus
+          path_selector           "service-time 0"
+          hardware_handler        "0"
+          path_checker            tur
+          prio                    alua
+          failback                immediate
+          no_path_retry           5
+          rr_min_io               100
+          fast_io_fail_tmo        5
+          dev_loss_tmo            120
+          features                "1 queue_if_no_path"
+      }
+  }
+
+  multipaths {
+      multipath {
+          wwid                360060480000012345601
+          alias               mpatha
+          path_grouping_policy multibus
+          path_selector       "service-time 0"
+          failback            immediate
+          no_path_retry       queue
+          # NOTE: 'queue' for boot LUN prevents I/O failure during fabric issues
+      }
+  }
+
+  --- END /etc/multipath.conf ---
+
+  # Validate syntax
+  multipath -t
+
+  # Reload
+  systemctl reload multipathd
+  # or
+  systemctl restart multipathd
+
+11.3 VERIFY MULTIPATH
+-----------------------
+
+  multipath -ll
+
+  Expected:
+    mpatha (360060480000012345601) dm-0 HITACHI,OPEN-V
+    size=600G features='1 queue_if_no_path' hwhandler='0' wp=rw
+    |-+- policy='service-time 0' prio=50 status=active
+    | `- 2:0:0:0 sda 8:0  active ready running
+    `-+- policy='service-time 0' prio=10 status=enabled
+      `- 3:0:0:0 sdb 8:16 active ready running
+
+  multipathd show paths
+  multipathd show maps stats
+
+11.4 TEST PATH FAILOVER
+-------------------------
+
+  # Simulate path failure (maintenance window only)
+  echo "offline" > /sys/block/sda/device/state
+  multipath -ll   # Verify sdb becomes primary
+  ping -c 4 192.168.100.1   # Verify connectivity continues
+
+  # Restore path
+  echo "running" > /sys/block/sda/device/state
+  multipath -ll   # Verify sda reinstated
+
+11.5 INITRAMFS MULTIPATH INTEGRATION
+---------------------------------------
+
+  # Verify multipath in initramfs
+  lsinitrd /boot/initramfs-$(uname -r).img | grep -i multipath
+
+  # If missing, rebuild:
+  dracut --force --add multipath
+  # or with explicit multipath.conf inclusion:
+  dracut --force --add multipath --install /etc/multipath.conf
+
+  # Verify GRUB boot parameter
+  grep rd.multipath /etc/default/grub
+  # Must contain: rd.multipath=1
+
+  # If missing, add to GRUB_CMDLINE_LINUX, then:
+  grub2-mkconfig -o /boot/grub2/grub.cfg
+
+  # Rebuild all initramfs images (after config changes):
+  dracut --force --regenerate-all
+
+11.6 MULTIPATH CHECKLIST
+--------------------------
+
+[ ] device-mapper-multipath installed
+[ ] multipathd active and enabled
+[ ] /etc/multipath.conf configured (defaults, blacklist, exceptions, devices, multipaths)
+[ ] mpatha device present, WWID matches boot LUN
+[ ] Both paths: active ready running
+[ ] Failover tested and documented
+[ ] Initramfs includes multipath modules and multipath.conf
+[ ] rd.multipath=1 in GRUB_CMDLINE_LINUX
+[ ] grub.cfg regenerated after changes
+
+
+================================================================================
+SECTION 12: NETWORK CONFIGURATION AND BONDING
+================================================================================
+
+12.1 CONFIGURE BOND0 (ACTIVE-BACKUP — MODE 1)
+-----------------------------------------------
+
+  # Create bond interface
+  nmcli connection add type bond \
+    con-name bond0 \
+    ifname bond0 \
+    bond.options "mode=active-backup,miimon=100,primary=ens160"
+
+  # Configure IP
+  nmcli connection modify bond0 \
+    ipv4.addresses 192.168.100.10/24 \
+    ipv4.gateway 192.168.100.1 \
+    ipv4.dns "10.10.10.53,10.10.10.54" \
+    ipv4.dns-search example.com \
+    ipv4.method manual \
+    connection.autoconnect yes
+
+  # Add slave interfaces
+  nmcli connection add type ethernet \
+    con-name bond0-slave-ens160 ifname ens160 master bond0
+  nmcli connection add type ethernet \
+    con-name bond0-slave-ens192 ifname ens192 master bond0
+
+  # Bring down old standalone connections
+  nmcli connection down ens160
+  nmcli connection down ens192
+
+  # Bring up bond
+  nmcli connection up bond0-slave-ens160
+  nmcli connection up bond0-slave-ens192
+  nmcli connection up bond0
+
+12.2 VERIFY BOND STATUS
+-------------------------
+
+  ip addr show bond0
+  cat /proc/net/bonding/bond0
+
+  Expected:
+    Bonding Mode: fault-tolerance (active-backup)
+    Primary Slave: ens160
+    Currently Active Slave: ens160
+    MII Status: up
+    MII Polling Interval (ms): 100
+    Slave Interface: ens160 — MII Status: up — Link Failure Count: 0
+    Slave Interface: ens192 — MII Status: up — Link Failure Count: 0
+
+12.3 ALTERNATIVE: LACP BONDING (MODE 4 — 802.3ad)
+----------------------------------------------------
+
+  NOTE: Requires switch-side port-channel / LACP configuration.
+
+  nmcli connection add type bond \
+    con-name bond0 ifname bond0 \
+    bond.options "mode=802.3ad,miimon=100,lacp_rate=fast,xmit_hash_policy=layer3+4"
+
+  (Add IP, slaves, and bring up same as above)
+
+  Verify LACP: cat /proc/net/bonding/bond0
+    Look for "802.3ad" mode and "Active Aggregator: Number of ports: 2"
+
+12.4 NIC NAMING / RENAME NOTE  [** NEW **]
+-------------------------------------------
+
+  On some Hitachi DS120 configurations, NIC names may differ from ens160/ens192.
+  Always verify interface names before building bond:
+
+    ip link show
+    # or
+    nmcli device status
+
+  If using predictable names (e.g., eno1, enp2s0f0), substitute throughout
+  this guide and in all nmcli commands.
+
+  To identify physical NICs by MAC address:
+    ip link show | awk '/ether/{print}'
+    # Cross-reference with BMC hardware inventory
+
+12.5 FIREWALL CONFIGURATION FOR BOND0
+----------------------------------------
+
+  firewall-cmd --zone=public --add-interface=bond0 --permanent
+  firewall-cmd --reload
+  firewall-cmd --get-active-zones
+
+12.6 TEST BONDING FAILOVER
+----------------------------
+
+  # Simulate primary failure
+  ip link set ens160 down
+  cat /proc/net/bonding/bond0    # ens192 should become active
+  ping -c 4 192.168.100.1        # Connectivity should continue
+
+  # Restore primary
+  ip link set ens160 up
+  cat /proc/net/bonding/bond0    # ens160 should become active again
+
+  # Verify connectivity maintained throughout
+  journalctl | grep bond0
+
+12.7 NETWORK BONDING CHECKLIST
+--------------------------------
+
+[ ] Bond interface bond0 created (active-backup or LACP)
+[ ] IP: 192.168.100.10/24, GW: 192.168.100.1, DNS configured
+[ ] Slaves: ens160 (primary) and ens192 added and connected
+[ ] Both slaves: MII Status = up, Link Failure Count = 0
+[ ] Gateway and DNS reachable
+[ ] Failover tested: connectivity maintained
+[ ] Failback to primary confirmed
+[ ] Connection files: permissions 600 in /etc/NetworkManager/system-connections/
+[ ] bond0 in firewall zone
+[ ] NIC names documented and verified for this specific hardware
+
+
+================================================================================
+SECTION 13: SECURITY HARDENING
+================================================================================
+
+13.1 SELinux
+--------------
+
+  getenforce   → must return: Enforcing
+
+  If not enforcing:
+    setenforce 1
+    vi /etc/selinux/config → set SELINUX=enforcing
+
+  Verify:
+    sestatus
+
+  Check denials:
+    ausearch -m avc -ts recent
+
+  Generate policy for allowed exceptions:
+    audit2allow -a -M myapp && semodule -i myapp.pp
+
+13.2 FIREWALLD
+---------------
+
+  systemctl enable --now firewalld
+
+  # Remove unnecessary services
+  firewall-cmd --zone=public --remove-service=cockpit --permanent
+  firewall-cmd --zone=public --remove-service=dhcpv6-client --permanent
+
+  # Add required services
+  firewall-cmd --zone=public --add-service=ssh --permanent
+
+  # Rate-limit SSH (anti-brute-force)
+  firewall-cmd --zone=public --add-rich-rule='rule service name="ssh" limit value="10/m" accept' --permanent
+
+  # Restrict SSH to management network
+  firewall-cmd --zone=public --add-rich-rule='rule family="ipv4" source address="10.20.50.0/24" service name="ssh" accept' --permanent
+
+  firewall-cmd --reload
+  firewall-cmd --zone=public --list-all
+
+13.3 SSH HARDENING
+-------------------
+
+  cp /etc/ssh/sshd_config /etc/ssh/sshd_config.orig
+  vi /etc/ssh/sshd_config
+
+  Key settings:
+    PermitRootLogin no
+    PasswordAuthentication yes    # change to 'no' after SSH keys deployed
+    PubkeyAuthentication yes
+    MaxAuthTries 3
+    MaxSessions 5
+    ClientAliveInterval 300
+    ClientAliveCountMax 2
+    X11Forwarding no
+    PermitEmptyPasswords no
+    HostbasedAuthentication no
+    Ciphers aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr
+    KexAlgorithms curve25519-sha256,diffie-hellman-group-exchange-sha256
+    MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+
+  # Test syntax
+  sshd -t
+
+  # Restart
+  systemctl restart sshd
+
+  # BEFORE DISCONNECTING: Test new connection in a separate terminal!
+
+  SSH Key Deployment:
+    # On admin workstation:
+    ssh-keygen -t ed25519 -C "admin@prod-app-01"
+    ssh-copy-id adminuser@192.168.100.10
+
+    # After verifying key auth works, disable password auth:
+    # PasswordAuthentication no
+    systemctl restart sshd
+
+13.4 AUDIT LOGGING
+-------------------
+
+  systemctl enable --now auditd
+
+  vi /etc/audit/rules.d/audit.rules
+
+  --- BEGIN AUDIT RULES ---
+  -D
+  -b 8192
+  -f 1
+  # Time changes
+  -a always,exit -F arch=b64 -S adjtimex -S settimeofday -k time-change
+  -w /etc/localtime -p wa -k time-change
+  # Identity
+  -w /etc/group -p wa -k identity
+  -w /etc/passwd -p wa -k identity
+  -w /etc/shadow -p wa -k identity
+  -w /etc/gshadow -p wa -k identity
+  # Network
+  -a always,exit -F arch=b64 -S sethostname -S setdomainname -k system-locale
+  -w /etc/hosts -p wa -k system-locale
+  -w /etc/hostname -p wa -k system-locale
+  # SELinux
+  -w /etc/selinux/ -p wa -k MAC-policy
+  # Logins
+  -w /var/log/lastlog -p wa -k logins
+  -w /var/run/faillock/ -p wa -k logins
+  # Sessions
+  -w /var/run/utmp -p wa -k session
+  -w /var/log/wtmp -p wa -k logins
+  -w /var/log/btmp -p wa -k logins
+  # DAC changes
+  -a always,exit -F arch=b64 -S chmod -S fchmod -S fchmodat -F auid>=1000 -F auid!=4294967295 -k perm_mod
+  -a always,exit -F arch=b64 -S chown -S fchown -S fchownat -S lchown -F auid>=1000 -F auid!=4294967295 -k perm_mod
+  # Unauthorized access
+  -a always,exit -F arch=b64 -S open -S openat -F exit=-EACCES -F auid>=1000 -F auid!=4294967295 -k access
+  # Privileged commands
+  -a always,exit -F path=/usr/bin/sudo -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+  -a always,exit -F path=/usr/bin/su -F perm=x -F auid>=1000 -F auid!=4294967295 -k privileged
+  # File deletion
+  -a always,exit -F arch=b64 -S unlink -S unlinkat -S rename -S renameat -F auid>=1000 -F auid!=4294967295 -k delete
+  # Sudoers
+  -w /etc/sudoers -p wa -k scope
+  -w /etc/sudoers.d/ -p wa -k scope
+  # Kernel modules
+  -w /sbin/insmod -p x -k modules
+  -w /sbin/rmmod -p x -k modules
+  -w /sbin/modprobe -p x -k modules
+  -a always,exit -F arch=b64 -S init_module -S delete_module -k modules
+  --- END AUDIT RULES ---
+
+  augenrules --load
+  auditctl -l   # Verify rules loaded
+
+  Configure /etc/audit/auditd.conf:
+    num_logs = 10
+    max_log_file = 50          # MB
+    max_log_file_action = ROTATE
+    space_left = 500
+    space_left_action = EMAIL
+    action_mail_acct = root
+
+13.5 PASSWORD AND ACCOUNT POLICY
+----------------------------------
+
+  vi /etc/security/pwquality.conf
+    minlen = 14
+    dcredit = -1
+    ucredit = -1
+    lcredit = -1
+    ocredit = -1
+    minclass = 4
+    maxrepeat = 3
+    usercheck = 1
+
+  vi /etc/login.defs
+    PASS_MAX_DAYS   90
+    PASS_MIN_DAYS   7
+    PASS_WARN_AGE   14
+
+  # Apply aging to existing accounts
+  chage -M 90 -m 7 -W 14 adminuser
+
+  # Lock inactive accounts after 30 days
+  useradd -D -f 30
+
+13.6 SERVICE MINIMIZATION
+---------------------------
+
+  systemctl list-unit-files --type=service --state=enabled
+
+  # Disable unneeded services (examples):
+  systemctl disable --now postfix
+  systemctl disable --now bluetooth
+  systemctl disable --now cups
+
+  Required services for this deployment:
+    sshd, chronyd, auditd, rsyslog, firewalld, multipathd,
+    NetworkManager, tuned, application-specific services
+
+13.7 KERNEL HARDENING (sysctl)
+--------------------------------
+
+  vi /etc/sysctl.d/99-security.conf
+
+  --- BEGIN SYSCTL ---
+  net.ipv4.ip_forward = 0
+  net.ipv6.conf.all.forwarding = 0
+  net.ipv4.conf.all.accept_redirects = 0
+  net.ipv4.conf.default.accept_redirects = 0
+  net.ipv4.conf.all.secure_redirects = 0
+  net.ipv4.conf.default.secure_redirects = 0
+  net.ipv4.conf.all.send_redirects = 0
+  net.ipv4.conf.default.send_redirects = 0
+  net.ipv4.conf.all.rp_filter = 1
+  net.ipv4.conf.default.rp_filter = 1
+  net.ipv4.conf.all.log_martians = 1
+  net.ipv4.icmp_echo_ignore_broadcasts = 1
+  net.ipv4.tcp_syncookies = 1
+  net.ipv4.tcp_max_syn_backlog = 2048
+  net.ipv4.tcp_synack_retries = 2
+  net.ipv4.tcp_syn_retries = 5
+  net.ipv6.conf.all.disable_ipv6 = 1
+  net.ipv6.conf.default.disable_ipv6 = 1
+  kernel.kptr_restrict = 2
+  kernel.dmesg_restrict = 1
+  kernel.randomize_va_space = 2
+  kernel.yama.ptrace_scope = 1
+  fs.suid_dumpable = 0
+  kernel.core_uses_pid = 1
+  fs.inotify.max_user_watches = 524288
+  --- END SYSCTL ---
+
+  sysctl -p /etc/sysctl.d/99-security.conf
+
+13.8 FILESYSTEM SECURITY
+--------------------------
+
+  # Set immutable attributes on critical files
+  chattr +i /etc/passwd /etc/shadow /etc/group /etc/gshadow
+
+  # To modify these files (temporarily remove):
+  # chattr -i /etc/passwd  →  make changes  →  chattr +i /etc/passwd
+
+  # Verify
+  lsattr /etc/passwd /etc/shadow
+
+13.9 AIDE — FILE INTEGRITY MONITORING  [** NEW **]
+----------------------------------------------------
+
+  dnf install -y aide
+
+  # Initialize AIDE database (post-install, after all hardening):
+  aide --init
+
+  # Rename to active database:
+  mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+
+  # Schedule daily checks via cron:
+  echo "0 3 * * * root aide --check 2>&1 | /usr/bin/logger -t aide" \
+    > /etc/cron.d/aide-daily
+
+  # Run manual check:
+  aide --check
+
+  NOTE: Re-run aide --init after intentional system changes
+  (package installs, config updates) to prevent false positives.
+
+13.10 SECURITY HARDENING CHECKLIST
+-------------------------------------
+
+[ ] SELinux: Enforcing, targeted policy, no active denials
+[ ] Firewalld: Active, minimal ruleset, SSH rate-limited
+[ ] SSH: Root login disabled, key-based auth deployed, strong ciphers
+[ ] Audit: auditd active, rules loaded, log rotation configured
+[ ] Password policy: pwquality.conf and login.defs configured
+[ ] Account aging applied to all interactive accounts
+[ ] Unnecessary services disabled
+[ ] sysctl hardening applied and persistent
+[ ] /tmp and /home mount security options applied
+[ ] Critical files immutable (chattr +i)
+[ ] AIDE initialized and daily check scheduled
+[ ] All settings verified post-reboot
+
+
+================================================================================
+SECTION 14: POST-INSTALLATION VALIDATION
+================================================================================
+
+14.1 SYSTEM INFORMATION
+-------------------------
+
+  hostnamectl
+    # Verify: hostname, OS (RHEL 9.7), kernel, hardware (Hitachi DS120)
+
+  uptime
+  lscpu | grep -E "^CPU\(s\)|Model name|Thread|Core|Socket"
+  free -h
+    # Verify: ~62 GB RAM, swap 31 GB, swap usage 0
+
+14.2 STORAGE VALIDATION
+-------------------------
+
+  multipath -ll
+    # mpatha, both paths active
+
+  df -h
+    # All mount points present
+
+  pvs / vgs / lvs
+    # PV: /dev/mapper/mpatha3, VG: rhel, all LVs correct
+
+  cat /etc/fstab
+    # All entries use /dev/mapper paths
+
+14.3 NETWORK VALIDATION
+-------------------------
+
+  cat /proc/net/bonding/bond0
+    # Mode: active-backup, Active slave: ens160, both slaves up
+
+  ip addr show bond0
+    # IP: 192.168.100.10/24
+
+  ip route show
+    # Default via 192.168.100.1
+
+  ping -c 4 192.168.100.1
+  nslookup google.com
+
+14.4 SERVICE VALIDATION
+-------------------------
+
+  systemctl status sshd chronyd auditd rsyslog firewalld multipathd
+    # All: active (running) and enabled
+
+14.5 TIME SYNCHRONIZATION
+---------------------------
+
+  chronyc sources
+    # At least one source with ^*
+  chronyc tracking
+    # System time offset < 1ms
+
+14.6 SUBSCRIPTION AND REPOSITORIES
+-------------------------------------
+
+  subscription-manager status
+    # Overall Status: Current
+  subscription-manager repos --list-enabled
+    # rhel-9-for-x86_64-baseos-rpms
+    # rhel-9-for-x86_64-appstream-rpms
+
+14.7 SECURITY VALIDATION
+--------------------------
+
+  getenforce          → Enforcing
+  sestatus            → enabled, enforcing, targeted
+  firewall-cmd --state → running
+  firewall-cmd --list-all
+  sshd -T | grep -E "permitrootlogin|passwordauthentication|pubkeyauthentication"
+    # permitrootlogin no | passwordauthentication no | pubkeyauthentication yes
+  auditctl -l | wc -l
+    # > 0 rules loaded
+
+14.8 BOOT PROCESS VALIDATION
+------------------------------
+
+  grep rd.multipath /etc/default/grub
+    # rd.multipath=1 must be present
+  lsinitrd | grep multipath
+    # Multipath modules and config in initramfs
+  lsblk
+    # Root on /dev/mapper/rhel-root (LVM on multipath)
+
+14.9 PERFORMANCE BASELINE
+---------------------------
+
+  dnf install -y sysstat
+  systemctl enable --now sysstat
+
+  sar -u 1 10      # CPU baseline
+  iostat -x 1 5   # I/O baseline
+  sar -n DEV 1 5  # Network baseline
+
+  Document baselines for future comparison.
+
+14.10 POST-INSTALL VALIDATION CHECKLIST
+-----------------------------------------
+
+[ ] hostname, OS version, kernel, hardware verified
+[ ] multipath: mpatha, both paths active, WWID correct
+[ ] All mount points present, usage < 10%
+[ ] LVM config: rhel VG, all LVs
+[ ] Network bonding active, connectivity verified
+[ ] All critical services: active and enabled
+[ ] chronyd: synchronized, offset < 1ms
+[ ] Subscription current, repos enabled
+[ ] SELinux: Enforcing
+[ ] Firewall: running, minimal rules
+[ ] SSH: hardened, key auth working
+[ ] Audit rules loaded
+[ ] Baseline performance data captured and stored
+[ ] No errors in dmesg or journalctl
+
+
+================================================================================
+SECTION 15: ADDITIONAL POST-INSTALL CONFIGURATION  [** NEW / EXPANDED **]
+================================================================================
+
+15.1 SYSTEM UPDATES AND PATCHING
+----------------------------------
+
+  # Check and apply security updates
+  dnf check-update
+  dnf update --security -y
+
+  # Full system update
+  dnf update -y
+
+  # Check if reboot is required
+  needs-restarting -r
+
+  # Schedule reboot during approved maintenance window if kernel updated
+
+  OFFLINE/SATELLITE SUBSCRIPTION (environments without internet):
+    If the server cannot reach Red Hat CDN directly, use Red Hat Satellite
+    or a local repository mirror:
+
+    # Configure local repo (example):
+    cat > /etc/yum.repos.d/local-rhel9.repo <<'EOF'
+    [local-baseos]
+    name=Local RHEL 9 BaseOS
+    baseurl=http://repo-server.example.com/rhel9/baseos
+    enabled=1
+    gpgcheck=1
+    gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release
+    EOF
+
+    # Or register to Satellite:
+    subscription-manager register \
+      --serverurl=https://satellite.example.com \
+      --baseurl=https://satellite.example.com/pulp/repos \
+      --org="Default_Organization" \
+      --activationkey="rhel9-prod"
+
+15.2 PERFORMANCE TUNING WITH TUNED
+------------------------------------
+
+  dnf install -y tuned
+  systemctl enable --now tuned
+
+  # For SAN-boot storage servers, apply throughput-performance profile:
+  tuned-adm profile throughput-performance
+
+  # Verify active profile:
+  tuned-adm active
+    Current active profile: throughput-performance
+
+  # Other common profiles:
+  #   virtual-guest       (for VMs)
+  #   latency-performance (low latency workloads)
+  #   balanced            (default)
+
+  # View available profiles:
+  tuned-adm list
+
+  NOTE: throughput-performance disables CPU power saving and tuning
+  for maximum I/O and CPU throughput — appropriate for database and
+  storage-intensive workloads.
+
+15.3 CHRONY DETAILED CONFIGURATION
+-------------------------------------
+
+  vi /etc/chrony.conf
+
+  --- BEGIN /etc/chrony.conf ---
+  # Corporate NTP servers (primary)
+  server ntp1.example.com iburst
+  server ntp2.example.com iburst
+
+  # Red Hat pool fallback
+  pool 2.rhel.pool.ntp.org iburst
+
+  # Allow step on startup if offset > 1 second (up to 3 times)
+  makestep 1.0 3
+
+  # Drift file
+  driftfile /var/lib/chrony/drift
+
+  # RTC sync
+  rtcsync
+
+  # Local stratum fallback (if NTP unreachable)
+  local stratum 10
+
+  # Log directory
+  logdir /var/log/chrony
+  --- END /etc/chrony.conf ---
+
+  systemctl restart chronyd
+
+  # Verify
+  chronyc sources         # ^* indicates selected source
+  chronyc tracking        # Offset should be < 1ms for production
+  chronyc sourcestats     # Statistical summary
+
+  TROUBLESHOOTING CHRONY:
+    If no sources are reachable:
+      chronyc activity        # Check number of reachable sources
+      ping ntp1.example.com   # Verify NTP server reachability
+      firewall-cmd --list-all # Verify UDP/123 is not blocked outbound
+
+15.4 RSYSLOG REMOTE LOGGING  [** NEW **]
+------------------------------------------
+
+  For centralized log management, configure rsyslog to forward logs
+  to a central syslog server:
+
+  vi /etc/rsyslog.conf
+
+  # Add at the bottom — forward all logs to central syslog (TCP):
+  *.* @@syslog-server.example.com:514
+  # (use @@ for TCP, @ for UDP)
+
+  # Or for TLS (recommended for production):
+  # Requires rsyslog-gnutls package
+  dnf install -y rsyslog-gnutls
+
+  # Add TLS forwarding:
+  $DefaultNetstreamDriverCAFile /etc/rsyslog.d/certs/ca.pem
+  $ActionSendStreamDriver gtls
+  $ActionSendStreamDriverMode 1
+  $ActionSendStreamDriverAuthMode anon
+  *.* @@syslog-server.example.com:6514
+
+  systemctl restart rsyslog
+
+  # Verify logs are being sent:
+  logger "Test message from prod-app-01"
+  # Check on syslog server for the message
+
+15.5 KDUMP CONFIGURATION  [** NEW **]
+---------------------------------------
+
+  kdump captures kernel crash dumps for forensic analysis of system panics.
+
+  # Install kdump
+  dnf install -y kexec-tools
+
+  # Configure kdump memory reservation in /etc/default/grub
+  # (Anaconda typically adds crashkernel= automatically)
+  grep crashkernel /etc/default/grub
+  # Expected: crashkernel=1G-4G:192M,4G-64G:256M,64G-:512M
+
+  # If missing, add and rebuild:
+  # Edit GRUB_CMDLINE_LINUX to include: crashkernel=auto
+  grub2-mkconfig -o /boot/grub2/grub.cfg
+  # Reboot is required for crashkernel reservation to take effect
+
+  # Configure kdump target (save dumps to /var/crash or remote):
+  vi /etc/kdump.conf
+    path /var/crash          # Local dump path
+    core_collector makedumpfile -l --message-level 1 -d 31
+
+  # If /var/crash may not have enough space, use /data partition:
+  # path /data/kdump
+
+  systemctl enable --now kdump
+
+  # Verify kdump is active:
+  systemctl status kdump
+  # "Kdump is operational"
+
+  NOTE: kdump requires a reboot after crashkernel is added to GRUB.
+  Ensure /var/crash (or alternate path) has at least RAM size + 1 GB
+  of free space.
+
+15.6 EMERGENCY BOOT AND RESCUE PROCEDURES  [** NEW **]
+---------------------------------------------------------
+
+  SINGLE-USER / EMERGENCY MODE (when system boots but is unstable):
+
+  In GRUB menu, press 'e' to edit boot entry:
+    Find the line starting with "linux" or "linuxefi"
+
+    For single-user mode: append "single" or "1"
+    For emergency mode:   append "systemd.unit=emergency.target"
+    For rescue mode:      append "systemd.unit=rescue.target"
+    For verbose debug:    remove "rhgb quiet" and add "systemd.log_level=debug"
+
+  Press Ctrl+X to boot.
+
+  UEFI SHELL RECOVERY (if GRUB does not appear):
+
+  If server boots to UEFI Shell instead of GRUB:
+  1. At UEFI shell prompt, list file systems:
+       Shell> map -r
+       # Look for: FS0, FS1, etc.
+  2. Navigate to EFI partition:
+       Shell> FS0:
+       Shell> ls
+  3. Try to launch bootloader:
+       Shell> \EFI\redhat\shimx64.efi
+  4. If fails, boot from rescue media and reinstall GRUB (see Section 16).
+
+  RESCUE MODE FROM ISO (most reliable recovery method):
+  1. Mount RHEL 9.7 ISO via BMC virtual media
+  2. Boot from ISO
+  3. Select: Troubleshooting → Rescue a Red Hat Enterprise Linux system
+  4. Select: Continue (mounts installed system at /mnt/sysroot)
+  5. chroot /mnt/sysroot
+  6. Perform repairs (GRUB, initramfs, fstab, etc.)
+  7. exit → reboot
+
+  GRUB REINSTALL FROM RESCUE:
+    grub2-install --target=x86_64-efi --efi-directory=/boot/efi
+    grub2-mkconfig -o /boot/grub2/grub.cfg
+    dracut --force --add multipath --kver $(uname -r)
+    efibootmgr    # Verify "redhat" entry exists
+
+  If efibootmgr shows no redhat entry:
+    efibootmgr --create --disk /dev/mapper/mpatha --part 1 \
+      --label "redhat" --loader '\EFI\redhat\shimx64.efi'
+
+15.7 ADDITIONAL LUN PROVISIONING (DATA LUNS)  [** NEW **]
+-----------------------------------------------------------
+
+  After OS is running, additional data LUNs can be provisioned:
+
+  ON STORAGE ARRAY:
+    raidcom add ldev -pool <pool_id> -ldev_id 0x0101 \
+      -capacity 1T -emulation OPEN-V
+    raidcom modify ldev -ldev_id 0x0101 -cache enable
+    raidcom modify ldev -ldev_id 0x0101 -alua enable
+    raidcom add lun -port CL1-A-0 -ldev_id 0x0101 -lun_id 1
+    raidcom add lun -port CL2-B-0 -ldev_id 0x0101 -lun_id 1
+
+  ON SERVER — RESCAN AND MULTIPATH:
+    # Rescan SCSI bus for new LUN
+    for host in /sys/class/scsi_host/host*/; do
+      echo "- - -" > "${host}scan"
+    done
+
+    # Reload multipath
+    multipath -r
+
+    # Verify new device
+    multipath -ll
+    lsblk
+
+  ON SERVER — PREPARE NEW LUN FOR USE:
+    # Create PV on new multipath device (e.g., mpathb)
+    pvcreate /dev/mapper/mpathb
+
+    # Create a new VG (or extend existing)
+    vgcreate data_vg /dev/mapper/mpathb
+    # or extend existing:
+    # vgextend rhel /dev/mapper/mpathb
+
+    # Create LV and filesystem
+    lvcreate -l 100%FREE -n app_data data_vg
+    mkfs.xfs /dev/data_vg/app_data
+    mkdir -p /data/appname
+    echo "/dev/data_vg/app_data /data/appname xfs defaults,noatime 0 0" >> /etc/fstab
+    mount -a
+
+    # Update multipath.conf to include new device WWID
+    /lib/udev/scsi_id -g -u /dev/mapper/mpathb
+    # Add to multipaths {} section in /etc/multipath.conf
+    systemctl reload multipathd
+
+15.8 SUBSCRIPTION MANAGER — USEFUL COMMANDS
+----------------------------------------------
+
+  # Check status
+  subscription-manager status
+  subscription-manager list --consumed
+  subscription-manager list --available
+
+  # Enable/disable repos
+  subscription-manager repos --enable=rhel-9-for-x86_64-supplementary-rpms
+  subscription-manager repos --disable=<repo-id>
+
+  # Refresh entitlements
+  subscription-manager refresh
+
+  # Unregister (if re-provisioning)
+  subscription-manager unregister
+
+15.9 ADDITIONAL CONFIGURATION CHECKLIST
+-----------------------------------------
+
+[ ] System updates applied (security patches)
+[ ] tuned installed and active (throughput-performance profile)
+[ ] chrony configured with corporate NTP servers
+[ ] rsyslog remote forwarding configured (if centralized logging used)
+[ ] kdump configured and active (crashkernel parameter in GRUB)
+[ ] AIDE initialized and daily check scheduled
+[ ] Emergency boot procedures documented in ops runbook
+[ ] Data LUN provisioning procedure tested (if applicable)
+[ ] Subscription refresh verified
+[ ] All changes documented in change request and CMDB
+
+
+================================================================================
+SECTION 16: ROLLBACK PROCEDURE
+================================================================================
+
+16.1 ROLLBACK STRATEGY
+------------------------
+
+  Scenario 1: Installation failure during OS install
+    → Restore LUN snapshot (or zero LUN) → Re-install
+
+  Scenario 2: Failed SAN boot after installation
+    → Boot from rescue ISO → Repair GRUB/initramfs → Reboot from SAN
+
+  Scenario 3: Post-installation configuration errors
+    → Restore config files from backup → Restart affected services
+
+  Scenario 4: Complete system failure
+    → Restore from storage snapshot → Power on
+
+16.2 PRE-ROLLBACK PREPARATION
+--------------------------------
+
+  Create snapshot BEFORE any changes:
+
+    raidcom add snapshot -ldev_id 0x0100 \
+      -snapshot_name bootlun_prod-app-01_pre_install_20240315
+
+  Pre-change configuration backup:
+    BACKUP_DIR=/root/config_backups/$(date +%Y%m%d_%H%M%S)
+    mkdir -p $BACKUP_DIR
+    cp -a /etc/NetworkManager/system-connections/ $BACKUP_DIR/
+    cp /etc/ssh/sshd_config $BACKUP_DIR/
+    cp /etc/multipath.conf $BACKUP_DIR/
+    cp /etc/fstab $BACKUP_DIR/
+    cp /etc/default/grub $BACKUP_DIR/
+    cp /etc/sysctl.d/* $BACKUP_DIR/
+    tar -czf /root/config_backup_$(date +%Y%m%d_%H%M%S).tar.gz $BACKUP_DIR
+
+16.3 ROLLBACK — INSTALLATION FAILURE
+---------------------------------------
+
+  1. Power off server (BMC → Power Off)
+  2. Unmap LUN:
+     raidcom delete lun -port CL1-A-0 -lun_id 0
+     raidcom delete lun -port CL2-B-0 -lun_id 0
+  3. Restore from snapshot:
+     raidcom restore snapshot -ldev_id 0x0100 \
+       -snapshot_name bootlun_prod-app-01_pre_install_20240315
+     (Or zero LUN: raidcom shredding ldev -ldev_id 0x0100 — WARNING: destroys data)
+  4. Re-map LUN:
+     raidcom add lun -port CL1-A-0 -ldev_id 0x0100 -lun_id 0
+     raidcom add lun -port CL2-B-0 -ldev_id 0x0100 -lun_id 0
+  5. Retry installation from Section 8
+
+  Estimated time: 30–60 minutes
+
+16.4 ROLLBACK — FAILED SAN BOOT
+----------------------------------
+
+  1. Mount RHEL ISO via BMC virtual media
+  2. Boot from ISO → Troubleshooting → Rescue system → Continue
+  3. chroot /mnt/sysroot
+  4. Check multipath: multipath -ll
+  5. Reinstall GRUB:
+     grub2-install --target=x86_64-efi --efi-directory=/boot/efi
+     grub2-mkconfig -o /boot/grub2/grub.cfg
+  6. Rebuild initramfs:
+     dracut --force --add multipath --kver $(uname -r)
+  7. Verify rd.multipath=1 in /etc/default/grub
+  8. exit → reboot → disconnect virtual media
+
+  Estimated time: 30 minutes
+
+16.5 ROLLBACK — CONFIGURATION ERRORS
+---------------------------------------
+
+  Access via BMC remote console (out-of-band):
+    https://10.10.10.100
+
+  Network config:
+    rm -rf /etc/NetworkManager/system-connections/*
+    cp -a $BACKUP_DIR/system-connections/* /etc/NetworkManager/system-connections/
+    chmod 600 /etc/NetworkManager/system-connections/*
+    systemctl restart NetworkManager
+
+  Firewall:
+    systemctl stop firewalld
+    # Fix configuration
+    firewall-cmd --reload
+    systemctl start firewalld
+
+  SELinux:
+    setenforce 0    # Temporary — investigate and fix proper policy
+    # Use audit2allow to generate exception, then setenforce 1
+
+16.6 ROLLBACK DOCUMENTATION TEMPLATE
+---------------------------------------
+
+  Date/Time: _______________
+  Performed by: _______________
+  Server: prod-app-01.example.com / 192.168.100.10
+  Boot LUN WWID: 360060480000012345601
+
+  Rollback Trigger:
+    [ ] Installation failure
+    [ ] Failed SAN boot
+    [ ] Config error
+    [ ] Complete failure
+    [ ] Other: _______________
+
+  Method Used:
+    [ ] Storage snapshot restore
+    [ ] Config file restore
+    [ ] GRUB/initramfs repair
+    [ ] Complete re-install
+
+  Steps Executed:
+    1. _______________  2. _______________  3. _______________
+
+  Duration: _______________  Success: YES / PARTIAL / NO
+
+  Root Cause: _______________
+  Preventive Actions: _______________
+
+
+================================================================================
+SECTION 17: PRODUCTION ACCEPTANCE CHECKLIST
+================================================================================
+
+17.1 ACCEPTANCE CRITERIA
+--------------------------
+
+[ ] Hardware: DS120, 64 GB RAM, dual FC HBA, dual NICs — verified
+[ ] Firmware: BIOS, BMC, HBA — all up-to-date
+[ ] SAN: Boot LUN 600 GB RAID 10, masked, both fabrics online
+[ ] FC Zoning: Fabric A and B — configured, active, tested
+[ ] OS: RHEL 9.7, SAN boot, no install errors
+[ ] Partitioning: All 13 mount points at correct sizes
+[ ] Multipath: mpatha, both paths, failover tested
+[ ] Network: bond0, IP correct, DNS working, failover tested
+[ ] Security: SELinux enforcing, firewall running, SSH hardened, audit active
+[ ] Services: sshd, chronyd, auditd, rsyslog, firewalld, multipathd — all active/enabled
+[ ] Subscription: current, repos enabled, security updates applied
+[ ] Time: chrony synchronized < 1ms offset
+[ ] Performance: baseline captured and stored
+[ ] Documentation: install CR, CMDB, IP, storage, zoning, passwords in vault
+[ ] Testing: multipath failover, bonding failover, reboot — all passed
+[ ] Rollback: snapshot created, procedure documented and tested
+[ ] AIDE: initialized, daily check scheduled
+[ ] kdump: configured and active
+[ ] tuned: throughput-performance profile active
+
+17.2 SIGN-OFF
+--------------
+
++---------------------------+------------------+----------+------------+
+| Role                      | Name             | Sign     | Date       |
++---------------------------+------------------+----------+------------+
+| Linux Infrastructure Lead | _______________  | ________ | __________ |
+| Storage Team Lead         | _______________  | ________ | __________ |
+| Network Team Lead         | _______________  | ________ | __________ |
+| Security Team Lead        | _______________  | ________ | __________ |
+| Application Owner         | _______________  | ________ | __________ |
+| Operations Manager        | _______________  | ________ | __________ |
+| Change Advisory Board     | _______________  | ________ | __________ |
++---------------------------+------------------+----------+------------+
+
+Acceptance Status:
+  [ ] Fully Accepted — all criteria met
+  [ ] Conditionally Accepted — outstanding items: _______________
+  [ ] Not Accepted — major issues require resolution
+
+
+================================================================================
+SECTION 18: OPERATIONAL HANDOVER CHECKLIST
+================================================================================
+
+18.1 HANDOVER MEETING AGENDA
+------------------------------
+
+  1. System overview (purpose, architecture, integration points)
+  2. Access and credentials (BMC, SSH, sudo, Red Hat portal, storage, FC)
+  3. Configuration walkthrough (bonding, multipath, security, services)
+  4. Operational procedures (reboot, patching, disk expansion, backup)
+  5. Common troubleshooting scenarios
+  6. Support contacts and escalation matrix
+  7. Documentation location
+
+18.2 OPERATIONAL RUNBOOK
+--------------------------
+
+  SERVER INFORMATION:
+    Hostname: prod-app-01.example.com | IP: 192.168.100.10/24
+    BMC IP: 10.10.10.100 | OS: RHEL 9.7
+    Boot LUN WWID: 360060480000012345601 | Size: 600 GB
+    FC Paths: sda (Fabric A), sdb (Fabric B) → mpatha
+    Network: bond0 (ens160 primary, ens192 backup) — active-backup
+
+  REBOOT PROCEDURE:
+    Pre: Create snapshot, notify stakeholders, check active sessions
+    sync && shutdown -r +5 "Scheduled maintenance reboot"
+    Monitor via BMC remote console
+    Post: Verify multipath, bonding, services, application
+
+  PATCHING:
+    Pre: Snapshot, backup configs, notify
+    dnf update -y
+    needs-restarting -r → reboot if kernel updated
+    Post: Full validation checklist, delete snapshot after 24h soak
+
+  DISK SPACE CLEANUP:
+    journalctl --vacuum-time=7d
+    dnf clean all
+    find /var/log -name "*.gz" -mtime +30 -delete
+    find /tmp -type f -mtime +7 -delete
+
+  MULTIPATH PATH FAILURE RESPONSE:
+    multipath -ll → identify failed path
+    System continues on remaining path
+    Escalate: storage team (controller port) + network team (FC switch)
+    Monitor for auto-recovery; verify with multipath -ll
+
+  BONDING FAILOVER RESPONSE:
+    cat /proc/net/bonding/bond0 → identify failed slave
+    System continues on backup interface
+    Escalate: network team (investigate failed interface/switch port)
+
+18.3 TROUBLESHOOTING QUICK REFERENCE
+---------------------------------------
+
++---------------------------+-------------------------------------------------+
+| Symptom                   | First Response                                  |
++---------------------------+-------------------------------------------------+
+| Cannot SSH to server      | Ping IP → Check bond status → BMC console      |
+|                           | → Check sshd status → Check firewall            |
++---------------------------+-------------------------------------------------+
+| System slow               | top → free -h → iostat -x 1 5 → df -h         |
+|                           | → multipath -ll → check for swap usage          |
++---------------------------+-------------------------------------------------+
+| Boot failure              | BMC console → observe boot messages            |
+|                           | → GRUB present? → multipath detected?           |
+|                           | → Rescue ISO → chroot → repair                  |
++---------------------------+-------------------------------------------------+
+| Application not working   | service status → app logs → SELinux denials    |
+|                           | → firewall rules → disk space                   |
++---------------------------+-------------------------------------------------+
+| Disk space full           | df -h → du -sh /path/* | sort -rh              |
+|                           | → clean logs/cache → LV expansion               |
++---------------------------+-------------------------------------------------+
+| Multipath path failure    | multipath -ll → FC cable/switch/HBA check       |
++---------------------------+-------------------------------------------------+
+| No NTP sync               | chronyc activity → ping NTP server             |
+|                           | → check firewall UDP/123                        |
++---------------------------+-------------------------------------------------+
+
+18.4 ESCALATION CONTACTS
+--------------------------
+
+  Linux Team:    linux-team@example.com | On-call: [Phone]
+  Storage Team:  storage-team@example.com | On-call: [Phone]
+  Network Team:  network-team@example.com | On-call: [Phone]
+  Security Team: security-team@example.com | On-call: [Phone]
+  App Team:      app-team@example.com | On-call: [Phone]
+  Red Hat:       https://access.redhat.com | Account: [RH Account #]
+
+18.5 CHANGE MANAGEMENT
+------------------------
+
+  All changes require:
+    [ ] Change Request (CR) approval
+    [ ] CAB review (major changes)
+    [ ] Snapshot/backup before change
+    [ ] Rollback plan
+    [ ] Post-change validation
+    [ ] Documentation update
+
+18.6 HANDOVER SIGN-OFF
+------------------------
+
+  Operations Team Member acknowledges receipt of runbook and knowledge transfer:
+  Name: _______________ | Signature: _______________ | Date: _______________
+
+  Handover Provided By:
+  Name: _______________ | Signature: _______________ | Date: _______________
+
+
+================================================================================
+SECTION 19: TROUBLESHOOTING GUIDE
+================================================================================
+
+19.1 SAN BOOT — BOOT LUN NOT DETECTED
+----------------------------------------
+
+  Symptoms: No boot device found; HBA sees no targets
+
+  Steps:
+  1. Check FC link status in HBA BIOS
+     - Link must be Online before fabric login occurs
+     - If down: reseat FC cable, check SFP, check switch port
+
+  2. Verify HBA logged into fabric:
+     ssh admin@fc-switch-a
+     nsshow | grep "50:01:43:80:12:34:56:78"
+
+  3. Verify zoning:
+     cfgshow --effective | grep "prod-app-01"
+
+  4. Verify LUN masking:
+     raidcom get lun -port CL1-A-0 (should show LUN 0 → LDEV 0x0100)
+
+  5. Verify storage port is ONLINE:
+     raidcom get port -port CL1-A -key opt | grep STATUS
+
+19.2 SAN BOOT — GRUB DOES NOT APPEAR
+---------------------------------------
+
+  Symptoms: HBA detects LUN; blank screen after POST
+
+  Recovery:
+  1. Boot from rescue ISO
+  2. chroot /mnt/sysroot
+  3. ls /boot/efi/EFI/redhat/  — verify grubx64.efi, shimx64.efi present
+  4. Reinstall if missing:
+     dnf reinstall grub2-efi-x64 shim-x64 grub2-efi-x64-modules
+     grub2-install --target=x86_64-efi --efi-directory=/boot/efi
+     grub2-mkconfig -o /boot/efi/EFI/redhat/grub.cfg
+  5. Verify EFI boot entry:
+     efibootmgr | grep redhat
+     # If missing, add:
+     efibootmgr --create --disk /dev/mapper/mpatha --part 1 \
+       --label "redhat" --loader '\EFI\redhat\shimx64.efi'
+
+19.3 SAN BOOT — KERNEL PANIC
+------------------------------
+
+  Recovery:
+  1. Edit GRUB entry (press 'e'), remove "rhgb quiet", add "debug"
+  2. Boot to emergency.target: append "systemd.unit=emergency.target"
+  3. Verify initramfs has multipath:
+     lsinitrd | grep multipath
+  4. Rebuild if missing:
+     dracut --force --add multipath --kver $(uname -r)
+  5. Check /etc/fstab has correct /dev/mapper paths
+  6. Check for XFS corruption:
+     xfs_repair -n /dev/mapper/rhel-root  (check)
+     xfs_repair /dev/mapper/rhel-root     (repair)
+
+19.4 MULTIPATH — DEVICE NOT CREATED
+--------------------------------------
+
+  1. systemctl status multipathd → start if not running
+  2. multipath -t → check config syntax
+  3. /lib/udev/scsi_id -g -u /dev/sda vs /dev/sdb → verify same WWID
+  4. multipath -v2 /dev/sda → manually create device
+  5. Check blacklist in multipath.conf — Hitachi must be in exceptions
+
+19.5 MULTIPATH — PATH CONSTANTLY FAILING
+------------------------------------------
+
+  1. cat /sys/class/fc_host/host*/port_state → should be Online
+  2. dmesg | grep -i "scsi\|error" | tail -30
+  3. Check FC switch port errors (coordinate with Network team)
+  4. Rescan SCSI bus:
+     echo "- - -" > /sys/class/scsi_host/host2/scan
+     multipath -r
+
+19.6 NETWORK — NO CONNECTIVITY
+---------------------------------
+
+  Access via BMC console if SSH is down.
+
+  1. ip link show bond0 → if DOWN: ip link set bond0 up
+  2. cat /proc/net/bonding/bond0 → at least one slave must be up
+  3. ip addr show bond0 → IP must be present; if missing: nmcli connection up bond0
+  4. ip route show → default route must exist
+  5. systemctl status NetworkManager → restart if needed
+  6. ping 192.168.100.1 → if fails, escalate to Network team
+
+19.7 NETWORK — DNS NOT WORKING
+---------------------------------
+
+  1. cat /etc/resolv.conf → nameserver entries correct?
+  2. nslookup google.com 10.10.10.53 → test DNS server directly
+  3. firewall-cmd --list-all → DNS port 53 not blocked?
+  4. If resolv.conf is wrong:
+     nmcli connection modify bond0 ipv4.dns "10.10.10.53,10.10.10.54"
+     nmcli connection up bond0
+
+19.8 STORAGE — FILESYSTEM FULL
+---------------------------------
+
+  1. df -h → identify full filesystem
+  2. du -sh /path/* | sort -rh | head -10 → find large directories
+  3. Clean:
+     journalctl --vacuum-time=7d
+     dnf clean all
+     find /var/log -name "*.gz" -mtime +30 -delete
+  4. If critical filesystem — expand LV (see Section 10.3)
+  5. Coordinate new SAN LUN with Storage team if VG is also full
+
+19.9 SYSTEM HANGS DURING BOOT
+--------------------------------
+
+  1. BMC remote console — observe where hang occurs
+  2. "Starting Switch Root" → initramfs multipath issue
+  3. "Reached target Multi-User" → service startup issue
+  4. Add debug: remove "rhgb quiet" from GRUB entry, add "debug"
+  5. Boot emergency.target, check systemctl --failed
+  6. journalctl -xb → review full boot log
+
+19.10 GENERAL TROUBLESHOOTING APPROACH
+-----------------------------------------
+
+  [ ] Gather: what symptom, when started, what changed
+  [ ] Check logs: journalctl -xe | journalctl -xb | dmesg | tail
+  [ ] Check failed services: systemctl --failed
+  [ ] Check resources: top / free -h / df -h / iostat -x 1 5
+  [ ] Check connectivity: ping → route → DNS
+  [ ] Isolate: reproducible? affects specific function or entire system?
+  [ ] Implement fix (test in test env first if possible)
+  [ ] Document root cause, solution, prevention
+  [ ] Update knowledge base
+
+
+================================================================================
+SECTION 20: APPENDICES
+================================================================================
+
+APPENDIX A: SAMPLE KICKSTART FILE
+------------------------------------
+
+  # prod-app-01-ks.cfg
+  # Host at: http://mgmt-server.example.com/kickstart/prod-app-01-ks.cfg
+
+  install
+  cdrom
+  text
+  keyboard us
+  lang en_US.UTF-8
+
+  network --bootproto=static --device=ens160 --ip=192.168.100.10 \
+    --netmask=255.255.255.0 --gateway=192.168.100.1 \
+    --nameserver=10.10.10.53,10.10.10.54 \
+    --hostname=prod-app-01.example.com --activate
+
+  # Generate encrypted passwords:
+  # python3 -c 'import crypt; print(crypt.crypt("YourPassword", crypt.mksalt(crypt.METHOD_SHA512)))'
+  rootpw --iscrypted $6$rounds=5000$XXXX
+  user --name=adminuser --groups=wheel --password=$6$rounds=5000$YYYY --iscrypted
+
+  timezone America/New_York --utc
+  selinux --enforcing
+  firewall --enabled --service=ssh
+  bootloader --location=mbr --boot-drive=mpatha --append="rd.multipath=1 crashkernel=auto"
+
+  clearpart --all --drives=mpatha --initlabel
+
+  part /boot/efi --fstype="efi" --ondisk=mpatha --size=1024 --fsoptions="umask=0077,shortname=winnt"
+  part /boot     --fstype="xfs" --ondisk=mpatha --size=2048
+  part pv.01     --fstype="lvmpv" --ondisk=mpatha --size=1 --grow
+
+  volgroup rhel pv.01
+
+  logvol swap             --fstype="swap" --size=32768  --name=swap          --vgname=rhel
+  logvol /                --fstype="xfs"  --size=102400 --name=root          --vgname=rhel
+  logvol /usr             --fstype="xfs"  --size=51200  --name=usr           --vgname=rhel
+  logvol /var             --fstype="xfs"  --size=153600 --name=var           --vgname=rhel
+  logvol /var/log         --fstype="xfs"  --size=51200  --name=var_log       --vgname=rhel
+  logvol /var/log/audit   --fstype="xfs"  --size=20480  --name=var_log_audit --vgname=rhel
+  logvol /tmp             --fstype="xfs"  --size=20480  --name=tmp           --vgname=rhel --fsoptions="noexec,nosuid,nodev"
+  logvol /home            --fstype="xfs"  --size=20480  --name=home          --vgname=rhel --fsoptions="nosuid,nodev"
+  logvol /opt             --fstype="xfs"  --size=51200  --name=opt           --vgname=rhel
+  logvol /srv             --fstype="xfs"  --size=102400 --name=srv           --vgname=rhel
+  logvol /data            --fstype="xfs"  --size=1 --grow --name=data        --vgname=rhel
+
+  %packages
+  @^minimal-environment
+  @standard
+  @security-tools
+  @system-tools
+  device-mapper-multipath
+  sg3_utils
+  lsscsi
+  chrony
+  tuned
+  rsyslog
+  audit
+  aide
+  kexec-tools
+  vim
+  wget
+  curl
+  net-tools
+  bind-utils
+  tcpdump
+  %end
+
+  %post --log=/root/ks-post.log
+  systemctl enable multipathd chronyd auditd tuned kdump
+  dracut --force --add multipath
+  tuned-adm profile throughput-performance
+  touch /root/kickstart-completed
+  %end
+
+  reboot
+
+
+APPENDIX B: QUICK REFERENCE COMMANDS
+---------------------------------------
+
+  MULTIPATH:
+    multipath -ll                  List multipath devices
+    multipathd show paths          Show path states
+    multipathd show maps stats     I/O statistics
+    multipath -r                   Reload multipath maps
+    systemctl reload multipathd    Reload config
+
+  STORAGE:
+    lsblk / lsblk -f              Block devices
+    pvs / vgs / lvs               LVM status
+    lvextend -L +50G /dev/rhel/X  Extend LV
+    xfs_growfs /mount             Grow XFS online
+    xfs_info /dev/mapper/rhel-X   XFS info
+
+  FC HBA:
+    cat /sys/class/fc_host/host*/port_state   Port states
+    cat /sys/class/fc_host/host*/port_name    WWPNs
+    systool -c fc_host -v         Detailed FC info
+    lspci | grep -i fibre         List HBAs
+
+  NETWORK:
+    nmcli device status           Interface states
+    nmcli connection show         All connections
+    cat /proc/net/bonding/bond0   Bond status
+    ip addr / ip route / ip link  IP/route/link
+
+  SERVICES:
+    systemctl status/start/stop/restart/enable/disable <svc>
+    systemctl --failed            Failed services
+    journalctl -u <svc> -f       Follow service logs
+    journalctl -xb               Boot logs
+
+  BOOT/GRUB:
+    grub2-mkconfig -o /boot/grub2/grub.cfg   Regenerate GRUB
+    dracut --force --add multipath            Rebuild initramfs
+    lsinitrd | grep multipath                 Check initramfs
+    efibootmgr                                EFI boot entries
+
+  SECURITY:
+    getenforce / setenforce 1     SELinux status/enforce
+    ausearch -m avc -ts recent    SELinux denials
+    firewall-cmd --list-all       Firewall rules
+    firewall-cmd --reload         Reload firewall
+    sshd -t                       Test SSH config
+    auditctl -l                   Audit rules
+    aide --check                  File integrity check
+
+  PERFORMANCE:
+    top / htop                    CPU/memory usage
+    iostat -x 1 5                 I/O stats
+    sar -u 1 10                   CPU over time
+    sar -n DEV 1 5               Network over time
+    vmstat 1 10                   Virtual memory
+    chronyc tracking              NTP sync status
+    tuned-adm active              Active tuned profile
+
+  TROUBLESHOOTING:
+    dmesg | tail -20              Kernel messages
+    journalctl -f                 Follow system log
+    ping / traceroute / nslookup  Connectivity
+    ss -tunapl                    Socket stats
+    tcpdump -i bond0 -n           Packet capture
+    needs-restarting -r           Check if reboot needed
+
+
+APPENDIX C: PARTITION SIZE REFERENCE
+---------------------------------------
+
+  +---------------------+----------+------+----------+--------------------+
+  | Mount Point         | Size     | Type | FS       | Notes              |
+  +---------------------+----------+------+----------+--------------------+
+  | /boot/efi           | 1 GiB    | Std  | vfat/EFI | NOT LVM            |
+  | /boot               | 2 GiB    | Std  | xfs      | NOT LVM            |
+  | swap                | 32 GiB   | LVM  | swap     | = RAM/2 for 64 GB  |
+  | /                   | 100 GiB  | LVM  | xfs      | OS root            |
+  | /usr                | 50 GiB   | LVM  | xfs      | Binaries/libraries |
+  | /var                | 150 GiB  | LVM  | xfs      | Variable data      |
+  | /var/log            | 50 GiB   | LVM  | xfs      | System logs        |
+  | /var/log/audit      | 20 GiB   | LVM  | xfs      | Audit logs         |
+  | /tmp                | 20 GiB   | LVM  | xfs      | noexec,nosuid,nodev|
+  | /home               | 20 GiB   | LVM  | xfs      | nosuid,nodev       |
+  | /opt                | 50 GiB   | LVM  | xfs      | Vendor apps        |
+  | /srv                | 100 GiB  | LVM  | xfs      | Service data       |
+  | /data               | ~105 GiB | LVM  | xfs      | GROW (remaining)   |
+  +---------------------+----------+------+----------+--------------------+
+  Total: ~600 GB on 600 GB SAN LUN
+
+
+APPENDIX D: POST-INSTALL VALIDATION SCRIPT
+--------------------------------------------
+
+  #!/bin/bash
+  # validate_san_boot_install.sh
+  # Run: chmod +x /root/validate_san_boot_install.sh && /root/validate_san_boot_install.sh
+
+  LOGFILE="/var/log/san_boot_validation_$(date +%Y%m%d_%H%M%S).log"
+  ERRORS=0
+
+  log()   { echo "[$(date +'%Y-%m-%d %H:%M:%S')] $1" | tee -a $LOGFILE; }
+  error() { echo "[$(date +'%Y-%m-%d %H:%M:%S')] ERROR: $1" | tee -a $LOGFILE; ((ERRORS++)); }
+  check() { [ $? -eq 0 ] && log "✓ $1: PASS" || error "✗ $1: FAIL"; }
+
+  log "=== SAN Boot Validation: $(hostname) ==="
+
+  # OS Version
+  grep -q "Red Hat Enterprise Linux release 9.7" /etc/redhat-release
+  check "RHEL 9.7"
+
+  # Multipath
+  multipath -ll | grep -q "mpatha"
+  check "Multipath device mpatha"
+  [ $(multipath -ll | grep -c "active ready running") -eq 2 ]
+  check "Both FC paths active"
+
+  # Mount points
+  for MP in /boot/efi /boot / /usr /var /var/log /var/log/audit /tmp /home /opt /srv /data; do
+    mount | grep -q " on $MP "
+    check "Mount point $MP"
+  done
+
+  # LVM
+  vgs | grep -q "rhel"; check "Volume Group rhel"
+  [ $(lvs --noheadings | wc -l) -ge 11 ]; check "LV count >= 11"
+
+  # Network
+  ip link show bond0 > /dev/null 2>&1; check "bond0 exists"
+  ping -c 2 -W 2 $(ip route | grep default | awk '{print $3}') > /dev/null 2>&1
+  check "Gateway reachable"
+
+  # Services
+  for SVC in sshd chronyd auditd rsyslog firewalld multipathd NetworkManager; do
+    systemctl is-active --quiet $SVC; check "$SVC active"
+    systemctl is-enabled --quiet $SVC; check "$SVC enabled"
+  done
+
+  # SELinux
+  [ "$(getenforce)" = "Enforcing" ]; check "SELinux Enforcing"
+
+  # Firewall
+  firewall-cmd --state > /dev/null 2>&1; check "Firewall running"
+
+  # Time sync
+  chronyc tracking | grep -q "Reference ID"; check "Chrony synchronized"
+
+  # Subscription
+  subscription-manager status | grep -q "Overall Status: Current"
+  check "RH Subscription current"
+
+  # Boot config
+  grep -q "rd.multipath=1" /etc/default/grub; check "rd.multipath=1 in GRUB"
+  lsinitrd | grep -q "multipath"; check "Multipath in initramfs"
+
+  # Disk space
+  df -h | awk 'NR>1 && $5+0 > 90 {print $0}' > /tmp/disk_full.txt
+  [ ! -s /tmp/disk_full.txt ]; check "No filesystem > 90%"
+
+  log "=== Summary: $ERRORS error(s) ==="
+  [ $ERRORS -eq 0 ] && log "ALL CHECKS PASSED" || error "VALIDATION FAILED — review errors above"
+  [ $ERRORS -eq 0 ] && exit 0 || exit 1
+
+
+APPENDIX E: DOCUMENT REVISION HISTORY
+-----------------------------------------
+
+  v1.0 — 2024 — Initial Production Release
+         Complete install procedure, SAN boot, multipath, bonding,
+         security hardening, troubleshooting, rollback
+
+  v1.1 — 2024 — Consolidated + Added Missing Sections:
+         - GRUB repair and UEFI shell recovery procedures
+         - Emergency / single-user / rescue boot modes
+         - dracut rebuild options (--regenerate-all, --install)
+         - AIDE file integrity monitoring setup
+         - kdump crash dump configuration
+         - tuned profile selection and rationale
+         - chrony detailed configuration and troubleshooting
+         - rsyslog remote/TLS forwarding
+         - Subscription Manager offline/Satellite method
+         - NIC rename / naming verification note
+         - Additional data LUN provisioning procedure (post-OS)
+         - LUN expansion procedure with VG extension
+         - /tmp and /home mount security options (fstab)
+         - Kickstart updated to include aide, kexec-tools, post-install tuned
+         - Validation script updated (consolidated)
+         - Partition size reference table added
+
+  Next Review Date: 2025-03-15 (annual)
+  Document Owner: Linux Infrastructure Team
+  Feedback: linux-team@example.com
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+RHEL 9.7 SAN Boot Installation Guide — Hitachi DS120
+Version 1.1 (Consolidated)
+Sections: 20 | Appendices: 5
+
+Support Contacts:
+  Linux Team:    linux-team@example.com
+  Storage Team:  storage-team@example.com
+  Network Team:  network-team@example.com
+  Red Hat:       https://access.redhat.com
+
+Classification: Internal — Production Infrastructure
+Restricted to Authorized Personnel
+
+================================================================================
+
+
+================================================================================
+SECTION 21: RHEL 9 — BOOT FROM SAN END-TO-END INSTALLATION STEPS
+             (Plain-English Walkthrough with Clear Explanations)
+================================================================================
+
+PURPOSE OF THIS SECTION
+-------------------------
+This section consolidates every step required to install RHEL 9 and boot it
+entirely from a SAN LUN — in a single, linear, plain-English checklist.
+It is written for engineers who are performing this task for the first time
+or need a clear reference without cross-referencing multiple sections.
+
+Each step includes:
+  WHY  — the reason the step exists
+  HOW  — the exact commands or actions to perform
+  CHECK — how to confirm the step succeeded before moving on
+
+--------------------------------------------------------------------------------
+PHASE 0 — UNDERSTAND WHAT "BOOT FROM SAN" MEANS
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  Normally a server boots from a local disk (SATA/NVMe) attached directly
+  to the motherboard.  With SAN (Storage Area Network) boot, the server has
+  NO local disk.  Instead, the OS lives on a LUN (Logical Unit Number) that
+  sits in a remote enterprise storage array (in this case, Hitachi VSP) and
+  is connected via Fibre Channel (FC) cables.
+
+  This gives you:
+    - Storage redundancy (RAID inside the array)
+    - Path redundancy (two FC cables, two fabric switches)
+    - Centralised storage management (snapshots, clones, replication)
+    - Easy server replacement (swap the physical server; the data stays)
+
+  The boot sequence is:
+    1. Server powers on
+    2. UEFI firmware starts
+    3. FC HBA (Host Bus Adapter) card loads its Option ROM
+    4. HBA logs into both FC fabrics and discovers the boot LUN
+    5. GRUB2 bootloader is read FROM the SAN LUN
+    6. Linux kernel + initramfs load; multipath driver starts
+    7. Root filesystem on the SAN LUN is mounted
+    8. OS is fully up — all storage is remote, nothing local
+
+  KEY COMPONENTS:
+    HBA       — the FC network card in the server (like a NIC, but for storage)
+    WWPN      — the "MAC address" of an HBA port (World Wide Port Name)
+    LUN       — a slice of storage presented from the array to the server
+    Zoning    — FC switch firewall: controls which HBAs can see which storage
+    Masking   — storage-side access control: maps a LUN to a specific host
+    Multipath — Linux driver that treats 2 FC paths to the same LUN as one
+                resilient device (automatic failover if one path dies)
+
+--------------------------------------------------------------------------------
+PHASE 1 — GATHER INFORMATION BEFORE YOU START  (Pre-Work)
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  Before touching any hardware or software, collect all the values you will
+  need.  Missing one WWPN or IP address mid-install causes unnecessary delays.
+
+STEP 1.1 — Record server HBA WWPNs
+  WHY:   WWPNs are the unique identifiers for your server's FC ports.
+         You need them to create zoning rules and LUN masking entries.
+  HOW:
+    Option A — physical server, before OS:
+      Power on → watch POST → when HBA BIOS loads (Emulex shows "Ctrl+E",
+      QLogic shows "Ctrl+Q") → press the shortcut → navigate to
+      "Adapter Information" or "Host Bus Adapter Information"
+      → record both port WWPNs.
+
+    Option B — from BMC/iLO web UI:
+      Login to https://<BMC-IP> → System Information → PCI Devices
+      → find FC HBA → note WWPNs for Port 0 and Port 1.
+
+    Option C — if OS is already running on another LUN:
+      cat /sys/class/fc_host/host*/port_name
+      # Output example:
+      # 0x50014380123456780   ← Port 0 WWPN (strip 0x, add colons)
+      # 0x50014380123456781   ← Port 1 WWPN
+
+  DOCUMENT:
+    HBA Port 0 WWPN: ______________________________
+    HBA Port 1 WWPN: ______________________________
+
+  CHECK: You have exactly 2 WWPNs, each 16 hex characters (8 octets).
+
+STEP 1.2 — Record storage controller port WWPNs
+  WHY:   Zoning requires pairing each server HBA WWPN with a storage
+         controller WWPN.
+  HOW:   On the Hitachi storage array CLI (raidcom):
+           raidcom get port
+         Look for lines with TYPE=FIBRE and ATTRIBUTE=TAR (target).
+         Note the WWPN column for each active port.
+
+  DOCUMENT:
+    Storage Controller A — Port CL1-A WWPN: ______________________________
+    Storage Controller B — Port CL2-B WWPN: ______________________________
+
+  CHECK: All ports show STATUS: ONLINE.
+
+STEP 1.3 — Confirm the boot LUN is provisioned
+  WHY:   The LUN must exist before zoning or masking can reference it.
+  HOW:
+    raidcom get ldev -ldev_id 0x0100
+    # Verify: CAPACITY ~600 GB, STATUS: NML, EMULATION: OPEN-V
+
+  DOCUMENT:
+    Boot LUN LDEV ID: ______________________________
+    Boot LUN NAA/WWID: ______________________________   (needed for multipath)
+
+  CHECK: STATUS is NML (Normal), not BLK or CHK.
+
+STEP 1.4 — Confirm IP addresses and DNS names are reserved
+  WHY:   Anaconda (the RHEL installer) configures the network during install.
+         You need these values ready.
+
+  DOCUMENT:
+    Production IP / CIDR: ______________________________
+    Default Gateway:      ______________________________
+    DNS Server 1:         ______________________________
+    DNS Server 2:         ______________________________
+    Fully Qualified Hostname: ______________________________
+
+  CHECK: DNS forward (A) and reverse (PTR) records exist and resolve correctly.
+
+STEP 1.5 — Download and verify the RHEL 9.7 ISO
+  WHY:   A corrupted ISO causes mysterious install failures mid-way through.
+         Always verify the checksum.
+  HOW:
+    # Download from https://access.redhat.com/downloads
+    sha256sum rhel-9.7-x86_64-dvd.iso
+    # Compare output against the checksum listed on the Red Hat portal.
+    # If they differ — re-download.  Do NOT use a mismatched ISO.
+
+  CHECK: SHA256 matches exactly.
+
+--------------------------------------------------------------------------------
+PHASE 2 — CONFIGURE THE FC FABRIC (SAN ZONING)
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  Fibre Channel switches enforce "zoning" — like VLANs but for storage traffic.
+  A zone contains exactly the WWPNs that are allowed to talk to each other.
+  Best practice: one initiator (server HBA port) + one target (storage port)
+  per zone.  This prevents one server from accidentally accessing another
+  server's storage.
+
+  You need two zones — one per fabric (redundant paths):
+    Fabric A zone: Server HBA Port 0  ←→  Storage Controller A port
+    Fabric B zone: Server HBA Port 1  ←→  Storage Controller B port
+
+STEP 2.1 — Log in to FC Switch A (Fabric A) and back up config
+  WHY:   Always back up before making changes so you can restore if needed.
+  HOW:
+    ssh admin@fc-switch-a.example.com
+    configupload -all               # Brocade: uploads config to FTP/SCP server
+    # or: copy running-config startup-config  (Cisco MDS)
+
+  CHECK: Backup file exists on the management server.
+
+STEP 2.2 — Create WWPN aliases (Fabric A)
+  WHY:   Aliases make zones readable.  Without them you work with raw hex strings.
+  HOW (Brocade):
+    alicreate "prod-app-01_hba0", "50:01:43:80:12:34:56:78"
+    alicreate "storage_ctrl_A",   "50:06:0b:00:00:12:34:56"
+
+  HOW (Cisco MDS):
+    config terminal
+    device-alias database
+      device-alias name prod-app-01_hba0 pwwn 50:01:43:80:12:34:56:78
+      device-alias name storage_ctrl_A   pwwn 50:06:0b:00:00:12:34:56
+    device-alias commit
+
+  CHECK: alishow (Brocade) or show device-alias database (Cisco) lists both.
+
+STEP 2.3 — Create the zone and activate (Fabric A)
+  WHY:   The zone enforces access control.  Until activated, changes have
+         no effect on running traffic.
+  HOW (Brocade):
+    zonecreate "prod-app-01_hba0_to_storage_A", \
+      "prod-app-01_hba0; storage_ctrl_A"
+    cfgadd "fabric_a_prod_cfg", "prod-app-01_hba0_to_storage_A"
+    cfgenable "fabric_a_prod_cfg"
+    cfgsave                         # Persists across switch reboots
+
+  HOW (Cisco MDS):
+    zone name prod-app-01_hba0_to_storage_A vsan 100
+      member device-alias prod-app-01_hba0
+      member device-alias storage_ctrl_A
+    zoneset name fabric_a_prod_zoneset vsan 100
+      member prod-app-01_hba0_to_storage_A
+    zoneset activate name fabric_a_prod_zoneset vsan 100
+    copy running-config startup-config
+
+  CHECK:
+    nsshow | grep "50:01:43:80:12:34:56:78"   # Server HBA must appear
+    # If the WWPN does NOT appear, the FC cable is not linked or the HBA
+    # has not logged in — check cable, SFP, and HBA BIOS settings.
+
+STEP 2.4 — Repeat Steps 2.1–2.3 on FC Switch B (Fabric B)
+  WHY:   Fabric B provides the redundant path.  One fabric down = no outage.
+  HOW:   Use HBA Port 1 WWPN and Storage Controller B port WWPN.
+         Mirror all commands from Steps 2.2–2.3 on the second switch.
+
+  CHECK:
+    nsshow | grep "50:01:43:80:12:34:56:79"   # Port 1 WWPN must appear on Fabric B
+
+--------------------------------------------------------------------------------
+PHASE 3 — PROVISION AND MASK THE BOOT LUN ON THE STORAGE ARRAY
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  Even with correct zoning, the storage array will not present the LUN until
+  you explicitly tell it which server (identified by WWPN) can access it.
+  This is called "LUN masking" or "host group mapping."
+
+  You create a host group (a logical container) for the server on each
+  storage port, add the server's HBA WWPN to it, then map the LUN to it.
+
+STEP 3.1 — Create host group on Controller Port CL1-A (Fabric A path)
+  WHY:   The host group associates the server's WWPN with a LUN mapping
+         on a specific storage controller port.
+  HOW:
+    # Create host group
+    raidcom add host_grp -port CL1-A -host_grp_name prod-app-01_HG
+
+    # Set host mode to LINUX (tells array how to handle SCSI commands)
+    raidcom modify host_grp -port CL1-A-0 \
+      -host_grp_name prod-app-01_HG -host_mode LINUX
+
+    # Enable host mode options:
+    #   54 = SCSI_CMD  — enables extended SCSI command support for Linux
+    #   12 = NACA      — improves error recovery for Linux multipath
+    raidcom modify host_grp -port CL1-A-0 \
+      -host_grp_name prod-app-01_HG -host_mode_opt 54 -host_mode_opt 12
+
+    # Add the server's HBA Port 0 WWPN to the host group
+    raidcom add hba_wwn -port CL1-A-0 \
+      -hba_wwn 50:01:43:80:12:34:56:78 -host_grp_name prod-app-01_HG
+
+  CHECK:
+    raidcom get hba_wwn -port CL1-A-0
+    # Should list the server WWPN
+
+STEP 3.2 — Map the boot LUN to the host group (Fabric A)
+  WHY:   The host group exists but cannot access storage until a LUN is mapped.
+         LUN ID 0 is used because it is the standard boot LUN ID recognised
+         by HBA Option ROMs during pre-boot.
+  HOW:
+    raidcom add lun -port CL1-A-0 -ldev_id 0x0100 -lun_id 0
+    # -ldev_id 0x0100  = the boot LUN created in Phase 1
+    # -lun_id 0        = present it as LUN 0 to the server
+
+  CHECK:
+    raidcom get lun -port CL1-A-0
+    # Must show: LUN 0 → LDEV 0x0100, SIZE ~600 GB
+
+STEP 3.3 — Repeat Steps 3.1–3.2 for Controller Port CL2-B (Fabric B path)
+  WHY:   Multipath needs the SAME LUN visible from BOTH storage paths.
+         The LUN ID must also be 0 on Fabric B for consistency.
+  HOW:   Mirror all raidcom commands from Steps 3.1–3.2 using:
+           -port CL2-B (not CL1-A)
+           HBA Port 1 WWPN: 50:01:43:80:12:34:56:79
+
+  CHECK:
+    raidcom get lun -port CL2-B-0
+    # Must show: LUN 0 → same LDEV 0x0100
+
+STEP 3.4 — Enable ALUA on the LUN
+  WHY:   ALUA (Asymmetric Logical Unit Access) tells the Linux multipath
+         driver which path is preferred (Active Optimised) vs secondary
+         (Active Non-Optimised).  Without ALUA, path selection is random
+         and may result in cross-controller I/O (slower).
+  HOW:
+    raidcom modify ldev -ldev_id 0x0100 -alua enable
+
+  CHECK:
+    raidcom get ldev -ldev_id 0x0100 | grep ALUA
+    # Should show ALUA: Enabled
+
+--------------------------------------------------------------------------------
+PHASE 4 — CONFIGURE THE SERVER HBA BIOS TO BOOT FROM SAN
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  The HBA has its own mini-BIOS (Option ROM) that runs before the OS.
+  You must configure it to:
+    a) know that it should attempt to boot from the SAN (not just pass traffic)
+    b) know the specific storage WWPN and LUN to boot from
+
+  This is entirely separate from the server UEFI BIOS — both need to be
+  configured correctly.
+
+STEP 4.1 — Enter HBA BIOS during POST
+  WHY:   The HBA BIOS controls pre-OS boot behaviour.
+  HOW:
+    Power on server → watch POST output on BMC remote console
+    When you see the HBA initialisation banner:
+      Emulex:  Press Ctrl+E
+      QLogic:  Press Ctrl+Q
+    (If you miss it, reboot and try again — the window is ~3 seconds)
+
+STEP 4.2 — Emulex HBA: enable boot and set boot target
+  HOW:
+    Main Menu → Configure This Adapter's Parameters
+      → Adapter BIOS: set to ENABLED
+      → Boot LUN: set to 0
+
+    Main Menu → Boot Device Configuration
+      → You will see a list of discovered targets (storage WWPN)
+      → Select the storage WWPN for Fabric A: 50:06:0b:00:00:12:34:56
+      → Select LUN: 0
+      → Press Y to confirm
+
+    Save and Exit
+
+  CHECK (re-enter HBA BIOS after next reboot):
+    Confirm: Adapter BIOS = Enabled | Boot Enabled = Yes
+    Confirm: Boot WWPN = 50:06:0b:00:00:12:34:56 | Boot LUN = 0
+
+STEP 4.3 — QLogic HBA: enable boot and set boot target
+  HOW:
+    Main Menu → Configuration Settings
+      → Host Adapter BIOS: Enabled
+      → Boot Device: Enabled
+      → Boot LUN Number: 0
+
+    Main Menu → Selectable Boot Settings
+      → Boot from SAN: Enabled
+      → Primary Boot: select WWPN 50:06:0b:00:00:12:34:56, LUN 0
+
+    Save Settings and Exit
+
+  CHECK: Same as Emulex above.
+
+STEP 4.4 — Repeat for HBA Port 1 (Fabric B fallback)
+  WHY:   If Fabric A is unavailable during boot, the server should automatically
+         try Port 1 on Fabric B.  This is controlled by UEFI boot order (next step).
+  HOW:   Enter HBA BIOS for Port 1 and point it to Storage Controller B port
+         (WWPN: 50:06:0b:00:00:12:34:57), LUN 0.
+
+--------------------------------------------------------------------------------
+PHASE 5 — CONFIGURE SERVER UEFI BIOS
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  The server UEFI must be in pure UEFI mode (not legacy BIOS) because:
+    - RHEL 9 installer strongly prefers UEFI
+    - GRUB2 installs to the EFI partition (/boot/efi) on the SAN LUN
+    - Secure Boot works only in UEFI mode
+
+  You must also set boot order so Port 0 (Fabric A) is tried first,
+  then Port 1 (Fabric B) as failover.
+
+STEP 5.1 — Enter UEFI Setup
+  HOW:   Power on → press F2 or DEL (depends on server vendor) during POST
+         Or: BMC → Remote Console → watch for POST → press key
+
+STEP 5.2 — Set boot mode to UEFI only
+  Navigate to: Boot → Boot Mode
+    Set: UEFI  (NOT Legacy, NOT CSM)
+
+  Navigate to: Boot → CSM Support
+    Set: Disabled
+    WHY: CSM (Compatibility Support Module) enables legacy BIOS emulation.
+         It must be OFF for pure UEFI boot.  Mixing UEFI and CSM can prevent
+         GRUB from appearing after install.
+
+STEP 5.3 — Enable Secure Boot
+  Navigate to: Security → Secure Boot
+    Set: Enabled (Standard Mode)
+    WHY: RHEL 9 ships with a signed shim (/boot/efi/EFI/redhat/shimx64.efi)
+         that works with Secure Boot.  Leaving it enabled is the secure default.
+    NOTE: If the install fails to boot with Secure Boot on, temporarily disable
+          it, complete the install, then re-enable.
+
+STEP 5.4 — Set boot order
+  Navigate to: Boot → Boot Option Priorities
+    #1: FC HBA Port 0 (Fabric A) — this is the PRIMARY boot path
+    #2: FC HBA Port 1 (Fabric B) — this is the FAILOVER boot path
+    #3: Virtual CD/DVD (BMC virtual media) — for OS installation only
+    #4: UEFI Shell — last resort recovery
+    WHY: During normal operation the server boots from Port 0.  If Fabric A
+         is down, UEFI automatically falls to Port 1.  Virtual media (#3) is
+         only needed during OS install and should be disconnected afterwards.
+
+STEP 5.5 — Enable CPU virtualisation and set power policy
+  Advanced → CPU Configuration:
+    Hyper-Threading: Enabled
+    VT-x (Virtualization Technology): Enabled
+    VT-d (IOMMU): Enabled
+
+  Advanced → Power Management:
+    Power-On After Power Fail: Last State
+    WHY: "Last State" means the server automatically restarts after a power
+         outage, which is critical for unattended production systems.
+
+STEP 5.6 — Disable PCIe ASPM
+  Advanced → PCI Configuration → PCIe Native ASPM: Disabled
+  WHY: ASPM (Active State Power Management) can cause FC HBA link instability
+       because it powers down PCIe lanes to save energy.  FC HBAs need
+       consistent power for reliable fabric login.
+
+STEP 5.7 — Save and exit
+  Exit → Save Changes and Exit → Confirm
+  Server reboots.
+
+  CHECK: Server should now attempt to boot from FC HBA Port 0 → finds no OS
+         yet (LUN is empty) → falls to virtual media (CD/DVD).
+         This is expected at this stage.
+
+--------------------------------------------------------------------------------
+PHASE 6 — MOUNT ISO VIA BMC AND BOOT THE INSTALLER
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  Because the server has no local optical drive (and no local disk),
+  the RHEL installer ISO is delivered via the BMC (Baseboard Management
+  Controller) virtual media feature.  The BMC presents the ISO as if it were
+  a physical DVD drive attached to the server.
+
+STEP 6.1 — Log in to BMC/iLO web interface
+  HOW:
+    Open browser → https://<BMC-IP>  (e.g., https://10.10.10.100)
+    Log in with admin credentials.
+    Change default password immediately if this is the first login.
+
+STEP 6.2 — Mount the RHEL ISO as virtual media
+  HOW:
+    BMC Menu → Remote Console → Virtual Media
+    Click "Choose File" → select rhel-9.7-x86_64-dvd.iso (~10 GB)
+    Enable: "Boot on Next Server Reset"   ← CRITICAL — without this,
+    the server ignores the virtual media on next boot
+    Enable: "Write Protect"
+    Click: Connect
+    Status should show: Connected
+
+  ALTERNATIVE (remote HTTP ISO — faster for large files):
+    Some BMC firmwares allow mounting an ISO from a URL:
+    Virtual Media → Remote ISO via HTTP/HTTPS
+    URL: http://mgmt-server.example.com/iso/rhel-9.7-x86_64-dvd.iso
+
+  CHECK: Virtual Media status shows "Connected" and the ISO filename is visible.
+
+STEP 6.3 — Open remote console
+  HOW:
+    BMC Menu → Remote Console → Launch HTML5 Console
+    A new browser window/tab opens showing the server's video output.
+    You can now interact with the server as if you were physically present.
+
+  TIP: Use a wired connection for the BMC session — wireless adds latency
+       and can cause keystrokes to be dropped during interactive installer.
+
+STEP 6.4 — Power on (or reboot) the server
+  HOW:
+    BMC → Power Control → Power On  (if off)
+    or: Power Control → Reset        (if already on)
+    or IPMI from command line:
+      ipmitool -I lanplus -H 10.10.10.100 -U admin -P <password> power on
+
+  WATCH IN REMOTE CONSOLE:
+    1. POST messages scroll by
+    2. HBA Option ROM loads:
+       "Emulex Fibre Channel BIOS..."  or  "QLogic BIOS..."
+       You should see it discover the storage WWPN and the 600 GB LUN.
+       If it says "No Boot Device Found" — STOP and re-check Phase 3 zoning
+       and masking, and Phase 4 HBA BIOS settings.
+    3. GRUB from ISO appears:
+       "Install Red Hat Enterprise Linux 9.7"
+
+  CHECK: GRUB menu from the ISO is visible in the remote console.
+
+--------------------------------------------------------------------------------
+PHASE 7 — RHEL 9.7 ANACONDA INSTALLATION
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  Anaconda is the RHEL graphical/text installer.  It runs from the ISO in RAM.
+  The most critical decisions here are:
+    - Selecting the correct disk (SAN LUN, NOT a local disk)
+    - Creating the correct partition layout (LVM on multipath device)
+    - Ensuring multipath is included in initramfs at install time
+
+STEP 7.1 — Language selection
+  Select: English (United States) → Continue
+  (or your organisation's standard language)
+
+STEP 7.2 — Installation Summary hub
+  Anaconda presents a hub of items to configure.  Work through each:
+
+  ─── TIME & DATE ───────────────────────────────────────────────────────────
+  WHY: All servers must use NTP to stay synchronised.  Time drift breaks
+       Kerberos authentication, SSL certificate validation, and log correlation.
+  HOW:
+    Click: Time & Date
+    Region / City: set to your datacenter timezone
+    Enable: "Use network time (NTP)"
+    Click "Configure NTP..." → add your corporate NTP servers:
+      ntp1.example.com
+      ntp2.example.com
+    Click Done
+
+  ─── INSTALLATION DESTINATION ──────────────────────────────────────────────
+  WHY: This is the most important step.  You must select ONLY the SAN LUN
+       and configure a production-grade partition layout.
+
+  HOW:
+    Click: Installation Destination
+
+    DEVICE SELECTION:
+      You should see ONE device:
+        "Hitachi OPEN-V  600 GiB  /dev/mapper/mpatha"
+        (/dev/mapper/mpatha = multipath device = your SAN boot LUN)
+
+      IMPORTANT: If you see /dev/sda and /dev/sdb separately, multipath
+      is NOT active yet.  Do NOT select sda or sdb individually — that
+      would install to a single path and break failover.
+      Fix: drop to shell (Ctrl+Alt+F2), run "modprobe dm-multipath" and
+           "multipath -r", then return to installer (Ctrl+Alt+F1).
+
+      Tick: ☑ Hitachi OPEN-V (600 GiB, /dev/mapper/mpatha)
+
+    STORAGE CONFIGURATION:
+      Select: ● Custom   (NOT Automatic — production requires explicit layout)
+      Click Done → Manual Partitioning screen opens
+
+    PARTITION SCHEME: LVM (from the dropdown at the top)
+    WHY: LVM (Logical Volume Manager) lets you resize filesystems online
+         without rebooting.  It sits on top of the multipath device.
+
+    CREATE EACH MOUNT POINT (click the "+" button for each):
+
+      /boot/efi
+        Size: 1 GiB
+        Device Type: Standard Partition  ← NOT LVM
+        File System: EFI System Partition (vfat)
+        WHY: The UEFI firmware reads the bootloader (shimx64.efi, grubx64.efi)
+             directly from this FAT32 partition.  It CANNOT be inside LVM
+             because UEFI does not understand LVM.
+
+      /boot
+        Size: 2 GiB
+        Device Type: Standard Partition  ← NOT LVM
+        File System: xfs
+        WHY: GRUB2 reads the kernel and initramfs from /boot.  It must be
+             a plain partition (not LVM) so GRUB can read it before the
+             LVM volume group is activated.
+
+      swap
+        Size: 32 GiB  (set to half RAM; for 64 GB RAM = 32 GB swap)
+        Device Type: LVM
+        File System: swap
+        WHY: Prevents OOM (out-of-memory) kernel panic.  Even if you never
+             expect to use swap, it is required for kdump to function.
+
+      / (root)
+        Size: 100 GiB
+        Device Type: LVM
+        Volume Group: rhel  (type this name — it becomes the VG name)
+        File System: xfs
+
+      /usr         50 GiB   LVM   xfs   (OS binaries and libraries)
+      /var        150 GiB   LVM   xfs   (logs, caches, spools — grows over time)
+      /var/log     50 GiB   LVM   xfs   (application and system logs)
+      /var/log/audit 20 GiB LVM   xfs   (auditd logs — compliance requirement)
+      /tmp         20 GiB   LVM   xfs   (temporary files)
+      /home        20 GiB   LVM   xfs   (user home directories)
+      /opt         50 GiB   LVM   xfs   (third-party/vendor applications)
+      /srv        100 GiB   LVM   xfs   (web/service data)
+      /data         0 GiB → tick "Use remaining space" — LVM — xfs
+                    (application data; gets all remaining ~105 GB)
+
+    WHY SEPARATE PARTITIONS?
+      Separating /var, /tmp, and /home onto their own LVs prevents a runaway
+      process or log flood from filling the root filesystem and crashing the OS.
+      /var/log/audit is separate to protect audit logs from being displaced
+      by other log activity (compliance requirement).
+
+    Click Done → "Summary of Changes" dialog appears.
+    Review: all 13 partitions listed, on /dev/mapper/mpatha.
+    Click: Accept Changes
+
+  ─── NETWORK & HOST NAME ───────────────────────────────────────────────────
+  WHY: Sets the permanent hostname and initial network config.
+  HOW:
+    Click: Network & Host Name
+
+    Bottom field: type the FQDN:  prod-app-01.example.com
+    Click: Apply
+
+    Select the first NIC (e.g., ens160) → click Configure...
+    IPv4 Settings tab:
+      Method: Manual
+      Click Add → enter:
+        Address: 192.168.100.10
+        Netmask:  24  (= /24 = 255.255.255.0)
+        Gateway:  192.168.100.1
+      DNS servers: 10.10.10.53,10.10.10.54
+      Search domains: example.com
+    IPv6 Settings tab: Method → Ignore
+    Click Save
+    Toggle the NIC to ON (slider top-right)
+
+    NOTE: Only configure ONE NIC here.  The second NIC is added to the
+          bond post-install (Section 12).  Installing with both NICs in
+          a bond can confuse Anaconda.
+
+    Click Done
+
+  ─── SOFTWARE SELECTION ────────────────────────────────────────────────────
+  WHY: Minimal Install keeps the attack surface small.  Only add what
+       is explicitly needed.
+  HOW:
+    Click: Software Selection
+    Base Environment: ● Minimal Install
+    Add-Ons:
+      ☑ Standard
+      ☑ Security Tools
+      ☑ System Tools
+    Click Done
+
+  ─── ROOT PASSWORD ─────────────────────────────────────────────────────────
+  WHY: Root access is required for initial setup.  SSH root login is
+       disabled in sshd_config after install.
+  HOW:
+    Click: Root Password
+    Enter a strong password (14+ characters, upper, lower, digit, symbol)
+    Uncheck: "Lock root account"
+    Uncheck: "Allow root SSH login with password"
+    Click Done
+
+  ─── USER CREATION ─────────────────────────────────────────────────────────
+  HOW:
+    Full name: Admin User
+    Username:  adminuser
+    Tick: ☑ Make this user administrator  (adds to wheel group for sudo)
+    Set strong password
+    Click Done
+
+STEP 7.3 — Begin Installation
+  WHY: All hub items should now have green checkmarks.
+
+  FINAL CHECK before clicking Begin Installation:
+    [ ] Time & Date: NTP configured
+    [ ] Installation Destination: 600 GB SAN LUN, 13 partitions on mpatha
+    [ ] Network & Hostname: IP, DNS, FQDN all set
+    [ ] Software: Minimal Install
+    [ ] Root Password: set
+    [ ] User Creation: adminuser in wheel group
+
+  Click: Begin Installation
+
+  INSTALLATION PHASES (watch progress bar):
+    Phase 1 — Package installation:   20–30 minutes
+      Anaconda writes RPM packages to the SAN LUN partitions.
+
+    Phase 2 — Post-install configuration:  5–10 minutes
+      - GRUB2 installs to /boot/efi/EFI/redhat/ on the SAN LUN
+      - dracut builds initramfs — this is where multipath support is baked in
+        (Anaconda detects the multipath device and automatically includes the
+         dm-multipath module in initramfs)
+      - SELinux labels are applied to the filesystem
+      - System configuration files are written
+
+    Phase 3 — Complete → "Installation Complete! Reboot System" button
+
+  CRITICAL: BEFORE CLICKING REBOOT:
+    1. Go back to BMC → Virtual Media → Disconnect the CD/DVD ISO
+    WHY: If the ISO stays connected, the server will boot from it again
+         instead of booting from the SAN.  Boot order has CD/DVD above SAN.
+
+    2. Confirm: Virtual Media status = Disconnected
+
+    Then click: Reboot System
+
+STEP 7.4 — First boot from SAN
+  WATCH IN BMC REMOTE CONSOLE:
+    [UEFI POST]
+      HBA Option ROM: "...Logging in to Fabric A...Boot LUN detected: 600 GB"
+
+    [GRUB2 menu — from the SAN LUN, NOT the ISO]
+      "Red Hat Enterprise Linux (5.14.0-427.xx.el9.x86_64) 9.7 (Plow)"
+      This proves GRUB is reading from the SAN.
+
+    [Kernel boot messages]
+      "Loading driver dm-multipath"
+      "mpatha (360060480000012345601) dm-0 HITACHI,OPEN-V"
+      "device-mapper: multipath: version 1.14.0 loaded"
+      These confirm multipath is active and the SAN LUN is found.
+
+    [Root filesystem]
+      "VFS: Mounted root (xfs filesystem) on device dm-2."
+      This confirms the OS root is on the SAN LUN (LVM over multipath).
+
+    [Login prompt appears]
+      "prod-app-01 login: "
+
+  CHECK:
+    Log in as root.
+    lsblk
+    # Should show:
+    # sda       → Fabric A path  (raw FC path)
+    # sdb       → Fabric B path  (raw FC path)
+    # mpatha    → multipath device (sda + sdb combined)
+    #   └─ mpatha1  /boot/efi
+    #   └─ mpatha2  /boot
+    #   └─ mpatha3  → rhel VG → multiple LVs
+
+    multipath -ll
+    # Both sda and sdb must show: active ready running
+
+    df -h
+    # All 13 mount points must be mounted
+
+--------------------------------------------------------------------------------
+PHASE 8 — POST-INSTALLATION: VALIDATE AND HARDEN
+--------------------------------------------------------------------------------
+
+EXPLANATION:
+  The OS is now running from SAN.  The following steps validate the install
+  is correct and apply minimum production hardening.  Do NOT skip these —
+  an unvalidated system should not be handed to operations.
+
+STEP 8.1 — Verify multipath is correct and persistent
+  WHY: If multipath is wrong, a single FC path failure causes data corruption
+       or an unbootable system.
+  HOW:
+    # Verify both paths are active
+    multipath -ll
+    # Expected for each path: "active ready running"
+
+    # Verify multipath configuration file exists
+    cat /etc/multipath.conf
+    # Must contain a stanza for vendor "HITACHI" product "OPEN-V"
+    # and a multipaths {} block with the LUN WWID
+
+    # Verify multipath daemon is running and enabled
+    systemctl status multipathd
+    systemctl is-enabled multipathd   # must return "enabled"
+
+    # Verify initramfs has multipath
+    lsinitrd /boot/initramfs-$(uname -r).img | grep multipath
+    # If output is EMPTY → multipath is NOT in initramfs → rebuild:
+    dracut --force --add multipath
+    # Then reboot and re-verify.
+
+    # Verify GRUB passes multipath parameter to kernel at boot
+    grep rd.multipath /etc/default/grub
+    # Must contain: rd.multipath=1
+    # If missing, add it to GRUB_CMDLINE_LINUX then run:
+    grub2-mkconfig -o /boot/grub2/grub.cfg
+
+  CHECK: All four sub-checks above pass.
+
+STEP 8.2 — Verify /etc/fstab uses /dev/mapper paths (not /dev/sda)
+  WHY: /dev/sda is a raw path — if Fabric A goes down, /dev/sda disappears
+       and the filesystem cannot be found.  /dev/mapper/rhel-root is the
+       multipath alias — it survives single-path failure.
+  HOW:
+    cat /etc/fstab
+    # Every entry must reference /dev/mapper/...
+    # CORRECT:   /dev/mapper/rhel-root   /   xfs   defaults  0 0
+    # WRONG:     /dev/sda3               /   xfs   defaults  0 0
+
+  CHECK: No /dev/sd* entries in /etc/fstab.
+
+STEP 8.3 — Install and configure device-mapper-multipath
+  WHY: Anaconda installs multipath during install but you should verify
+       the production configuration is in place.
+  HOW:
+    rpm -q device-mapper-multipath   # Confirm installed
+    # If not installed:
+    dnf install -y device-mapper-multipath
+
+    # Apply production multipath.conf (see Section 11 of this document)
+    # Minimum required settings for Hitachi:
+    cat > /etc/multipath.conf << 'EOF'
+defaults {
+    user_friendly_names  yes
+    path_grouping_policy multibus
+    path_selector        "service-time 0"
+    path_checker         tur
+    failback             immediate
+    no_path_retry        5
+    fast_io_fail_tmo     5
+    dev_loss_tmo         120
+}
+blacklist {
+    device { vendor ".*" product ".*" }
+}
+blacklist_exceptions {
+    device { vendor "HITACHI" product "OPEN-V" }
+}
+multipaths {
+    multipath {
+        wwid    360060480000012345601
+        alias   mpatha
+    }
+}
+EOF
+    # Replace WWID above with your actual LUN WWID:
+    #   /lib/udev/scsi_id -g -u /dev/sda
+
+    systemctl restart multipathd
+    multipath -ll   # Verify mpatha appears with both paths
+
+  CHECK: multipath -ll shows mpatha with 2 paths, both "active ready running"
+
+STEP 8.4 — Register with Red Hat and apply updates
+  WHY: Unregistered systems cannot receive security patches.  Always
+       apply security updates immediately after install.
+  HOW:
+    subscription-manager register \
+      --username <redhat-portal-username> \
+      --password <redhat-portal-password>
+
+    subscription-manager attach --auto
+
+    subscription-manager repos \
+      --enable=rhel-9-for-x86_64-baseos-rpms \
+      --enable=rhel-9-for-x86_64-appstream-rpms
+
+    # Apply all security updates
+    dnf update --security -y
+
+    # Check if reboot is needed (kernel update)
+    needs-restarting -r
+    # If it reports a reboot is required — schedule one in a maintenance window
+
+  CHECK:
+    subscription-manager status
+    # Overall Status: Current
+
+STEP 8.5 — Verify SELinux is enforcing
+  WHY: SELinux enforcing mode blocks unauthorised access patterns at the
+       kernel level.  It is the most effective OS-level security control.
+  HOW:
+    getenforce
+    # Must return: Enforcing
+    # If it returns Permissive:
+    setenforce 1
+    sed -i 's/^SELINUX=.*/SELINUX=enforcing/' /etc/selinux/config
+
+  CHECK: getenforce returns "Enforcing"
+
+STEP 8.6 — Confirm firewalld is active
+  HOW:
+    systemctl status firewalld
+    firewall-cmd --state   # must return: running
+    firewall-cmd --list-all
+
+  CHECK: Only SSH (port 22) is open on the public zone at this stage.
+
+STEP 8.7 — Harden SSH
+  WHY: Default SSH config allows password-based root login and uses broad
+       cipher suites.  Production servers must restrict this.
+  HOW:
+    cp /etc/ssh/sshd_config /etc/ssh/sshd_config.orig
+
+    # Edit the following settings (grep and set each):
+    sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/'              /etc/ssh/sshd_config
+    sed -i 's/^#*MaxAuthTries.*/MaxAuthTries 3/'                     /etc/ssh/sshd_config
+    sed -i 's/^#*X11Forwarding.*/X11Forwarding no/'                  /etc/ssh/sshd_config
+    sed -i 's/^#*ClientAliveInterval.*/ClientAliveInterval 300/'     /etc/ssh/sshd_config
+    sed -i 's/^#*ClientAliveCountMax.*/ClientAliveCountMax 2/'       /etc/ssh/sshd_config
+
+    # Validate config syntax BEFORE restarting
+    sshd -t   # must return no output (no errors)
+
+    systemctl restart sshd
+
+    # CRITICAL: Test a new SSH session from a SEPARATE terminal BEFORE
+    # closing your current session.  If you cannot log in, you still have
+    # your current session to fix the config.
+
+  CHECK: SSH login works with adminuser using password (or key if deployed).
+
+STEP 8.8 — Enable and configure auditd
+  WHY: auditd records security-relevant system calls for compliance and forensics.
+  HOW:
+    systemctl enable --now auditd
+    systemctl status auditd   # must be active (running)
+    auditctl -l | wc -l       # count of loaded rules (>0 expected)
+
+  CHECK: auditd is active and running.
+
+STEP 8.9 — Configure and verify chrony (NTP)
+  WHY: Time synchronisation is mandatory.  Kerberos, TLS certificates,
+       and log correlation all fail without accurate time.
+  HOW:
+    # Edit /etc/chrony.conf — ensure your corporate NTP servers are listed:
+    grep "^server\|^pool" /etc/chrony.conf
+    # Should show ntp1.example.com and ntp2.example.com
+
+    systemctl enable --now chronyd
+    chronyc sources
+    # Look for a line starting with ^* — that is the currently selected source
+    # ^? = unreachable, ^x = excluded, ^* = selected, ^+ = candidate
+
+    chronyc tracking
+    # "System time" offset should be < 10ms (< 1ms ideal for production)
+
+  CHECK: At least one NTP source shows ^* in chronyc sources output.
+
+STEP 8.10 — Set up network bonding for production redundancy
+  WHY: A single NIC is a single point of failure.  Active-backup bonding
+       keeps connectivity if one NIC or switch port fails.
+  HOW:
+    # Verify interface names first
+    ip link show   # note actual NIC names (may be ens160/ens192 or enp2s0f0 etc.)
+
+    nmcli connection add type bond \
+      con-name bond0 ifname bond0 \
+      bond.options "mode=active-backup,miimon=100,primary=ens160"
+
+    nmcli connection modify bond0 \
+      ipv4.addresses 192.168.100.10/24 \
+      ipv4.gateway 192.168.100.1 \
+      ipv4.dns "10.10.10.53,10.10.10.54" \
+      ipv4.dns-search example.com \
+      ipv4.method manual \
+      connection.autoconnect yes
+
+    nmcli connection add type ethernet \
+      con-name bond0-slave-ens160 ifname ens160 master bond0
+    nmcli connection add type ethernet \
+      con-name bond0-slave-ens192 ifname ens192 master bond0
+
+    nmcli connection up bond0-slave-ens160
+    nmcli connection up bond0-slave-ens192
+    nmcli connection up bond0
+
+  CHECK:
+    cat /proc/net/bonding/bond0
+    # Active slave should be ens160, both slaves MII Status: up
+    ping -c 4 192.168.100.1   # gateway must respond
+
+STEP 8.11 — Run the post-install validation script
+  WHY: A scripted check is faster and less error-prone than manual verification.
+       See Appendix D in this document for the full validation script.
+  HOW:
+    chmod +x /root/validate_san_boot_install.sh
+    /root/validate_san_boot_install.sh
+    # Review output — all checks must show PASS
+    # Any FAIL must be investigated and resolved before handover
+
+  CHECK: Script exits with code 0 (all passed).
+
+--------------------------------------------------------------------------------
+PHASE 9 — FINAL BOOT VERIFICATION AND HANDOVER
+--------------------------------------------------------------------------------
+
+STEP 9.1 — Test a controlled reboot
+  WHY: The full boot chain must be tested before the system is handed to
+       operations.  First-boot success during install is not sufficient —
+       the system must survive subsequent reboots independently.
+  HOW:
+    sync                    # flush all I/O to disk
+    shutdown -r +2 "Planned reboot for SAN boot verification"
+    # Watch BMC remote console through the entire boot sequence
+
+  EXPECTED SEQUENCE:
+    1. Server powers off → back on
+    2. UEFI POST
+    3. HBA Option ROM: fabric login, boot LUN detected
+    4. GRUB2 menu (3-second timeout) — from SAN
+    5. Kernel loads → dm-multipath loads
+    6. initramfs mounts root filesystem from /dev/mapper/rhel-root
+    7. systemd starts services
+    8. Login prompt
+
+  POST-REBOOT CHECKS:
+    multipath -ll            # both paths still active ready running
+    df -h                    # all mount points present
+    systemctl --failed       # no failed services
+    cat /proc/net/bonding/bond0   # bonding active
+    chronyc sources          # NTP still syncing
+    getenforce               # Enforcing
+    firewall-cmd --state     # running
+
+STEP 9.2 — Test FC path failover
+  WHY: The purpose of dual-path SAN boot is to survive a path failure.
+       This must be tested, not assumed.
+
+  WARNING: Only perform in a maintenance window.  This interrupts one FC path.
+
+  HOW:
+    # Identify the primary path device
+    multipath -ll   # note which device is "active ready running" (e.g., sda)
+
+    # Simulate path failure by taking the primary path offline
+    echo offline > /sys/block/sda/device/state
+
+    # Verify I/O continues on the secondary path
+    multipath -ll   # sda should show "faulty" or "offline", sdb active
+    ping -c 4 192.168.100.1   # network continues
+    dd if=/dev/mapper/rhel-root of=/dev/null bs=1M count=100   # I/O continues
+
+    # Restore the primary path
+    echo running > /sys/block/sda/device/state
+    multipath -ll   # sda should automatically re-join as active
+
+  CHECK: No errors during path failure simulation.  Both paths restored after.
+
+STEP 9.3 — Document and hand over
+  WHY: Operations cannot manage what is not documented.
+  RECORD:
+    Server hostname and IP: ______________________________
+    BMC IP and credentials location: ______________________________
+    Boot LUN WWID: ______________________________
+    HBA Port 0 WWPN (Fabric A): ______________________________
+    HBA Port 1 WWPN (Fabric B): ______________________________
+    FC Zone name Fabric A: ______________________________
+    FC Zone name Fabric B: ______________________________
+    Storage LDEV ID: ______________________________
+    RHEL 9.7 kernel version: ______________________________
+    Red Hat subscription pool ID: ______________________________
+    Install date / performed by: ______________________________
+
+  Store all credentials in the approved secrets vault.
+  Update CMDB with all above values.
+  File completed sign-off sheet from Section 17.
+
+--------------------------------------------------------------------------------
+PHASE 10 — TROUBLESHOOTING THE BOOT-FROM-SAN PROCESS
+--------------------------------------------------------------------------------
+
+PROBLEM: "No Boot Device Found" after configuring everything
+  CAUSE A: Zoning is wrong — HBA cannot see the storage port.
+    FIX: SSH to FC switches → nsshow — verify server WWPN appears in fabric.
+         If missing, check FC cable, SFP, and HBA link speed.
+
+  CAUSE B: LUN masking is missing — LUN not presented to HBA.
+    FIX: raidcom get lun -port CL1-A-0 — verify LUN 0 exists.
+         If missing, re-run Step 3.2.
+
+  CAUSE C: HBA BIOS target WWPN is wrong.
+    FIX: Re-enter HBA BIOS, verify the boot WWPN matches the storage
+         controller port WWPN (not another HBA's WWPN).
+
+  CAUSE D: LUN ID mismatch — HBA configured for LUN 1 but storage has LUN 0.
+    FIX: Ensure both HBA BIOS and raidcom have LUN ID = 0.
+
+PROBLEM: GRUB menu does not appear (blank screen after POST)
+  CAUSE: GRUB was not installed correctly to the EFI partition, or the
+         EFI boot entry does not exist.
+  FIX:
+    Boot from ISO → Troubleshooting → Rescue a RHEL system → Continue
+    chroot /mnt/sysroot
+    grub2-install --target=x86_64-efi --efi-directory=/boot/efi
+    grub2-mkconfig -o /boot/grub2/grub.cfg
+    efibootmgr   # verify "redhat" entry exists
+    # If missing:
+    efibootmgr --create --disk /dev/mapper/mpatha --part 1 \
+      --label "redhat" --loader '\EFI\redhat\shimx64.efi'
+    exit → reboot
+
+PROBLEM: Kernel panic — "unable to mount root fs on unknown block"
+  CAUSE: initramfs does not contain multipath modules, OR fstab references
+         /dev/sda instead of /dev/mapper/..., OR WWID mismatch.
+  FIX:
+    Boot from ISO → Rescue → chroot /mnt/sysroot
+    # Check 1: Is multipath in initramfs?
+    lsinitrd /boot/initramfs-$(uname -r).img | grep multipath
+    # If empty:
+    dracut --force --add multipath --kver $(uname -r)
+
+    # Check 2: Does fstab use /dev/mapper paths?
+    cat /etc/fstab   # fix any /dev/sd* entries to /dev/mapper/...
+
+    # Check 3: Is rd.multipath=1 in GRUB?
+    grep rd.multipath /etc/default/grub
+    # If missing, add it to GRUB_CMDLINE_LINUX and:
+    grub2-mkconfig -o /boot/grub2/grub.cfg
+
+PROBLEM: Only one path visible in multipath -ll
+  CAUSE: Fabric B zoning or masking is missing, or Port 1 HBA BIOS
+         boot target is wrong, or FC cable/SFP on Fabric B is faulty.
+  FIX:
+    cat /sys/class/fc_host/host*/port_state   # both should be Online
+    raidcom get lun -port CL2-B-0             # LUN 0 must exist
+    Check FC cable on the second HBA port.
+
+PROBLEM: Server boots from ISO again instead of SAN after install
+  CAUSE: Virtual media was not disconnected before rebooting, OR
+         UEFI boot order still has CD/DVD above FC HBA.
+  FIX:
+    Disconnect virtual media in BMC → Virtual Media → Disconnect.
+    Re-check UEFI boot order: FC HBA Port 0 must be #1.
+
+--------------------------------------------------------------------------------
+END-TO-END SUMMARY TABLE
+--------------------------------------------------------------------------------
+
++------+---------------------------------------------------+-------------------+
+| Phase| Action                                            | Verify With       |
++------+---------------------------------------------------+-------------------+
+|  0   | Understand SAN boot architecture                  | Architecture diagram|
+|  1   | Gather WWPNs, IP, ISO, LUN info                  | Documentation     |
+|  2   | Create FC zones (Fabric A + B)                    | nsshow on switches|
+|  3   | Create host groups, add WWPNs, map LUN (A + B)   | raidcom get lun   |
+|  4   | Configure HBA BIOS: enable boot, set target WWPN | HBA BIOS display  |
+|  5   | Configure server UEFI: UEFI mode, boot order      | BIOS settings     |
+|  6   | Mount ISO via BMC, launch remote console, boot    | GRUB from ISO     |
+|  7   | Run Anaconda: LUN select, 13 partitions, network  | Install completes |
+|  7.3 | Disconnect ISO, reboot                            | GRUB from SAN     |
+|  8.1 | Verify multipath, initramfs, GRUB rd.multipath    | multipath -ll     |
+|  8.2 | Verify fstab uses /dev/mapper paths               | cat /etc/fstab    |
+|  8.3 | Configure production multipath.conf               | multipath -ll     |
+|  8.4 | Register, update RHEL                             | sub-manager status|
+|  8.5 | SELinux enforcing                                 | getenforce        |
+|  8.6 | Firewalld running                                 | firewall-cmd      |
+|  8.7 | Harden SSH                                        | sshd -t           |
+|  8.8 | Enable auditd                                     | systemctl status  |
+|  8.9 | Configure chrony NTP                              | chronyc sources   |
+| 8.10 | Configure network bonding                         | /proc/net/bonding |
+| 8.11 | Run validation script                             | All PASS          |
+|  9.1 | Controlled reboot test                            | Full boot sequence|
+|  9.2 | FC path failover test                             | No I/O errors     |
+|  9.3 | Document and hand over                            | CMDB + sign-off   |
++------+---------------------------------------------------+-------------------+
+
+
+================================================================================
+END OF SECTION 21
+================================================================================
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+RHEL 9.7 SAN Boot Implementation Guide — Hitachi DS120
+Version 1.2 (Added Section 21: End-to-End Boot from SAN Walkthrough)
+Sections: 21 | Appendices: 5
+
+Support Contacts:
+  Linux Team:    linux-team@example.com
+  Storage Team:  storage-team@example.com
+  Network Team:  network-team@example.com
+  Red Hat:       https://access.redhat.com
+
+Classification: Internal — Production Infrastructure
+Restricted to Authorized Personnel
+
+================================================================================
