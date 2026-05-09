@@ -1,0 +1,4030 @@
+================================================================================
+PRODUCTION-GRADE RANCHER DEPLOYMENT GUIDE ON ORACLE LINUX 9
+Enterprise HA Deployment with RKE2 | Security-Hardened | Air-Gap Ready
+================================================================================
+Document Version: 2.0
+Target OS: Oracle Linux 9 (OL9)
+Kubernetes Distribution: RKE2 (Latest Stable)
+Rancher Version: Latest Stable (2.8.x+)
+Classification: PRODUCTION USE ONLY
+================================================================================
+
+TABLE OF CONTENTS
+=================
+ 1. Architecture Overview
+ 2. Prerequisites Checklist
+ 3. Network Ports Matrix
+ 4. DNS Requirements
+ 5. Hardware Sizing Recommendations
+ 6. Oracle Linux 9 Preparation Steps
+ 7. Kernel Modules & Sysctl Settings
+ 8. SELinux Configuration
+ 9. Firewalld Configuration
+10. Time Sync Configuration
+11. RKE2 Installation Steps
+12. HA Cluster Bootstrap Process
+13. Helm Installation
+14. Rancher Installation via Helm
+15. TLS Configuration (Let's Encrypt & Private CA)
+16. Ingress Configuration
+17. Load Balancer Configuration (HAProxy/Nginx/F5)
+18. Storage Class Setup
+19. Monitoring Stack Installation
+20. Logging Stack Installation
+21. Backup Strategy (Velero)
+22. Disaster Recovery Procedure
+23. Upgrade Strategy
+24. Node Scaling Procedures
+25. Security Hardening Checklist
+26. CIS Benchmark Recommendations
+27. RBAC Best Practices
+28. Secrets Management
+29. Certificate Rotation Procedures
+30. Troubleshooting Guide
+31. Validation & Health-Check Commands
+32. Production Operational Runbook
+33. CI/CD Integration Recommendations
+34. GitOps Setup (Fleet & ArgoCD)
+35. Ansible Automation Examples
+36. Terraform Snippets
+37. HAProxy Configuration
+38. Systemd Tuning
+39. Monitoring Alerts
+40. Performance Tuning
+    Final Checklists (Production Readiness, Go-Live, Post-Deploy, Maintenance)
+
+================================================================================
+SECTION 1: ARCHITECTURE OVERVIEW
+================================================================================
+
+1.1 HIGH-LEVEL ARCHITECTURE DIAGRAM
+-------------------------------------
+
+                          ┌─────────────────────────────────────────┐
+                          │          EXTERNAL DNS / CDN              │
+                          │    rancher.example.com -> LB VIP         │
+                          └──────────────────┬──────────────────────┘
+                                             │
+                          ┌──────────────────▼──────────────────────┐
+                          │         EXTERNAL LOAD BALANCER           │
+                          │   VIP: 10.0.1.10                        │
+                          │   HAProxy / Nginx / F5                   │
+                          │   Ports: 80, 443, 6443, 9345            │
+                          └────────┬─────────────┬──────────────────┘
+                                   │             │
+              ┌────────────────────▼─────────────▼────────────────────┐
+              │              CONTROL PLANE NODES (3x)                  │
+              │                                                         │
+              │  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐ │
+              │  │ CP-NODE-01   │  │ CP-NODE-02   │  │ CP-NODE-03  │ │
+              │  │ 10.0.2.11    │  │ 10.0.2.12    │  │ 10.0.2.13   │ │
+              │  │ etcd+apisvr  │  │ etcd+apisvr  │  │ etcd+apsvr  │ │
+              │  │ scheduler    │  │ scheduler    │  │ scheduler   │ │
+              │  │ ctrl-mgr     │  │ ctrl-mgr     │  │ ctrl-mgr    │ │
+              │  └──────────────┘  └──────────────┘  └─────────────┘ │
+              └──────────────────────────────────────────────────────┘
+                                        │
+              ┌─────────────────────────▼────────────────────────────┐
+              │               WORKER NODES (3x)                       │
+              │                                                        │
+              │  ┌──────────────┐  ┌──────────────┐  ┌────────────┐ │
+              │  │ WRK-NODE-01  │  │ WRK-NODE-02  │  │ WRK-NODE-03│ │
+              │  │ 10.0.3.21    │  │ 10.0.3.22    │  │ 10.0.3.23  │ │
+              │  │ kubelet      │  │ kubelet      │  │ kubelet    │ │
+              │  │ kube-proxy   │  │ kube-proxy   │  │ kube-proxy │ │
+              │  │ containerd   │  │ containerd   │  │ containerd │ │
+              │  └──────────────┘  └──────────────┘  └────────────┘ │
+              └──────────────────────────────────────────────────────┘
+                                        │
+              ┌─────────────────────────▼────────────────────────────┐
+              │            PERSISTENT STORAGE LAYER                   │
+              │                                                        │
+              │  ┌──────────────────────────────────────────────────┐ │
+              │  │   NFS / Longhorn / Ceph / OCI Block Storage     │ │
+              │  │   StorageClass: standard (default)              │ │
+              │  │   StorageClass: fast-ssd                        │ │
+              │  └──────────────────────────────────────────────────┘ │
+              └──────────────────────────────────────────────────────┘
+
+              ┌──────────────────────────────────────────────────────┐
+              │           SUPPORTING INFRASTRUCTURE                   │
+              │                                                        │
+              │   ┌──────────────┐   ┌───────────────────────────┐  │
+              │   │ Bastion Host │   │ Private Container Registry │  │
+              │   │ 10.0.1.5     │   │ 10.0.1.20                  │  │
+              │   │ (Jump Server)│   │ (Harbor / Nexus / OCI)     │  │
+              │   └──────────────┘   └───────────────────────────┘  │
+              │                                                        │
+              │   ┌──────────────┐   ┌───────────────────────────┐  │
+              │   │  NTP Server  │   │    LDAP / AD / OIDC        │  │
+              │   │  10.0.1.6    │   │    (Authentication)        │  │
+              │   └──────────────┘   └───────────────────────────┘  │
+              └──────────────────────────────────────────────────────┘
+
+1.2 NETWORK SEGMENTATION
+--------------------------
+  Management Network : 10.0.1.0/24  (LB, Bastion, Registry, NTP)
+  Control Plane Net  : 10.0.2.0/24  (CP nodes, etcd)
+  Worker Node Net    : 10.0.3.0/24  (Workload nodes)
+  Pod Network (CIDR) : 10.42.0.0/16 (RKE2 default)
+  Service CIDR       : 10.43.0.0/16 (RKE2 default)
+
+1.3 TECHNOLOGY STACK
+---------------------
+  OS              : Oracle Linux 9.x (RHEL-compatible)
+  Kubernetes      : RKE2 (latest stable, e.g., v1.28.x+)
+  Rancher         : Latest stable (e.g., 2.8.x)
+  CNI             : Canal (Calico + Flannel, default RKE2) or Cilium
+  CRI             : containerd (bundled with RKE2)
+  Ingress         : NGINX Ingress Controller
+  TLS             : cert-manager + Let's Encrypt or Private CA
+  Storage         : Longhorn (recommended) or NFS/Ceph
+  Monitoring      : Prometheus + Grafana (Rancher Monitoring)
+  Logging         : Loki + Promtail or EFK Stack
+  Backup          : Velero + etcd snapshots
+  GitOps          : Fleet (built-in) or ArgoCD
+  Secret Mgmt     : Vault (recommended) or Kubernetes Secrets (encrypted)
+  Runtime Security: Falco
+  Policy Engine   : OPA Gatekeeper or Kyverno
+
+================================================================================
+SECTION 2: PREREQUISITES CHECKLIST
+================================================================================
+
+2.1 INFRASTRUCTURE PREREQUISITES
+----------------------------------
+[ ] 3x Control Plane nodes meeting minimum specs (see Section 5)
+[ ] 3x Worker nodes meeting minimum specs (see Section 5)
+[ ] External Load Balancer configured (HAProxy/Nginx/F5)
+[ ] External DNS entries created (see Section 4)
+[ ] NTP server accessible from all nodes
+[ ] Private container registry (for air-gap)
+[ ] Shared storage solution provisioned
+[ ] Network firewall rules configured (see Section 3)
+[ ] TLS certificates obtained or CA infrastructure ready
+[ ] Bastion/jump host for secure SSH access
+[ ] LDAP/AD or OIDC provider for authentication (enterprise)
+
+2.2 SOFTWARE PREREQUISITES
+----------------------------
+[ ] Oracle Linux 9.x installed on all nodes (minimal install recommended)
+[ ] All nodes subscribed to OL9 repos (UEK or RHCK kernel)
+[ ] Python 3 available on all nodes (for Ansible)
+[ ] SSH key-based authentication configured
+[ ] sudo/root access on all nodes
+[ ] curl, wget, tar, unzip, openssl installed
+
+2.3 NETWORK PREREQUISITES
+---------------------------
+[ ] All nodes can communicate on required ports (see Section 3)
+[ ] DNS resolution works from all nodes
+[ ] NTP sync verified on all nodes
+[ ] No conflicting IP ranges with pod/service CIDR (10.42.0.0/16, 10.43.0.0/16)
+[ ] MTU configured consistently across all nodes
+[ ] Multicast not required (RKE2 uses unicast)
+
+2.4 TEAM/PROCESS PREREQUISITES
+---------------------------------
+[ ] Change management approval obtained
+[ ] Runbook reviewed by ops team
+[ ] Rollback plan documented and tested
+[ ] Backup of any existing infrastructure
+[ ] Monitoring/alerting in place for deployment window
+[ ] On-call escalation path defined
+[ ] License and support contracts verified (SUSE Rancher support)
+
+================================================================================
+SECTION 3: NETWORK PORTS MATRIX
+================================================================================
+
+3.1 CONTROL PLANE NODE PORTS (INBOUND)
+-----------------------------------------
+PORT       PROTOCOL  SOURCE              PURPOSE
+--------   --------  ------------------  -----------------------------------
+22         TCP       Bastion/Admin       SSH access (restrict to bastion IP)
+179        TCP       All cluster nodes   BGP (if using Calico)
+443        TCP       Load Balancer       Rancher HTTPS UI/API
+2376       TCP       Rancher server      RKE2 Docker daemon (node provisioning)
+2379       TCP       CP nodes only       etcd client requests
+2380       TCP       CP nodes only       etcd peer communication
+6443       TCP       Load Balancer, All  Kubernetes API server
+9345       TCP       All cluster nodes   RKE2 supervisor API (join)
+10250      TCP       All cluster nodes   kubelet API
+10256      TCP       All cluster nodes   kube-proxy health check
+30000-32767 TCP/UDP  LB, External users  NodePort services (if used)
+8472       UDP       All cluster nodes   VXLAN (Canal/Flannel overlay)
+51820      UDP       All cluster nodes   WireGuard (if encrypted overlay)
+9796       TCP       Monitoring nodes    Node Exporter metrics
+
+3.2 WORKER NODE PORTS (INBOUND)
+---------------------------------
+PORT       PROTOCOL  SOURCE              PURPOSE
+--------   --------  ------------------  -----------------------------------
+22         TCP       Bastion/Admin       SSH access
+179        TCP       All cluster nodes   BGP
+4240       TCP       All cluster nodes   Cilium health check (if using Cilium)
+8472       UDP       All cluster nodes   VXLAN overlay
+9796       TCP       Monitoring nodes    Node Exporter
+10250      TCP       CP nodes            kubelet API
+10256      TCP       All cluster nodes   kube-proxy health check
+30000-32767 TCP/UDP  LB, External        NodePort services
+
+3.3 LOAD BALANCER PORTS (INBOUND FROM EXTERNAL)
+-------------------------------------------------
+PORT       PROTOCOL  SOURCE              PURPOSE
+--------   --------  ------------------  -----------------------------------
+80         TCP       Internet/Internal   HTTP (redirect to HTTPS)
+443        TCP       Internet/Internal   HTTPS Rancher UI/API
+6443       TCP       Admin/CI-CD         Kubernetes API (restrict!)
+9345       TCP       New nodes           RKE2 registration endpoint
+
+3.4 ETCD SPECIFIC (BETWEEN CP NODES)
+--------------------------------------
+NOTE: etcd should be on a dedicated network or strictly firewall-controlled.
+etcd data is sensitive — treat this network as highly privileged.
+
+PORT       PROTOCOL  SOURCE              PURPOSE
+--------   --------  ------------------  -----------------------------------
+2379       TCP       CP nodes only       etcd client API
+2380       TCP       CP nodes only       etcd peer (Raft consensus)
+
+================================================================================
+SECTION 4: DNS REQUIREMENTS
+================================================================================
+
+4.1 REQUIRED DNS RECORDS
+--------------------------
+RECORD TYPE  HOSTNAME                    VALUE / TARGET          TTL
+-----------  --------------------------  ----------------------  ----
+A            rancher.example.com         10.0.1.10 (LB VIP)      300
+A            rke2-api.example.com        10.0.1.10 (LB VIP)      300
+A            cp-node-01.example.com      10.0.2.11               300
+A            cp-node-02.example.com      10.0.2.12               300
+A            cp-node-03.example.com      10.0.2.13               300
+A            wrk-node-01.example.com     10.0.3.21               300
+A            wrk-node-02.example.com     10.0.3.22               300
+A            wrk-node-03.example.com     10.0.3.23               300
+A            lb.example.com             10.0.1.10               300
+
+4.2 WILDCARD DNS (FOR RANCHER HOSTED APPS)
+--------------------------------------------
+RECORD TYPE  HOSTNAME                    VALUE / TARGET          TTL
+-----------  --------------------------  ----------------------  ----
+A            *.rancher.example.com       10.0.1.10 (LB VIP)      300
+  OR
+CNAME        *.rancher.example.com       rancher.example.com     300
+
+WHY: Rancher creates Ingress resources using <app>.<cluster-id>.rancher.example.com
+pattern. Wildcard DNS ensures all app URLs resolve to the ingress controller.
+
+4.3 INTERNAL DNS / /etc/hosts (FALLBACK)
+------------------------------------------
+If external DNS is unavailable, set /etc/hosts on ALL nodes:
+
+  10.0.2.11   cp-node-01.example.com cp-node-01
+  10.0.2.12   cp-node-02.example.com cp-node-02
+  10.0.2.13   cp-node-03.example.com cp-node-03
+  10.0.3.21   wrk-node-01.example.com wrk-node-01
+  10.0.3.22   wrk-node-02.example.com wrk-node-02
+  10.0.3.23   wrk-node-03.example.com wrk-node-03
+  10.0.1.10   rancher.example.com rke2-api.example.com
+
+WARNING: /etc/hosts approach does NOT work for wildcard apps. Always use proper
+DNS for production. /etc/hosts is a temporary workaround only.
+
+================================================================================
+SECTION 5: HARDWARE SIZING RECOMMENDATIONS
+================================================================================
+
+5.1 CONTROL PLANE NODES (MINIMUM PRODUCTION)
+---------------------------------------------
+  vCPUs  : 4 cores (8 recommended for >50 managed clusters)
+  RAM    : 16 GB (32 GB recommended for >50 managed clusters)
+  Disk   : 
+    OS   : 50 GB (SSD/NVMe preferred)
+    etcd : 20 GB dedicated NVMe (CRITICAL - high IOPS required)
+    Logs : 20 GB
+  Network: 1 Gbps (10 Gbps recommended for production)
+
+  CAUTION: etcd is extremely I/O sensitive. Use NVMe SSDs for etcd data.
+  Slow disk (HDD or slow SSD) is the #1 cause of etcd instability.
+  etcd disk benchmarks should show < 10ms write latency (use fio to verify).
+
+  FIO BENCHMARK COMMAND (run on etcd disk before installation):
+  fio --rw=write --ioengine=sync --fdatasync=1 --directory=/var/lib/rancher/rke2/server/db \
+      --size=22m --bs=2300 --name=etcd-disk-benchmark
+
+  Interpret: 99th percentile fsync latency < 10ms = acceptable
+             > 25ms = DO NOT use for etcd
+
+5.2 WORKER NODES (MINIMUM PRODUCTION)
+--------------------------------------
+  vCPUs  : 8 cores (scale based on workload)
+  RAM    : 32 GB (scale based on workload)
+  Disk   :
+    OS   : 100 GB (SSD preferred)
+    Data : 200 GB+ (for container storage, scale to workload)
+  Network: 1 Gbps (10 Gbps for high-throughput workloads)
+
+  NOTE: Worker node sizing depends entirely on workload. These are minimums
+  for running Rancher system components + typical enterprise apps.
+
+5.3 LOAD BALANCER NODE
+-----------------------
+  vCPUs  : 2 cores
+  RAM    : 4 GB
+  Disk   : 30 GB
+  Network: 1 Gbps (must handle total cluster ingress bandwidth)
+  HA     : Configure 2x LB nodes with keepalived for VIP failover
+
+5.4 STORAGE SIZING
+-------------------
+  etcd   : 8 GB typical, 20 GB with generous headroom (never let etcd DB > 8 GB)
+  Rancher: 10 GB PVC for Rancher itself (audit logs, etc.)
+  Monitoring: 50-100 GB for Prometheus (7-30 day retention)
+  Logging: 100-500 GB for log storage (varies by retention policy)
+  App PVCs: Size per application requirements
+
+================================================================================
+SECTION 6: ORACLE LINUX 9 PREPARATION STEPS
+================================================================================
+
+IMPORTANT: Run ALL commands on EVERY node unless specified otherwise.
+Use Ansible playbook in Section 35 to automate these steps.
+
+6.1 SYSTEM UPDATE AND BASE PACKAGES
+-------------------------------------
+# Update all packages to latest
+dnf update -y
+
+# Install required packages
+dnf install -y \
+  bash-completion \
+  bind-utils \
+  chrony \
+  conntrack \
+  curl \
+  ethtool \
+  ipset \
+  iputils \
+  iscsi-initiator-utils \
+  jq \
+  kernel-devel \
+  lsof \
+  lvm2 \
+  nfs-utils \
+  nmap \
+  openssl \
+  policycoreutils-python-utils \
+  socat \
+  strace \
+  tar \
+  tcpdump \
+  unzip \
+  vim \
+  wget
+
+# WHY: These packages are required by RKE2 components (iscsi for Longhorn,
+# nfs-utils for NFS storage, conntrack for kube-proxy, etc.)
+
+6.2 DISABLE SWAP (KUBERNETES REQUIREMENT)
+-------------------------------------------
+# Disable swap immediately
+swapoff -a
+
+# Permanently disable swap (comment out swap lines)
+sed -i '/ swap / s/^/#/' /etc/fstab
+
+# Verify swap is disabled
+free -h | grep Swap
+
+# WHY: Kubernetes does not support swap by default. Swap causes unpredictable
+# scheduling behavior and degrades performance. kubelet will fail to start
+# if swap is enabled (unless explicitly configured, which is NOT recommended
+# for production).
+
+6.3 DISABLE UNNECESSARY SERVICES
+-----------------------------------
+# Disable services not needed on Kubernetes nodes
+systemctl disable --now \
+  postfix \
+  cups \
+  avahi-daemon \
+  bluetooth \
+  rpcbind
+
+# Check running services
+systemctl list-units --state=running --type=service
+
+# WHY: Principle of least privilege - disable services that are not required.
+# Reduces attack surface and avoids port conflicts.
+
+6.4 SET HOSTNAME AND UPDATE /etc/hosts
+----------------------------------------
+# On each node, set appropriate hostname
+hostnamectl set-hostname cp-node-01.example.com   # Change per node
+
+# Update /etc/hosts on ALL nodes
+cat >> /etc/hosts << 'EOF'
+10.0.2.11   cp-node-01.example.com cp-node-01
+10.0.2.12   cp-node-02.example.com cp-node-02
+10.0.2.13   cp-node-03.example.com cp-node-03
+10.0.3.21   wrk-node-01.example.com wrk-node-01
+10.0.3.22   wrk-node-02.example.com wrk-node-02
+10.0.3.23   wrk-node-03.example.com wrk-node-03
+10.0.1.10   rancher.example.com rke2-api.example.com
+EOF
+
+6.5 CONFIGURE SSH HARDENING
+------------------------------
+# Backup original sshd_config
+cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak
+
+# Apply hardened SSH configuration
+cat > /etc/ssh/sshd_config << 'EOF'
+# Production SSH Configuration - Hardened
+Protocol 2
+Port 22
+AddressFamily inet
+ListenAddress 0.0.0.0
+
+# Authentication
+PermitRootLogin no
+PasswordAuthentication no
+PubkeyAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+PermitEmptyPasswords no
+ChallengeResponseAuthentication no
+UsePAM yes
+
+# Session
+LoginGraceTime 30
+MaxAuthTries 3
+MaxSessions 5
+ClientAliveInterval 300
+ClientAliveCountMax 2
+TCPKeepAlive no
+
+# Security
+X11Forwarding no
+AllowAgentForwarding no
+AllowTcpForwarding no
+PermitTunnel no
+Banner /etc/ssh/banner
+PrintLastLog yes
+
+# Ciphers and MACs (Strong only)
+Ciphers chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com
+MACs hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com
+KexAlgorithms curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512
+
+# Logging
+SyslogFacility AUTH
+LogLevel VERBOSE
+
+# Allow only specific users/groups
+AllowGroups sshusers wheel
+
+# Subsystem
+Subsystem sftp /usr/lib/openssh/sftp-server
+EOF
+
+# Create SSH banner
+cat > /etc/ssh/banner << 'EOF'
+*******************************************************************************
+                          AUTHORIZED ACCESS ONLY
+  This system is restricted to authorized users for business purposes only.
+  Unauthorized access is prohibited and will be prosecuted to the full extent
+  of applicable law. All activities are monitored and logged.
+*******************************************************************************
+EOF
+
+# Restart SSH (do NOT close existing sessions until verified)
+systemctl restart sshd
+
+# WHY: Default SSH config allows many insecure options. We disable root login,
+# enforce key-based auth, restrict ciphers to strong algorithms, and limit
+# forwarding to prevent SSH tunneling abuse.
+
+6.6 CONFIGURE AUDIT LOGGING
+-----------------------------
+# Install auditd
+dnf install -y audit audispd-plugins
+
+# Deploy comprehensive audit rules
+cat > /etc/audit/rules.d/99-kubernetes.rules << 'EOF'
+# Delete all existing rules
+-D
+
+# Buffer size
+-b 8192
+
+# Failure mode (2=panic, 1=printk)
+-f 1
+
+# Monitor authentication
+-w /etc/passwd -p wa -k identity
+-w /etc/group -p wa -k identity
+-w /etc/shadow -p wa -k identity
+-w /etc/sudoers -p wa -k identity
+-w /etc/sudoers.d/ -p wa -k identity
+
+# Monitor SSH
+-w /etc/ssh/sshd_config -p wa -k sshd
+
+# Monitor Kubernetes config files
+-w /etc/rancher/ -p wa -k rancher
+-w /var/lib/rancher/ -p rwxa -k rancher
+-w /etc/kubernetes/ -p wa -k kubernetes
+
+# Monitor privileged commands
+-a always,exit -F arch=b64 -S execve -F euid=0 -k root-commands
+-a always,exit -F arch=b64 -S execve -F egid=0 -k root-commands
+
+# Monitor sudo usage
+-w /usr/bin/sudo -p x -k sudo
+-w /usr/bin/su -p x -k sudo
+
+# System calls
+-a always,exit -F arch=b64 -S adjtimex,settimeofday -k time-change
+-a always,exit -F arch=b64 -S clock_settime -k time-change
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k system-locale
+
+# Network changes
+-a always,exit -F arch=b64 -S sethostname,setdomainname -k network_modifications
+
+# Successful/failed logins
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock/ -p wa -k logins
+
+# Container runtime monitoring
+-w /usr/bin/runc -p x -k container-runtime
+-w /usr/bin/containerd -p x -k container-runtime
+EOF
+
+# Enable and start auditd
+systemctl enable --now auditd
+augenrules --load
+
+# WHY: Audit logging provides forensic evidence for security incidents,
+# compliance with standards like PCI-DSS, SOC2, ISO27001. Kubernetes-specific
+# rules capture changes to cluster configuration files.
+
+================================================================================
+SECTION 7: KERNEL MODULES AND SYSCTL SETTINGS
+================================================================================
+
+7.1 REQUIRED KERNEL MODULES
+------------------------------
+# Load required kernel modules immediately
+modprobe br_netfilter
+modprobe overlay
+modprobe ip_tables
+modprobe ip6_tables
+modprobe nf_conntrack
+modprobe nf_conntrack_ipv4
+modprobe nf_conntrack_ipv6
+modprobe xt_REDIRECT
+modprobe xt_owner
+modprobe xt_statistic
+
+# Make modules persistent across reboots
+cat > /etc/modules-load.d/rke2.conf << 'EOF'
+# RKE2 Required Kernel Modules
+br_netfilter
+overlay
+ip_tables
+ip6_tables
+nf_conntrack
+nf_conntrack_ipv4
+nf_conntrack_ipv6
+xt_REDIRECT
+xt_owner
+xt_statistic
+EOF
+
+# Verify modules are loaded
+lsmod | grep -E 'br_netfilter|overlay|ip_tables|nf_conntrack'
+
+# WHY: 
+# - br_netfilter: Required for iptables to see bridged network traffic
+# - overlay: Required for container filesystem layers (overlayfs)
+# - ip_tables/ip6_tables: Required for kube-proxy networking rules
+# - nf_conntrack: Required for connection tracking (load balancing, NAT)
+
+7.2 SYSCTL KERNEL PARAMETERS
+-------------------------------
+cat > /etc/sysctl.d/99-kubernetes.conf << 'EOF'
+# =============================================================================
+# Kubernetes / RKE2 Production Kernel Parameters
+# =============================================================================
+
+# --- Networking ---
+# Enable IPv4 forwarding (REQUIRED for pod networking)
+net.ipv4.ip_forward = 1
+
+# Enable IPv6 forwarding (if using IPv6)
+net.ipv6.conf.all.forwarding = 1
+
+# Enable bridged traffic iptables (REQUIRED - br_netfilter must be loaded first)
+net.bridge.bridge-nf-call-iptables = 1
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-arptables = 1
+
+# Increase network buffer sizes for high-throughput
+net.core.rmem_max = 134217728
+net.core.wmem_max = 134217728
+net.core.rmem_default = 31457280
+net.core.wmem_default = 31457280
+net.core.optmem_max = 25165824
+net.core.somaxconn = 65535
+net.core.netdev_max_backlog = 300000
+
+# TCP optimizations
+net.ipv4.tcp_rmem = 4096 87380 134217728
+net.ipv4.tcp_wmem = 4096 65536 134217728
+net.ipv4.tcp_mem = 786432 1048576 26777216
+net.ipv4.tcp_max_syn_backlog = 8192
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_fin_timeout = 15
+net.ipv4.tcp_keepalive_time = 300
+net.ipv4.tcp_keepalive_probes = 5
+net.ipv4.tcp_keepalive_intvl = 15
+net.ipv4.tcp_tw_reuse = 1
+
+# UDP settings
+net.ipv4.udp_rmem_min = 8192
+net.ipv4.udp_wmem_min = 8192
+
+# Conntrack table size (increase for large clusters)
+net.netfilter.nf_conntrack_max = 1048576
+net.nf_conntrack_max = 1048576
+
+# Reverse path filter (0=disabled, 1=strict, 2=loose)
+# Set to 0 for multi-homed nodes or specific networking scenarios
+net.ipv4.conf.all.rp_filter = 0
+net.ipv4.conf.default.rp_filter = 0
+
+# --- File System ---
+# Increase inotify limits for container monitoring
+fs.inotify.max_user_watches = 1048576
+fs.inotify.max_user_instances = 8192
+
+# Increase file descriptors
+fs.file-max = 2097152
+fs.nr_open = 2097152
+
+# --- Virtual Memory ---
+# Reduce swappiness (should be 0 since swap is disabled, but set explicitly)
+vm.swappiness = 0
+
+# Dirty memory settings to avoid I/O spikes
+vm.dirty_ratio = 5
+vm.dirty_background_ratio = 2
+vm.dirty_expire_centisecs = 1000
+
+# --- Kernel ---
+# Kernel panic on OOM (1=panic, 0=print only)
+kernel.panic = 10
+kernel.panic_on_oops = 1
+
+# Increase PID limits for containers
+kernel.pid_max = 4194304
+
+# IMPORTANT: Hugepages (disable for Kubernetes unless specifically needed)
+vm.nr_hugepages = 0
+EOF
+
+# Apply sysctl settings immediately
+sysctl --system
+
+# Verify settings
+sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables
+
+# WHY:
+# net.ipv4.ip_forward: Without this, pods cannot communicate across nodes
+# bridge-nf-call-iptables: Without this, NetworkPolicy and services won't work
+# nf_conntrack_max: Default is too low for large clusters; increases cause
+#   "table full, dropping packet" errors under load
+# inotify limits: Container runtimes and monitoring tools watch many files;
+#   default limits are too low for large node counts
+
+================================================================================
+SECTION 8: SELINUX CONFIGURATION
+================================================================================
+
+8.1 VERIFY SELINUX STATUS
+---------------------------
+# Check current SELinux status
+sestatus
+getenforce
+
+# Expected output:
+# SELinux status: enabled
+# SELinuxfs mount: /sys/fs/selinux
+# SELinuxfs mount: /sys/fs/selinux
+# Current mode: enforcing
+# Mode from config file: enforcing
+# Policy MLS status: enabled
+# Policy deny_unknown status: allowed
+# Memory protection checking: actual (secure)
+# Max kernel policy version: 33
+
+8.2 SELINUX POLICY FOR RKE2
+------------------------------
+# RKE2 handles most SELinux configuration automatically on RHEL/OL9
+# Install the RKE2 SELinux policy package (REQUIRED before RKE2 install)
+dnf install -y container-selinux
+
+# For RKE2 with SELinux, install the rke2-selinux package
+# This is available from the Rancher RPM repo or bundled in air-gap packages
+# Online install:
+dnf install -y https://rpm.rancher.io/rke2/stable/common/centos/8/noarch/rke2-selinux-0.17-2.el9.noarch.rpm
+
+# For air-gap environments, download and transfer the RPM manually:
+# rpm -ivh rke2-selinux-*.rpm
+
+# Verify the policy is installed
+rpm -q rke2-selinux container-selinux
+
+8.3 SELINUX CONTEXT FOR RKE2 DIRECTORIES
+------------------------------------------
+# Set correct SELinux contexts (RKE2 installer does this, but verify)
+mkdir -p /etc/rancher/rke2 /var/lib/rancher/rke2
+
+semanage fcontext -a -t container_file_t "/var/lib/rancher/rke2(/.*)?"
+semanage fcontext -a -t container_config_t "/etc/rancher/rke2(/.*)?"
+restorecon -Rv /var/lib/rancher/rke2
+restorecon -Rv /etc/rancher/rke2
+
+# Verify contexts
+ls -lZ /var/lib/rancher/rke2
+
+8.4 SELINUX BOOLEAN SETTINGS
+------------------------------
+# Enable booleans required for container networking
+setsebool -P container_manage_cgroup on
+setsebool -P container_use_cephfs on    # Only if using Ceph
+setsebool -P virt_use_nfs on            # Only if using NFS volumes
+
+# Verify boolean settings
+getsebool container_manage_cgroup
+
+8.5 SELINUX AUDIT MONITORING
+------------------------------
+# Monitor for SELinux denials (run BEFORE and DURING initial cluster setup)
+ausearch -m avc -ts recent
+
+# If you see denials, check if they are from rke2 or unrelated processes
+# NEVER run setsebool -P domain_can_mmap_files on without understanding the risk
+
+# Generate custom policy for specific denials if needed (last resort)
+# ausearch -m avc -ts recent | audit2allow -M my-rke2-policy
+# semodule -i my-rke2-policy.pp
+
+# SECURITY NOTE: Do NOT disable SELinux or set to permissive in production.
+# The rke2-selinux package handles required permissions. If you encounter
+# denials, investigate before adding exceptions.
+
+================================================================================
+SECTION 9: FIREWALLD CONFIGURATION
+================================================================================
+
+9.1 VERIFY FIREWALLD IS ACTIVE
+--------------------------------
+systemctl status firewalld
+firewall-cmd --state  # Should return "running"
+
+9.2 CONTROL PLANE NODE FIREWALL RULES
+----------------------------------------
+# NOTE: Run the appropriate section on each node type
+
+# --- For Control Plane Nodes ---
+# Create a custom zone for cluster traffic (optional but recommended)
+firewall-cmd --permanent --new-zone=rke2-cp 2>/dev/null || true
+
+# Set default zone
+firewall-cmd --permanent --set-default-zone=public
+
+# Allow SSH (limit source if possible)
+firewall-cmd --permanent --zone=public --add-service=ssh
+
+# Kubernetes API server
+firewall-cmd --permanent --zone=public --add-port=6443/tcp
+
+# RKE2 Supervisor API (node registration)
+firewall-cmd --permanent --zone=public --add-port=9345/tcp
+
+# etcd (ONLY from control plane nodes - restrict source IPs)
+firewall-cmd --permanent --zone=public --add-rich-rule='rule family=ipv4 source address=10.0.2.0/24 port port=2379-2380 protocol=tcp accept'
+
+# kubelet API
+firewall-cmd --permanent --zone=public --add-port=10250/tcp
+
+# kube-proxy health check
+firewall-cmd --permanent --zone=public --add-port=10256/tcp
+
+# CNI (Canal/Flannel VXLAN)
+firewall-cmd --permanent --zone=public --add-port=8472/udp
+
+# WireGuard (if using encrypted overlay)
+firewall-cmd --permanent --zone=public --add-port=51820/udp
+
+# Rancher HTTPS (if hosting Rancher here)
+firewall-cmd --permanent --zone=public --add-port=443/tcp
+firewall-cmd --permanent --zone=public --add-port=80/tcp
+
+# Node Exporter (restrict to monitoring subnet)
+firewall-cmd --permanent --zone=public --add-rich-rule='rule family=ipv4 source address=10.0.0.0/8 port port=9796 protocol=tcp accept'
+
+# Enable masquerade for pod networking
+firewall-cmd --permanent --zone=public --add-masquerade
+
+# Apply all rules
+firewall-cmd --reload
+
+# Verify
+firewall-cmd --list-all
+
+9.3 WORKER NODE FIREWALL RULES
+---------------------------------
+# Allow SSH
+firewall-cmd --permanent --zone=public --add-service=ssh
+
+# kubelet
+firewall-cmd --permanent --zone=public --add-port=10250/tcp
+
+# kube-proxy health check
+firewall-cmd --permanent --zone=public --add-port=10256/tcp
+
+# CNI VXLAN
+firewall-cmd --permanent --zone=public --add-port=8472/udp
+
+# WireGuard
+firewall-cmd --permanent --zone=public --add-port=51820/udp
+
+# NodePort range (if required)
+firewall-cmd --permanent --zone=public --add-port=30000-32767/tcp
+firewall-cmd --permanent --zone=public --add-port=30000-32767/udp
+
+# Node Exporter
+firewall-cmd --permanent --zone=public --add-rich-rule='rule family=ipv4 source address=10.0.0.0/8 port port=9796 protocol=tcp accept'
+
+# Masquerade for pod networking
+firewall-cmd --permanent --zone=public --add-masquerade
+
+firewall-cmd --reload
+firewall-cmd --list-all
+
+# WHY: Firewalld restricts access to only necessary ports. etcd is particularly
+# sensitive - restrict it to only CP node IPs. RKE2's CNI requires VXLAN
+# (8472/UDP) for cross-node pod communication.
+
+================================================================================
+SECTION 10: TIME SYNC CONFIGURATION
+================================================================================
+
+10.1 CONFIGURE CHRONY (NTP)
+-----------------------------
+# Install chrony if not present
+dnf install -y chrony
+
+# Configure chrony (use your internal NTP servers)
+cat > /etc/chrony.conf << 'EOF'
+# NTP Servers (replace with your internal NTP servers)
+server 10.0.1.6 iburst prefer
+server ntp.oracle.com iburst
+
+# Fallback public NTP (remove for fully air-gapped environments)
+# pool pool.ntp.org iburst
+
+# Record time to the drift file
+driftfile /var/lib/chrony/drift
+
+# Allow step corrections (first 3 only to avoid time jumps)
+makestep 1.0 3
+
+# Enable kernel time sync
+rtcsync
+
+# Log directory
+logdir /var/log/chrony
+
+# Lock memory to avoid paging
+lock_all
+
+# Logging
+log measurements statistics tracking
+EOF
+
+# Enable and start chrony
+systemctl enable --now chronyd
+
+# Verify time sync
+chronyc tracking
+chronyc sources -v
+
+# WHY: Time synchronization is CRITICAL for Kubernetes and etcd.
+# Certificate validation, etcd consensus, Kubernetes token expiry, and
+# logging all depend on synchronized time. A > 5 second drift can cause
+# etcd to reject peers and cluster failure.
+# Even a 2-second drift can cause certificate validation failures.
+
+10.2 VERIFY TIME SYNC ON ALL NODES
+-------------------------------------
+# Run on all nodes and compare output
+date
+chronyc tracking | grep "System time"
+
+# Acceptable: Reference Time offset < 100ms
+# Concerning: > 100ms, investigate immediately
+# Critical: > 1 second, fix before proceeding
+
+================================================================================
+SECTION 11: RKE2 INSTALLATION STEPS
+================================================================================
+
+11.1 DIRECTORY STRUCTURE SETUP
+--------------------------------
+# Create required directories on ALL nodes
+mkdir -p /etc/rancher/rke2/
+mkdir -p /var/lib/rancher/rke2/server/manifests/
+mkdir -p /var/lib/rancher/rke2/agent/
+mkdir -p /opt/rke2-artifacts/
+
+# Set appropriate permissions
+chmod 700 /etc/rancher/rke2/
+chmod 700 /var/lib/rancher/rke2/
+
+# Directory structure overview:
+# /etc/rancher/rke2/          - Configuration files
+#   config.yaml               - RKE2 config
+#   audit-policy.yaml         - Kubernetes audit policy
+#   registries.yaml           - Private registry config
+# /var/lib/rancher/rke2/      - Data directory
+#   server/                   - Server (CP) data
+#     db/                     - etcd data (PROTECT THIS)
+#     manifests/              - Auto-deployed manifests
+#     logs/                   - Server logs
+#   agent/                    - Agent data
+
+11.2 DOWNLOAD RKE2 (ONLINE METHOD)
+-------------------------------------
+# Get the latest RKE2 version
+export RKE2_VERSION=$(curl -s https://api.github.com/repos/rancher/rke2/releases/latest \
+  | jq -r '.tag_name')
+echo "Installing RKE2: $RKE2_VERSION"
+
+# Download RKE2 install script
+curl -sfL https://get.rke2.io --output install.sh
+chmod +x install.sh
+
+11.3 DOWNLOAD RKE2 (AIR-GAP METHOD)
+--------------------------------------
+# On a machine WITH internet access, download artifacts:
+export RKE2_VERSION="v1.28.8+rke2r1"  # Pin to specific version for reproducibility
+
+mkdir -p /opt/rke2-artifacts && cd /opt/rke2-artifacts
+
+# Download RKE2 tarball
+wget https://github.com/rancher/rke2/releases/download/${RKE2_VERSION}/rke2.linux-amd64.tar.gz
+
+# Download SHA256 checksum
+wget https://github.com/rancher/rke2/releases/download/${RKE2_VERSION}/sha256sum-amd64.txt
+
+# Download images (for air-gap image loading)
+wget https://github.com/rancher/rke2/releases/download/${RKE2_VERSION}/rke2-images.linux-amd64.tar.zst
+
+# Download install script
+wget https://get.rke2.io -O install.sh
+chmod +x install.sh
+
+# Verify checksums
+sha256sum -c sha256sum-amd64.txt --ignore-missing
+
+# Transfer artifacts to all nodes:
+for NODE in cp-node-01 cp-node-02 cp-node-03 wrk-node-01 wrk-node-02 wrk-node-03; do
+  scp -r /opt/rke2-artifacts/ ${NODE}:/opt/rke2-artifacts/
+done
+
+# On each node, install from local artifacts:
+export INSTALL_RKE2_ARTIFACT_PATH=/opt/rke2-artifacts
+bash /opt/rke2-artifacts/install.sh
+
+11.4 KUBERNETES AUDIT POLICY
+------------------------------
+# Create comprehensive audit policy (deploy on ALL control plane nodes)
+cat > /etc/rancher/rke2/audit-policy.yaml << 'EOF'
+apiVersion: audit.k8s.io/v1
+kind: Policy
+# Do not generate audit events for requests to these non-resource URLs
+omitStages:
+  - "RequestReceived"
+rules:
+  # Log pod changes at RequestResponse level
+  - level: RequestResponse
+    resources:
+    - group: ""
+      resources: ["pods", "pods/exec", "pods/attach", "pods/portforward"]
+
+  # Log secrets at Metadata level (do NOT log request/response body for secrets!)
+  - level: Metadata
+    resources:
+    - group: ""
+      resources: ["secrets", "configmaps", "serviceaccounts"]
+
+  # Log authentication decisions
+  - level: Metadata
+    nonResourceURLs:
+    - /api*
+    - /version
+
+  # Log RBAC changes at RequestResponse
+  - level: RequestResponse
+    resources:
+    - group: "rbac.authorization.k8s.io"
+      resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+
+  # Log persistent volume changes
+  - level: RequestResponse
+    resources:
+    - group: ""
+      resources: ["persistentvolumes", "persistentvolumeclaims"]
+
+  # Log network policy changes
+  - level: RequestResponse
+    resources:
+    - group: "networking.k8s.io"
+      resources: ["networkpolicies"]
+
+  # Log namespace changes
+  - level: RequestResponse
+    resources:
+    - group: ""
+      resources: ["namespaces"]
+
+  # Default: log metadata for everything else
+  - level: Metadata
+    omitStages:
+    - "RequestReceived"
+EOF
+
+# WHY: Kubernetes audit logs provide visibility into who did what in the cluster.
+# Critical for compliance (SOC2, PCI-DSS) and incident response.
+# We log secrets at Metadata only (not RequestResponse) to avoid leaking
+# secret values to audit log storage.
+
+================================================================================
+SECTION 12: HA CLUSTER BOOTSTRAP PROCESS
+================================================================================
+
+12.1 FIRST CONTROL PLANE NODE CONFIGURATION
+---------------------------------------------
+# Create RKE2 config for the FIRST control plane node
+cat > /etc/rancher/rke2/config.yaml << 'EOF'
+# =============================================================================
+# RKE2 Control Plane Node Configuration - NODE 1 (Bootstrap)
+# =============================================================================
+
+# Cluster token (use a strong random string - same on all nodes)
+token: "REPLACE_WITH_STRONG_RANDOM_TOKEN_32CHARS_MIN"
+
+# TLS Subject Alternate Names (add LB VIP, all CP IPs, DNS names)
+tls-san:
+  - "rancher.example.com"
+  - "rke2-api.example.com"
+  - "10.0.1.10"
+  - "10.0.2.11"
+  - "10.0.2.12"
+  - "10.0.2.13"
+
+# CNI Plugin
+cni: canal
+
+# Disable local components we don't need
+disable:
+  - rke2-ingress-nginx   # We'll install separately with custom config
+  # - rke2-metrics-server  # Keep metrics-server
+
+# Data directory
+data-dir: /var/lib/rancher/rke2
+
+# Audit logging
+kube-apiserver-arg:
+  - "audit-log-path=/var/lib/rancher/rke2/server/logs/audit.log"
+  - "audit-log-maxage=30"
+  - "audit-log-maxbackup=10"
+  - "audit-log-maxsize=100"
+  - "audit-policy-file=/etc/rancher/rke2/audit-policy.yaml"
+  - "anonymous-auth=false"
+  - "authorization-mode=Node,RBAC"
+  - "enable-admission-plugins=NodeRestriction,PodSecurityAdmission"
+  - "encryption-provider-config=/etc/rancher/rke2/encryption-config.yaml"
+  - "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+  - "request-timeout=300s"
+
+# kube-controller-manager hardening
+kube-controller-manager-arg:
+  - "use-service-account-credentials=true"
+  - "terminated-pod-gc-threshold=10"
+
+# kube-scheduler hardening
+kube-scheduler-arg:
+  - "bind-address=127.0.0.1"
+
+# kubelet configuration
+kubelet-arg:
+  - "protect-kernel-defaults=true"
+  - "read-only-port=0"
+  - "streaming-connection-idle-timeout=5m"
+  - "event-qps=0"
+  - "anonymous-auth=false"
+  - "authorization-mode=Webhook"
+  - "kube-api-qps=100"
+  - "kube-api-burst=200"
+  - "max-pods=110"
+  - "serialize-image-pulls=false"
+
+# etcd configuration (performance tuning)
+etcd-arg:
+  - "quota-backend-bytes=8589934592"
+  - "auto-compaction-mode=periodic"
+  - "auto-compaction-retention=8h"
+
+# Write kubeconfig to standard location
+write-kubeconfig-mode: "0600"
+
+# Node labels and taints for control plane
+node-label:
+  - "node-role.kubernetes.io/control-plane=true"
+
+node-taint:
+  - "CriticalAddonsOnly=true:NoExecute"
+
+# Private registry config (for air-gap)
+# system-default-registry: "registry.example.com"
+EOF
+
+# Generate a strong token
+openssl rand -base64 64 | tr -d '\n' > /tmp/rke2-token
+cat /tmp/rke2-token
+# COPY THIS TOKEN - use same value on ALL nodes
+
+# Update the token in config.yaml
+sed -i "s/REPLACE_WITH_STRONG_RANDOM_TOKEN_32CHARS_MIN/$(cat /tmp/rke2-token)/" \
+  /etc/rancher/rke2/config.yaml
+
+12.2 SECRETS ENCRYPTION CONFIGURATION
+----------------------------------------
+# Create encryption configuration for secrets at rest
+cat > /etc/rancher/rke2/encryption-config.yaml << 'EOF'
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+    - secrets
+    providers:
+    - aescbc:
+        keys:
+        - name: key1
+          secret: REPLACE_WITH_BASE64_32BYTE_KEY
+    - identity: {}
+EOF
+
+# Generate encryption key
+ENCRYPTION_KEY=$(head -c 32 /dev/urandom | base64)
+echo "Encryption key: $ENCRYPTION_KEY"
+# Store this key securely (HSM, Vault, etc.) - if lost, secrets cannot be decrypted!
+
+sed -i "s/REPLACE_WITH_BASE64_32BYTE_KEY/$ENCRYPTION_KEY/" \
+  /etc/rancher/rke2/encryption-config.yaml
+
+chmod 400 /etc/rancher/rke2/encryption-config.yaml
+
+# CRITICAL WARNING: Store the encryption key in your enterprise secret management
+# system (HashiCorp Vault, AWS KMS, Azure Key Vault, OCI Vault) IMMEDIATELY.
+# If this key is lost, ALL Kubernetes secrets in the cluster are unrecoverable.
+
+12.3 PRIVATE REGISTRY CONFIGURATION (AIR-GAP)
+------------------------------------------------
+cat > /etc/rancher/rke2/registries.yaml << 'EOF'
+mirrors:
+  "registry-1.docker.io":
+    endpoint:
+      - "https://registry.example.com"
+  "quay.io":
+    endpoint:
+      - "https://registry.example.com"
+  "gcr.io":
+    endpoint:
+      - "https://registry.example.com"
+  "ghcr.io":
+    endpoint:
+      - "https://registry.example.com"
+  "registry.rancher.com":
+    endpoint:
+      - "https://registry.example.com"
+
+configs:
+  "registry.example.com":
+    auth:
+      username: registryuser
+      password: REGISTRY_PASSWORD
+    tls:
+      ca_file: /etc/rancher/rke2/registry-ca.crt
+      # cert_file: /etc/rancher/rke2/registry-client.crt
+      # key_file: /etc/rancher/rke2/registry-client.key
+      insecure_skip_verify: false
+EOF
+
+chmod 600 /etc/rancher/rke2/registries.yaml
+
+12.4 START FIRST CONTROL PLANE NODE
+--------------------------------------
+# Enable and start RKE2 server service
+systemctl enable rke2-server.service
+systemctl start rke2-server.service
+
+# Follow logs during startup (takes 3-5 minutes on first boot)
+journalctl -u rke2-server -f
+
+# Wait for the server to be ready (check for kube-apiserver ready message)
+# Look for: "Tunnel authorizer set Kubelet Port 10250"
+
+# Verify RKE2 is running
+systemctl status rke2-server
+
+# Set up kubectl access
+mkdir -p ~/.kube
+ln -sf /etc/rancher/rke2/rke2.yaml ~/.kube/config
+chmod 600 ~/.kube/config
+
+# Add RKE2 binaries to PATH
+export PATH=$PATH:/var/lib/rancher/rke2/bin
+echo 'export PATH=$PATH:/var/lib/rancher/rke2/bin' >> /etc/profile.d/rke2.sh
+echo 'export KUBECONFIG=/etc/rancher/rke2/rke2.yaml' >> /etc/profile.d/rke2.sh
+source /etc/profile.d/rke2.sh
+
+# Verify cluster is running
+kubectl get nodes
+kubectl get pods -A
+
+# Expected: cp-node-01 in Ready state with roles: control-plane,etcd,master
+
+12.5 ADDITIONAL CONTROL PLANE NODES (2 AND 3)
+-----------------------------------------------
+# NOTE: Wait for first CP node to be in Ready state before joining more nodes
+
+# On cp-node-02 and cp-node-03, create this config:
+cat > /etc/rancher/rke2/config.yaml << 'EOF'
+# RKE2 Control Plane Node Configuration - NODE 2/3 (Join)
+
+# Token MUST match the first node exactly
+token: "SAME_TOKEN_AS_NODE_1"
+
+# Server to join (use the LB VIP or first node IP for initial join)
+server: "https://rke2-api.example.com:9345"
+
+# TLS SANs (same as first node)
+tls-san:
+  - "rancher.example.com"
+  - "rke2-api.example.com"
+  - "10.0.1.10"
+  - "10.0.2.11"
+  - "10.0.2.12"
+  - "10.0.2.13"
+
+cni: canal
+
+disable:
+  - rke2-ingress-nginx
+
+kube-apiserver-arg:
+  - "audit-log-path=/var/lib/rancher/rke2/server/logs/audit.log"
+  - "audit-log-maxage=30"
+  - "audit-log-maxbackup=10"
+  - "audit-log-maxsize=100"
+  - "audit-policy-file=/etc/rancher/rke2/audit-policy.yaml"
+  - "anonymous-auth=false"
+  - "authorization-mode=Node,RBAC"
+  - "enable-admission-plugins=NodeRestriction,PodSecurityAdmission"
+  - "encryption-provider-config=/etc/rancher/rke2/encryption-config.yaml"
+  - "tls-cipher-suites=TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305,TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384"
+
+kube-controller-manager-arg:
+  - "use-service-account-credentials=true"
+
+kubelet-arg:
+  - "protect-kernel-defaults=true"
+  - "read-only-port=0"
+  - "anonymous-auth=false"
+  - "authorization-mode=Webhook"
+
+node-label:
+  - "node-role.kubernetes.io/control-plane=true"
+
+node-taint:
+  - "CriticalAddonsOnly=true:NoExecute"
+
+write-kubeconfig-mode: "0600"
+EOF
+
+# Copy encryption config (MUST be identical to first node)
+scp cp-node-01:/etc/rancher/rke2/encryption-config.yaml \
+    /etc/rancher/rke2/encryption-config.yaml
+chmod 400 /etc/rancher/rke2/encryption-config.yaml
+
+# Start RKE2 on node 2
+systemctl enable rke2-server.service
+systemctl start rke2-server.service
+
+# Monitor joining process
+journalctl -u rke2-server -f
+
+# Verify on first node after each join:
+kubectl get nodes  # Should show new node in Ready state
+
+# IMPORTANT: Wait for each node to reach Ready state before adding the next one
+# etcd has a quorum requirement - adding nodes too fast can cause issues
+
+12.6 WORKER NODE CONFIGURATION
+---------------------------------
+# On ALL worker nodes (wrk-node-01, 02, 03):
+cat > /etc/rancher/rke2/config.yaml << 'EOF'
+# RKE2 Worker (Agent) Node Configuration
+
+# Token MUST match server nodes
+token: "SAME_TOKEN_AS_CP_NODES"
+
+# Connect to the LB VIP (not individual CP node IPs)
+server: "https://rke2-api.example.com:9345"
+
+# Node labels for workload scheduling
+node-label:
+  - "node-role.kubernetes.io/worker=true"
+  - "workload-type=general"
+
+# kubelet hardening
+kubelet-arg:
+  - "protect-kernel-defaults=true"
+  - "read-only-port=0"
+  - "anonymous-auth=false"
+  - "authorization-mode=Webhook"
+  - "kube-api-qps=100"
+  - "kube-api-burst=200"
+  - "max-pods=110"
+  - "serialize-image-pulls=false"
+EOF
+
+# Enable and start RKE2 agent
+systemctl enable rke2-agent.service
+systemctl start rke2-agent.service
+
+# Monitor agent joining
+journalctl -u rke2-agent -f
+
+# Verify from first CP node:
+kubectl get nodes
+# Expected: All 6 nodes (3 CP + 3 workers) in Ready state
+
+12.7 VERIFY CLUSTER HEALTH
+----------------------------
+# Run from any CP node
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+export PATH=$PATH:/var/lib/rancher/rke2/bin
+
+# Check all nodes
+kubectl get nodes -o wide
+
+# Check component status
+kubectl get componentstatuses
+
+# Check etcd health (use etcdctl bundled with RKE2)
+export ETCDCTL_ENDPOINTS='https://127.0.0.1:2379'
+export ETCDCTL_CACERT='/var/lib/rancher/rke2/server/tls/etcd/server-ca.crt'
+export ETCDCTL_CERT='/var/lib/rancher/rke2/server/tls/etcd/server-client.crt'
+export ETCDCTL_KEY='/var/lib/rancher/rke2/server/tls/etcd/server-client.key'
+export ETCDCTL_API=3
+
+/var/lib/rancher/rke2/bin/etcdctl member list -w table
+/var/lib/rancher/rke2/bin/etcdctl endpoint health --cluster -w table
+/var/lib/rancher/rke2/bin/etcdctl endpoint status --cluster -w table
+
+# Check system pods
+kubectl get pods -n kube-system
+kubectl get pods -n cattle-system 2>/dev/null
+
+# Run a quick test pod
+kubectl run test-pod --image=nginx:alpine --restart=Never
+kubectl get pod test-pod
+kubectl delete pod test-pod
+
+================================================================================
+SECTION 13: HELM INSTALLATION
+================================================================================
+
+13.1 INSTALL HELM
+------------------
+# Download and install Helm
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+# Verify Helm version
+helm version
+
+# For air-gap environments:
+# Download from: https://github.com/helm/helm/releases
+# Example: wget https://get.helm.sh/helm-v3.14.0-linux-amd64.tar.gz
+# tar xzf helm-v3.14.0-linux-amd64.tar.gz
+# mv linux-amd64/helm /usr/local/bin/helm
+
+13.2 ADD REQUIRED HELM REPOSITORIES
+--------------------------------------
+# Rancher repo (use stable, not latest, for production)
+helm repo add rancher-stable https://releases.rancher.com/server-charts/stable
+
+# cert-manager
+helm repo add jetstack https://charts.jetstack.io
+
+# Ingress NGINX
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+
+# Longhorn storage
+helm repo add longhorn https://charts.longhorn.io
+
+# Monitoring
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+
+# Update all repos
+helm repo update
+
+# Verify repos
+helm repo list
+
+================================================================================
+SECTION 14: RANCHER INSTALLATION VIA HELM
+================================================================================
+
+14.1 INSTALL CERT-MANAGER (PREREQUISITE)
+------------------------------------------
+# Apply CRDs first
+kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.crds.yaml
+
+# Create namespace
+kubectl create namespace cert-manager
+
+# Install cert-manager
+helm install cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --version v1.14.0 \
+  --set installCRDs=true \
+  --set global.leaderElection.namespace=cert-manager \
+  --set replicaCount=2 \
+  --set podDisruptionBudget.enabled=true \
+  --set podDisruptionBudget.minAvailable=1 \
+  --set resources.requests.cpu=100m \
+  --set resources.requests.memory=128Mi \
+  --set resources.limits.cpu=500m \
+  --set resources.limits.memory=512Mi
+
+# Wait for cert-manager to be ready
+kubectl rollout status deployment/cert-manager -n cert-manager
+kubectl rollout status deployment/cert-manager-webhook -n cert-manager
+kubectl rollout status deployment/cert-manager-cainjector -n cert-manager
+
+# Verify cert-manager is working
+kubectl get pods -n cert-manager
+
+14.2 INSTALL INGRESS NGINX CONTROLLER
+----------------------------------------
+# Create namespace
+kubectl create namespace ingress-nginx
+
+# Install Nginx Ingress with HA configuration
+cat > /tmp/nginx-ingress-values.yaml << 'EOF'
+controller:
+  replicaCount: 2
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2
+      memory: 2Gi
+
+  service:
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+    annotations:
+      # Add cloud LB annotations if applicable
+      # service.beta.kubernetes.io/aws-load-balancer-type: nlb
+
+  config:
+    # Security headers
+    server-snippet: |
+      add_header X-Frame-Options "SAMEORIGIN";
+      add_header X-Content-Type-Options "nosniff";
+      add_header X-XSS-Protection "1; mode=block";
+      add_header Referrer-Policy "strict-origin-when-cross-origin";
+      add_header Permissions-Policy "geolocation=(), microphone=(), camera=()";
+    
+    # Performance
+    worker-processes: "auto"
+    max-worker-connections: "65536"
+    keepalive: "320"
+    keepalive-requests: "100"
+    
+    # TLS settings
+    ssl-protocols: "TLSv1.2 TLSv1.3"
+    ssl-ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256"
+    ssl-session-cache: "shared:SSL:20m"
+    ssl-session-timeout: "4h"
+    
+    # Rate limiting (uncomment to enable)
+    # limit-conn-zone: "$binary_remote_addr zone=addr:10m"
+
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+
+  affinity:
+    podAntiAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - ingress-nginx
+        topologyKey: kubernetes.io/hostname
+
+  tolerations:
+  - key: "CriticalAddonsOnly"
+    operator: "Exists"
+    effect: "NoExecute"
+EOF
+
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  --namespace ingress-nginx \
+  -f /tmp/nginx-ingress-values.yaml
+
+# Wait for ingress to be ready
+kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx
+
+14.3 INSTALL RANCHER
+----------------------
+# Create cattle-system namespace
+kubectl create namespace cattle-system
+
+# Rancher installation values
+cat > /tmp/rancher-values.yaml << 'EOF'
+# Rancher hostname (must match DNS/TLS cert)
+hostname: rancher.example.com
+
+# Replica count for HA
+replicas: 3
+
+# Bootstrap password (change immediately after first login)
+bootstrapPassword: "REPLACE_WITH_STRONG_INITIAL_PASSWORD"
+
+# Ingress configuration
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  tls:
+    source: secret        # letsEncrypt, secret, or rancher (self-signed)
+    secretName: rancher-tls
+
+# Audit log for Rancher API
+auditLog:
+  level: 1
+  destination: sidecar
+  maxAge: 30
+  maxBackup: 10
+  maxSize: 100
+
+# Resource limits
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+
+# Anti-affinity for HA
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app
+            operator: In
+            values:
+            - rancher
+        topologyKey: kubernetes.io/hostname
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Private CA (comment out if using Let's Encrypt)
+# privateCA: true
+
+# Additional trusted CAs (for private registry certs, LDAP, etc.)
+# additionalTrustedCAs: true
+
+# UI settings
+ui-dashboard-index: https://releases.rancher.com/dashboard/latest/index.html
+EOF
+
+helm install rancher rancher-stable/rancher \
+  --namespace cattle-system \
+  -f /tmp/rancher-values.yaml \
+  --version 2.8.x    # Pin to specific version
+
+# Wait for Rancher to be ready
+kubectl rollout status deployment/rancher -n cattle-system --timeout=600s
+
+# Check Rancher pods
+kubectl get pods -n cattle-system
+
+# Get bootstrap password (if auto-generated)
+kubectl get secret --namespace cattle-system bootstrap-secret \
+  -o go-template='{{.data.bootstrapPassword|base64decode}}'
+
+================================================================================
+SECTION 15: TLS CONFIGURATION
+================================================================================
+
+15.1 LET'S ENCRYPT CERTIFICATE SETUP
+---------------------------------------
+# Create ClusterIssuer for Let's Encrypt (requires internet access)
+cat > /tmp/letsencrypt-issuer.yaml << 'EOF'
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    # Use staging for testing, prod for production
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: admin@example.com
+    privateKeySecretRef:
+      name: letsencrypt-prod
+    solvers:
+    - http01:
+        ingress:
+          ingressClassName: nginx
+    # OR use DNS-01 for wildcard certs (requires DNS provider API access):
+    # - dns01:
+    #     route53:
+    #       region: us-east-1
+    #       accessKeyID: AKIAIOSFODNN7EXAMPLE
+    #       secretAccessKeySecretRef:
+    #         name: route53-credentials
+    #         key: secret-access-key
+EOF
+
+kubectl apply -f /tmp/letsencrypt-issuer.yaml
+
+# Create Certificate for Rancher
+cat > /tmp/rancher-certificate.yaml << 'EOF'
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: rancher-tls
+  namespace: cattle-system
+spec:
+  secretName: rancher-tls
+  duration: 2160h   # 90 days
+  renewBefore: 360h # 15 days before expiry
+  subject:
+    organizations:
+    - Example Corp
+  dnsNames:
+  - rancher.example.com
+  - "*.rancher.example.com"
+  issuerRef:
+    name: letsencrypt-prod
+    kind: ClusterIssuer
+EOF
+
+kubectl apply -f /tmp/rancher-certificate.yaml
+
+# Monitor certificate issuance
+kubectl describe certificate rancher-tls -n cattle-system
+kubectl get certificaterequest -n cattle-system
+
+15.2 PRIVATE CA CERTIFICATE SETUP
+------------------------------------
+# Option A: Create your own CA with OpenSSL
+# --- Create Root CA ---
+mkdir -p /opt/pki/{root-ca,intermediate-ca,certs}
+cd /opt/pki/root-ca
+
+# Create root CA key
+openssl genrsa -aes256 -out root-ca.key 4096
+
+# Create root CA certificate
+openssl req -new -x509 -days 3650 -key root-ca.key \
+  -out root-ca.crt \
+  -subj "/C=US/ST=State/L=City/O=Example Corp/CN=Example Root CA"
+
+# Create intermediate CA key
+cd /opt/pki/intermediate-ca
+openssl genrsa -aes256 -out intermediate.key 4096
+
+# Create intermediate CA CSR
+openssl req -new -key intermediate.key -out intermediate.csr \
+  -subj "/C=US/ST=State/L=City/O=Example Corp/CN=Example Intermediate CA"
+
+# Sign intermediate CA with root
+openssl x509 -req -days 1825 -in intermediate.csr \
+  -CA /opt/pki/root-ca/root-ca.crt \
+  -CAkey /opt/pki/root-ca/root-ca.key \
+  -CAcreateserial -out intermediate.crt \
+  -extensions v3_ca
+
+# Create server certificate for Rancher
+openssl genrsa -out /opt/pki/certs/rancher.key 4096
+
+openssl req -new -key /opt/pki/certs/rancher.key -out /opt/pki/certs/rancher.csr \
+  -subj "/C=US/ST=State/L=City/O=Example Corp/CN=rancher.example.com"
+
+# Create SAN extension file
+cat > /opt/pki/certs/rancher-ext.cnf << 'EOCONF'
+[req_ext]
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = rancher.example.com
+DNS.2 = *.rancher.example.com
+DNS.3 = rke2-api.example.com
+IP.1 = 10.0.1.10
+EOCONF
+
+# Sign Rancher cert with intermediate CA
+openssl x509 -req -days 730 -in /opt/pki/certs/rancher.csr \
+  -CA /opt/pki/intermediate-ca/intermediate.crt \
+  -CAkey /opt/pki/intermediate-ca/intermediate.key \
+  -CAcreateserial -out /opt/pki/certs/rancher.crt \
+  -extfile /opt/pki/certs/rancher-ext.cnf \
+  -extensions req_ext
+
+# Create cert bundle (server cert + intermediate)
+cat /opt/pki/certs/rancher.crt \
+    /opt/pki/intermediate-ca/intermediate.crt \
+    > /opt/pki/certs/rancher-bundle.crt
+
+# Create Kubernetes TLS secret
+kubectl create secret tls rancher-tls \
+  --cert=/opt/pki/certs/rancher-bundle.crt \
+  --key=/opt/pki/certs/rancher.key \
+  --namespace=cattle-system
+
+# Create CA bundle secret (for Rancher to trust the CA)
+kubectl create secret generic tls-ca \
+  --from-file=cacerts.pem=/opt/pki/root-ca/root-ca.crt \
+  --namespace=cattle-system
+
+# Option B: Use cert-manager with Private CA ClusterIssuer
+cat > /tmp/private-ca-issuer.yaml << 'EOF'
+# First create the CA secret
+# kubectl create secret tls my-ca-secret \
+#   --cert=path/to/ca.crt --key=path/to/ca.key \
+#   --namespace cert-manager
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: private-ca-issuer
+spec:
+  ca:
+    secretName: my-ca-secret
+EOF
+
+kubectl apply -f /tmp/private-ca-issuer.yaml
+
+================================================================================
+SECTION 16: INGRESS CONFIGURATION
+================================================================================
+
+16.1 RANCHER INGRESS CONFIGURATION
+-------------------------------------
+cat > /tmp/rancher-ingress.yaml << 'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rancher
+  namespace: cattle-system
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "30"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Frame-Options: SAMEORIGIN";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-XSS-Protection: 1; mode=block";
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains; preload";
+spec:
+  ingressClassName: nginx
+  tls:
+  - hosts:
+    - rancher.example.com
+    secretName: rancher-tls
+  rules:
+  - host: rancher.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: rancher
+            port:
+              number: 80
+EOF
+
+kubectl apply -f /tmp/rancher-ingress.yaml
+
+================================================================================
+SECTION 17: LOAD BALANCER CONFIGURATION
+================================================================================
+
+17.1 HAPROXY CONFIGURATION (RECOMMENDED FOR ON-PREM)
+------------------------------------------------------
+# Install HAProxy on LB node(s)
+dnf install -y haproxy
+
+cat > /etc/haproxy/haproxy.cfg << 'EOF'
+#------------------------------------------------------------------------------
+# HAProxy Configuration for RKE2 + Rancher
+# Version: 2.x
+#------------------------------------------------------------------------------
+
+global
+    log         /dev/log local0
+    log         /dev/log local1 notice
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    maxconn     50000
+    user        haproxy
+    group       haproxy
+    daemon
+    
+    # SSL settings
+    ssl-default-bind-ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+    ssl-default-bind-options ssl-min-ver TLSv1.2 no-tls-tickets
+    
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listeners
+    stats timeout 30s
+
+defaults
+    mode                    tcp
+    log                     global
+    option                  tcplog
+    option                  dontlognull
+    option                  redispatch
+    retries                 3
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+
+#------------------------------------------------------------------------------
+# STATS INTERFACE (restrict access!)
+#------------------------------------------------------------------------------
+frontend stats
+    bind *:8404
+    mode http
+    stats enable
+    stats uri /stats
+    stats refresh 30s
+    stats auth admin:REPLACE_WITH_STRONG_PASSWORD
+    # Restrict to admin subnet
+    acl admin_net src 10.0.1.0/24
+    http-request deny unless admin_net
+
+#------------------------------------------------------------------------------
+# KUBERNETES API (6443)
+#------------------------------------------------------------------------------
+frontend kube-api
+    bind *:6443
+    mode tcp
+    option tcplog
+    default_backend kube-api-backend
+
+backend kube-api-backend
+    mode tcp
+    option ssl-hello-chk
+    balance roundrobin
+    
+    option tcp-check
+    
+    server cp-node-01 10.0.2.11:6443 check inter 10s fall 3 rise 2
+    server cp-node-02 10.0.2.12:6443 check inter 10s fall 3 rise 2
+    server cp-node-03 10.0.2.13:6443 check inter 10s fall 3 rise 2
+
+#------------------------------------------------------------------------------
+# RKE2 REGISTRATION (9345)
+#------------------------------------------------------------------------------
+frontend rke2-registration
+    bind *:9345
+    mode tcp
+    option tcplog
+    default_backend rke2-registration-backend
+
+backend rke2-registration-backend
+    mode tcp
+    balance roundrobin
+    
+    server cp-node-01 10.0.2.11:9345 check inter 10s fall 3 rise 2
+    server cp-node-02 10.0.2.12:9345 check inter 10s fall 3 rise 2
+    server cp-node-03 10.0.2.13:9345 check inter 10s fall 3 rise 2
+
+#------------------------------------------------------------------------------
+# HTTPS (443) - Rancher UI
+#------------------------------------------------------------------------------
+frontend https-in
+    bind *:443
+    mode tcp
+    option tcplog
+    default_backend https-backend
+
+backend https-backend
+    mode tcp
+    balance leastconn
+    
+    option ssl-hello-chk
+    option tcp-check
+    
+    # Route to worker nodes where ingress controller runs
+    server wrk-node-01 10.0.3.21:443 check inter 10s fall 3 rise 2
+    server wrk-node-02 10.0.3.22:443 check inter 10s fall 3 rise 2
+    server wrk-node-03 10.0.3.23:443 check inter 10s fall 3 rise 2
+
+#------------------------------------------------------------------------------
+# HTTP (80) - Redirect and ACME challenges
+#------------------------------------------------------------------------------
+frontend http-in
+    bind *:80
+    mode tcp
+    option tcplog
+    default_backend http-backend
+
+backend http-backend
+    mode tcp
+    balance roundrobin
+    
+    server wrk-node-01 10.0.3.21:80 check inter 10s fall 3 rise 2
+    server wrk-node-02 10.0.3.22:80 check inter 10s fall 3 rise 2
+    server wrk-node-03 10.0.3.23:80 check inter 10s fall 3 rise 2
+EOF
+
+# Validate HAProxy config
+haproxy -c -f /etc/haproxy/haproxy.cfg
+
+# Enable and start HAProxy
+systemctl enable --now haproxy
+
+# Setup keepalived for VIP failover (on both LB nodes)
+dnf install -y keepalived
+
+cat > /etc/keepalived/keepalived.conf << 'EOF'
+vrrp_script check_haproxy {
+    script "kill -0 $(cat /var/run/haproxy.pid)"
+    interval 2
+    weight -20
+    fall 2
+    rise 2
+}
+
+vrrp_instance VI_1 {
+    state MASTER          # BACKUP on second LB node
+    interface eth0        # Change to actual interface
+    virtual_router_id 51
+    priority 100          # 90 on backup node
+    advert_int 1
+    
+    authentication {
+        auth_type PASS
+        auth_pass REPLACE_WITH_KEEPALIVED_SECRET
+    }
+    
+    virtual_ipaddress {
+        10.0.1.10/24      # The VIP
+    }
+    
+    track_script {
+        check_haproxy
+    }
+    
+    notify_master "/etc/keepalived/notify.sh MASTER"
+    notify_backup "/etc/keepalived/notify.sh BACKUP"
+    notify_fault  "/etc/keepalived/notify.sh FAULT"
+}
+EOF
+
+systemctl enable --now keepalived
+
+17.2 NGINX STREAM LOAD BALANCER (ALTERNATIVE)
+-----------------------------------------------
+# Install Nginx with stream module
+dnf install -y nginx
+
+cat > /etc/nginx/nginx.conf << 'EOF'
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log warn;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 65536;
+    use epoll;
+    multi_accept on;
+}
+
+stream {
+    log_format basic '$remote_addr [$time_local] '
+                     '$protocol $status $bytes_sent $bytes_received '
+                     '$session_time';
+    
+    access_log /var/log/nginx/stream-access.log basic;
+
+    upstream kube-api {
+        least_conn;
+        server 10.0.2.11:6443;
+        server 10.0.2.12:6443;
+        server 10.0.2.13:6443;
+    }
+
+    upstream rke2-registration {
+        least_conn;
+        server 10.0.2.11:9345;
+        server 10.0.2.12:9345;
+        server 10.0.2.13:9345;
+    }
+
+    upstream ingress-https {
+        least_conn;
+        server 10.0.3.21:443;
+        server 10.0.3.22:443;
+        server 10.0.3.23:443;
+    }
+
+    upstream ingress-http {
+        least_conn;
+        server 10.0.3.21:80;
+        server 10.0.3.22:80;
+        server 10.0.3.23:80;
+    }
+
+    server {
+        listen 6443;
+        proxy_pass kube-api;
+        proxy_timeout 300s;
+        proxy_connect_timeout 10s;
+    }
+
+    server {
+        listen 9345;
+        proxy_pass rke2-registration;
+        proxy_timeout 300s;
+    }
+
+    server {
+        listen 443;
+        proxy_pass ingress-https;
+        proxy_timeout 600s;
+    }
+
+    server {
+        listen 80;
+        proxy_pass ingress-http;
+    }
+}
+EOF
+
+nginx -t && systemctl enable --now nginx
+
+================================================================================
+SECTION 18: STORAGE CLASS SETUP
+================================================================================
+
+18.1 LONGHORN INSTALLATION (RECOMMENDED)
+------------------------------------------
+# Prerequisites for Longhorn on OL9
+dnf install -y \
+  iscsi-initiator-utils \
+  nfs-utils \
+  device-mapper \
+  util-linux
+
+systemctl enable --now iscsid
+
+# Check Longhorn prerequisites
+curl -sSfL https://raw.githubusercontent.com/longhorn/longhorn/v1.6.0/scripts/environment_check.sh | bash
+
+# Install Longhorn via Helm
+cat > /tmp/longhorn-values.yaml << 'EOF'
+persistence:
+  defaultClass: true
+  defaultClassReplicaCount: 3
+  defaultFsType: ext4
+
+defaultSettings:
+  backupTarget: ""             # Set to S3 bucket for backups
+  backupTargetCredentialSecret: ""
+  replicaAutoBalance: best-effort
+  storageOverProvisioningPercentage: 200
+  storageMinimalAvailablePercentage: 25
+  upgradeChecker: false
+  defaultReplicaCount: 3
+  defaultDataLocality: disabled
+  replicaSoftAntiAffinity: false
+  replicaZoneSoftAntiAffinity: true
+  nodeDownPodDeletionPolicy: delete-both-statefulset-and-deployment-pod
+  guaranteedInstanceManagerCPU: 12
+  backupCompressionMethod: lz4
+
+longhornUI:
+  replicas: 2
+
+ingress:
+  enabled: true
+  ingressClassName: nginx
+  host: longhorn.example.com
+  tls: true
+  tlsSecret: longhorn-tls
+  annotations:
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: longhorn-basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+EOF
+
+kubectl create namespace longhorn-system
+
+helm install longhorn longhorn/longhorn \
+  --namespace longhorn-system \
+  -f /tmp/longhorn-values.yaml
+
+# Verify Longhorn deployment
+kubectl rollout status deployment/longhorn-ui -n longhorn-system
+kubectl get storageclass
+
+# Create basic auth for Longhorn UI
+htpasswd -c auth admin
+kubectl create secret generic longhorn-basic-auth \
+  --from-file=auth \
+  --namespace longhorn-system
+
+18.2 NFS STORAGE CLASS (ALTERNATIVE)
+---------------------------------------
+# Install NFS provisioner
+helm repo add nfs-subdir-external-provisioner \
+  https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner/
+
+helm install nfs-subdir-external-provisioner \
+  nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+  --namespace kube-system \
+  --set nfs.server=10.0.1.50 \
+  --set nfs.path=/exported/path \
+  --set storageClass.name=nfs-standard \
+  --set storageClass.defaultClass=false \
+  --set storageClass.reclaimPolicy=Retain
+
+# Verify storage class
+kubectl get storageclass
+
+================================================================================
+SECTION 19: MONITORING STACK INSTALLATION
+================================================================================
+
+19.1 INSTALL RANCHER MONITORING (RECOMMENDED)
+-----------------------------------------------
+# Rancher Monitoring uses kube-prometheus-stack under the hood
+# Install via Rancher UI: Apps -> Charts -> Monitoring
+# OR via kubectl/Helm:
+
+cat > /tmp/monitoring-values.yaml << 'EOF'
+prometheus:
+  prometheusSpec:
+    retention: 30d
+    retentionSize: "80GB"
+    
+    resources:
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+      limits:
+        cpu: 4000m
+        memory: 8Gi
+    
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: longhorn
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 100Gi
+    
+    # Enable audit log scraping
+    additionalScrapeConfigs:
+    - job_name: 'kubernetes-audit-logs'
+      static_configs:
+      - targets: ['localhost:9080']
+    
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+
+grafana:
+  enabled: true
+  replicas: 2
+  
+  adminPassword: "REPLACE_WITH_STRONG_PASSWORD"
+  
+  persistence:
+    enabled: true
+    storageClassName: longhorn
+    size: 10Gi
+  
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+    - grafana.example.com
+    tls:
+    - secretName: grafana-tls
+      hosts:
+      - grafana.example.com
+  
+  # LDAP/OIDC authentication (configure per your IdP)
+  grafana.ini:
+    auth.generic_oauth:
+      enabled: true
+      name: "Enterprise SSO"
+      allow_sign_up: true
+      client_id: grafana
+      client_secret: "OIDC_SECRET"
+      scopes: "openid profile email groups"
+      auth_url: "https://sso.example.com/auth"
+      token_url: "https://sso.example.com/token"
+      api_url: "https://sso.example.com/userinfo"
+      
+alertmanager:
+  alertmanagerSpec:
+    replicas: 2
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: longhorn
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+EOF
+
+helm install rancher-monitoring prometheus-community/kube-prometheus-stack \
+  --namespace cattle-monitoring-system \
+  --create-namespace \
+  -f /tmp/monitoring-values.yaml
+
+# Verify monitoring stack
+kubectl get pods -n cattle-monitoring-system
+
+================================================================================
+SECTION 20: LOGGING STACK INSTALLATION
+================================================================================
+
+20.1 INSTALL LOKI + PROMTAIL
+------------------------------
+helm repo add grafana https://grafana.github.io/helm-charts
+helm repo update
+
+cat > /tmp/loki-values.yaml << 'EOF'
+loki:
+  commonConfig:
+    replication_factor: 1
+  storage:
+    type: 'filesystem'
+  auth_enabled: false
+  
+  limits_config:
+    retention_period: 30d
+    ingestion_rate_mb: 10
+    ingestion_burst_size_mb: 20
+    max_streams_per_user: 10000
+    max_query_length: 0h
+    
+  persistence:
+    enabled: true
+    storageClassName: longhorn
+    size: 200Gi
+
+promtail:
+  config:
+    clients:
+    - url: http://loki-gateway/loki/api/v1/push
+    
+    snippets:
+      pipelineStages:
+      - cri: {}
+      - match:
+          selector: '{namespace="kube-system"}'
+          stages:
+          - labeldrop:
+            - filename
+            
+  tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+    effect: NoExecute
+EOF
+
+helm install loki grafana/loki-stack \
+  --namespace logging \
+  --create-namespace \
+  -f /tmp/loki-values.yaml
+
+20.2 CONFIGURE KUBERNETES AUDIT LOG SHIPPING
+----------------------------------------------
+# Ship Kubernetes audit logs from CP nodes to logging stack
+cat > /var/lib/rancher/rke2/server/manifests/audit-log-shipper.yaml << 'EOF'
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: audit-log-shipper
+  namespace: logging
+spec:
+  selector:
+    matchLabels:
+      app: audit-log-shipper
+  template:
+    metadata:
+      labels:
+        app: audit-log-shipper
+    spec:
+      tolerations:
+      - key: CriticalAddonsOnly
+        operator: Exists
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      containers:
+      - name: promtail
+        image: grafana/promtail:latest
+        args:
+        - -config.file=/etc/promtail/config.yaml
+        volumeMounts:
+        - name: audit-logs
+          mountPath: /var/log/audit
+          readOnly: true
+        - name: config
+          mountPath: /etc/promtail
+      volumes:
+      - name: audit-logs
+        hostPath:
+          path: /var/lib/rancher/rke2/server/logs
+      - name: config
+        configMap:
+          name: audit-log-shipper-config
+EOF
+
+================================================================================
+SECTION 21: BACKUP STRATEGY (VELERO)
+================================================================================
+
+21.1 INSTALL VELERO
+--------------------
+# Install Velero CLI
+wget https://github.com/vmware-tanzu/velero/releases/download/v1.12.0/velero-v1.12.0-linux-amd64.tar.gz
+tar xzf velero-v1.12.0-linux-amd64.tar.gz
+mv velero-v1.12.0-linux-amd64/velero /usr/local/bin/
+chmod +x /usr/local/bin/velero
+
+# Create S3 credentials (for AWS S3 or compatible like MinIO/OCI Object Storage)
+cat > /tmp/credentials-velero << 'EOF'
+[default]
+aws_access_key_id=REPLACE_WITH_ACCESS_KEY
+aws_secret_access_key=REPLACE_WITH_SECRET_KEY
+EOF
+
+# Install Velero with S3 backend
+velero install \
+  --provider aws \
+  --plugins velero/velero-plugin-for-aws:v1.8.0 \
+  --bucket velero-backups \
+  --secret-file /tmp/credentials-velero \
+  --backup-location-config region=us-east-1 \
+  --snapshot-location-config region=us-east-1 \
+  --use-volume-snapshots=true \
+  --default-volumes-to-fs-backup=true \
+  --use-node-agent
+
+# For OCI Object Storage:
+# velero install \
+#   --provider aws \
+#   --plugins velero/velero-plugin-for-aws:v1.8.0 \
+#   --bucket velero-backups \
+#   --secret-file /tmp/credentials-velero \
+#   --backup-location-config \
+#     region=us-phoenix-1,s3ForcePathStyle="true",s3Url=https://<namespace>.compat.objectstorage.us-phoenix-1.oraclecloud.com
+
+# Verify Velero installation
+kubectl get pods -n velero
+velero backup-location get
+
+21.2 CONFIGURE BACKUP SCHEDULES
+---------------------------------
+# Daily backup of all namespaces (except system namespaces)
+velero schedule create daily-backup \
+  --schedule="0 2 * * *" \
+  --ttl 720h \
+  --include-namespaces="*" \
+  --exclude-namespaces="velero,kube-system,kube-public,kube-node-lease"
+
+# Hourly backup of critical namespaces
+velero schedule create hourly-critical \
+  --schedule="0 * * * *" \
+  --ttl 48h \
+  --include-namespaces="cattle-system,cert-manager,ingress-nginx"
+
+# Manual backup before upgrades
+velero backup create pre-upgrade-$(date +%Y%m%d) \
+  --include-namespaces="*" \
+  --wait
+
+# Verify backup
+velero backup describe pre-upgrade-$(date +%Y%m%d)
+velero backup logs pre-upgrade-$(date +%Y%m%d)
+
+21.3 ETCD BACKUP (CRITICAL)
+-----------------------------
+# RKE2 automatically takes etcd snapshots
+# Configure snapshot settings in /etc/rancher/rke2/config.yaml:
+# etcd-snapshot-schedule-cron: "0 */6 * * *"   # Every 6 hours
+# etcd-snapshot-retention: 10
+# etcd-snapshot-dir: /var/lib/rancher/rke2/server/db/snapshots
+# etcd-s3: true
+# etcd-s3-endpoint: https://s3.amazonaws.com
+# etcd-s3-access-key: KEY
+# etcd-s3-secret-key: SECRET
+# etcd-s3-bucket: etcd-backups
+# etcd-s3-region: us-east-1
+
+# List available snapshots
+rke2 etcd-snapshot list
+
+# Manual etcd snapshot
+rke2 etcd-snapshot save --name manual-backup-$(date +%Y%m%d)
+
+# Verify snapshot exists
+ls -la /var/lib/rancher/rke2/server/db/snapshots/
+
+================================================================================
+SECTION 22: DISASTER RECOVERY PROCEDURE
+================================================================================
+
+22.1 SCENARIO 1: SINGLE CONTROL PLANE NODE FAILURE
+-----------------------------------------------------
+# RKE2 etcd (3-node quorum) tolerates 1 node failure automatically.
+# No intervention needed unless node is permanently lost.
+
+# To remove failed node from cluster:
+kubectl get nodes
+kubectl drain <failed-node> --ignore-daemonsets --delete-emptydir-data
+kubectl delete node <failed-node>
+
+# On the replacement node, install RKE2 with same config and rejoin
+# (Refer to Section 12.5 for join procedure)
+
+22.2 SCENARIO 2: MAJORITY CONTROL PLANE FAILURE (2+ CP NODES DOWN)
+---------------------------------------------------------------------
+# etcd has lost quorum. Cluster is read-only / non-functional.
+# Must restore etcd from snapshot.
+
+# Step 1: Stop RKE2 on ALL remaining nodes
+systemctl stop rke2-server
+systemctl stop rke2-agent  # On worker nodes
+
+# Step 2: On the surviving CP node, restore etcd snapshot
+# Find available snapshots:
+ls /var/lib/rancher/rke2/server/db/snapshots/
+
+# Step 3: Restore (this RESETS etcd to snapshot state)
+rke2 server \
+  --cluster-reset \
+  --cluster-reset-restore-path=/var/lib/rancher/rke2/server/db/snapshots/etcd-snapshot-name
+
+# Step 4: Start RKE2 on the restored node
+systemctl start rke2-server
+
+# Step 5: Wait for single-node cluster to be ready
+kubectl get nodes
+
+# Step 6: Rejoin other CP nodes
+# On the other CP nodes, clear old data and rejoin:
+rm -rf /var/lib/rancher/rke2/server/db/
+systemctl start rke2-server
+# (They will sync from the restored leader)
+
+# Step 7: Verify cluster health
+kubectl get nodes
+/var/lib/rancher/rke2/bin/etcdctl member list -w table
+
+22.3 VELERO RESTORE PROCEDURE
+--------------------------------
+# Restore all namespaces from backup
+velero restore create --from-backup daily-backup-YYYYMMDDHHMMSS
+
+# Restore specific namespace
+velero restore create \
+  --from-backup daily-backup-YYYYMMDDHHMMSS \
+  --include-namespaces my-application
+
+# Check restore status
+velero restore get
+velero restore describe <restore-name>
+
+# WHY: The etcd snapshot contains cluster state (deployments, services, configs).
+# Velero backups contain PVC data and workload manifests.
+# A complete DR requires BOTH: etcd snapshot (cluster state) + Velero (PVC data).
+
+================================================================================
+SECTION 23: UPGRADE STRATEGY
+================================================================================
+
+23.1 PRE-UPGRADE CHECKLIST
+----------------------------
+[ ] Review RKE2 release notes and Rancher compatibility matrix
+[ ] Verify current versions: kubectl version; helm list -A
+[ ] Take full etcd snapshot (rke2 etcd-snapshot save --name pre-upgrade)
+[ ] Take Velero backup of all namespaces
+[ ] Test upgrade in staging/dev environment first
+[ ] Schedule maintenance window with stakeholders
+[ ] Verify all nodes are healthy: kubectl get nodes
+[ ] Check Rancher compatibility: https://www.suse.com/suse-rancher/support-matrix/
+
+23.2 RKE2 UPGRADE PROCEDURE
+------------------------------
+# IMPORTANT: Upgrade one node at a time. Never upgrade all nodes simultaneously.
+# Upgrade order: CP Node 1 -> CP Node 2 -> CP Node 3 -> Workers
+
+# On EACH control plane node (one at a time):
+# 1. Drain the node (for workers; for CP nodes consider if safe)
+kubectl cordon <node-name>
+
+# 2. Download new RKE2 version
+export NEW_VERSION="v1.28.10+rke2r1"
+curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION=$NEW_VERSION sh -
+
+# 3. Restart RKE2
+systemctl restart rke2-server
+
+# 4. Wait for node to rejoin and be Ready
+kubectl get nodes -w
+
+# 5. Verify etcd health before proceeding
+/var/lib/rancher/rke2/bin/etcdctl endpoint health --cluster -w table
+
+# 6. Uncordon if needed
+kubectl uncordon <node-name>
+
+# 7. Proceed to next node
+
+23.3 RANCHER UPGRADE PROCEDURE
+---------------------------------
+# Update Helm repo
+helm repo update
+
+# Check current and available versions
+helm list -n cattle-system
+helm search repo rancher-stable/rancher --versions | head -10
+
+# Upgrade Rancher (keeping same values)
+helm upgrade rancher rancher-stable/rancher \
+  --namespace cattle-system \
+  --version 2.8.x \
+  -f /tmp/rancher-values.yaml \
+  --wait \
+  --timeout 600s
+
+# Monitor upgrade
+kubectl rollout status deployment/rancher -n cattle-system
+
+# Rollback if needed
+helm rollback rancher --namespace cattle-system
+
+================================================================================
+SECTION 24: NODE SCALING PROCEDURES
+================================================================================
+
+24.1 ADDING A NEW WORKER NODE
+--------------------------------
+# 1. Provision new OL9 node with same base configuration as existing workers
+#    (Sections 6-10: OS prep, kernel modules, SELinux, firewalld, NTP)
+
+# 2. Install RKE2 agent
+curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="agent" sh -
+
+# 3. Create config
+cat > /etc/rancher/rke2/config.yaml << 'EOF'
+token: "SAME_TOKEN_AS_CLUSTER"
+server: "https://rke2-api.example.com:9345"
+node-label:
+  - "node-role.kubernetes.io/worker=true"
+kubelet-arg:
+  - "protect-kernel-defaults=true"
+  - "read-only-port=0"
+  - "anonymous-auth=false"
+EOF
+
+# 4. Start agent
+systemctl enable --now rke2-agent
+
+# 5. Verify node joined
+kubectl get nodes
+
+24.2 CORDON AND DRAIN FOR MAINTENANCE
+----------------------------------------
+# Cordon prevents new pods from scheduling on node
+kubectl cordon <node-name>
+
+# Drain moves existing pods off the node
+kubectl drain <node-name> \
+  --ignore-daemonsets \
+  --delete-emptydir-data \
+  --grace-period=60 \
+  --timeout=300s
+
+# After maintenance, return node to service
+kubectl uncordon <node-name>
+
+================================================================================
+SECTION 25: SECURITY HARDENING CHECKLIST
+================================================================================
+
+25.1 KUBERNETES SECURITY CHECKLIST
+-------------------------------------
+[ ] anonymous-auth=false on kube-apiserver
+[ ] RBAC enabled and enforced
+[ ] NodeRestriction admission plugin enabled
+[ ] PodSecurityAdmission configured (replace PodSecurityPolicy)
+[ ] Network Policies applied to all namespaces
+[ ] Secrets encrypted at rest (encryption-config.yaml)
+[ ] Kubernetes audit logging enabled
+[ ] kubeconfig files have 0600 permissions
+[ ] service-account-key-file is unique and not shared
+[ ] AlwaysPullImages admission plugin enabled
+[ ] EventRateLimit admission plugin configured
+[ ] kube-apiserver not exposed directly to internet
+[ ] Dashboard disabled or properly secured
+
+25.2 POD SECURITY STANDARDS
+------------------------------
+# Apply Pod Security Standards at namespace level
+# Three levels: privileged, baseline, restricted
+
+# Apply baseline to all namespaces by default
+kubectl label --overwrite ns --all pod-security.kubernetes.io/enforce=baseline
+
+# Apply restricted to application namespaces
+kubectl label ns my-app \
+  pod-security.kubernetes.io/enforce=restricted \
+  pod-security.kubernetes.io/audit=restricted \
+  pod-security.kubernetes.io/warn=restricted
+
+# Example restricted pod (compliant with PSS restricted)
+cat > /tmp/secure-pod-example.yaml << 'EOF'
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-app
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 10000
+    runAsGroup: 10000
+    fsGroup: 10000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: app
+    image: my-app:latest
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+      readOnlyRootFilesystem: true
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  volumes:
+  - name: tmp
+    emptyDir: {}
+EOF
+
+25.3 NETWORK POLICIES
+-----------------------
+# Default deny-all policy (apply to each application namespace)
+cat > /tmp/default-deny.yaml << 'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: my-app
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+---
+# Allow DNS egress (required for all pods)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: my-app
+spec:
+  podSelector: {}
+  policyTypes:
+  - Egress
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+---
+# Allow ingress from ingress-nginx only
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress
+  namespace: my-app
+spec:
+  podSelector:
+    matchLabels:
+      role: web
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8080
+EOF
+
+kubectl apply -f /tmp/default-deny.yaml
+
+================================================================================
+SECTION 26: CIS BENCHMARK RECOMMENDATIONS
+================================================================================
+
+26.1 RUN CIS BENCHMARK SCAN
+------------------------------
+# Install kube-bench for CIS benchmark testing
+curl -L https://github.com/aquasecurity/kube-bench/releases/download/v0.7.0/kube-bench_0.7.0_linux_amd64.tar.gz \
+  | tar xzf - kube-bench
+mv kube-bench /usr/local/bin/
+
+# Run CIS benchmark for RKE2
+kube-bench run --targets=master --benchmark=rke2-cis-1.7
+kube-bench run --targets=node --benchmark=rke2-cis-1.7
+
+# RKE2-specific CIS profile (built-in hardening)
+# In /etc/rancher/rke2/config.yaml, add:
+# profile: cis-1.7
+# This automatically applies CIS Level 1 hardening to RKE2
+
+26.2 KEY CIS CONTROLS
+-----------------------
+# 1. API Server Authentication Controls
+#    - Ensure --anonymous-auth=false
+#    - Ensure --insecure-port=0
+#    - Use --authorization-mode=RBAC,Node
+
+# 2. ETCD Security
+#    - Ensure etcd --data-dir permissions are 700
+#    - Ensure TLS encryption is enabled for etcd
+#    - Restrict etcd access to CP nodes only
+
+# 3. Scheduler Security
+#    - Ensure --bind-address=127.0.0.1
+#    - Ensure kube-scheduler profiling is disabled
+
+# 4. Controller Manager
+#    - Ensure --use-service-account-credentials=true
+#    - Ensure --service-account-private-key-file is set
+
+# 5. kubelet Security
+#    - Ensure --protect-kernel-defaults=true
+#    - Ensure --read-only-port=0
+#    - Ensure --anonymous-auth=false
+
+================================================================================
+SECTION 27: RBAC BEST PRACTICES
+================================================================================
+
+27.1 RBAC PRINCIPLES
+----------------------
+# 1. Principle of Least Privilege - grant minimum required permissions
+# 2. Use Roles (namespace-scoped) over ClusterRoles where possible
+# 3. Never use cluster-admin for application service accounts
+# 4. Audit RBAC bindings regularly
+
+# Example: Limited deployment manager role
+cat > /tmp/deployment-manager-role.yaml << 'EOF'
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deployment-manager
+  namespace: my-app
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["pods", "pods/log"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deployment-manager-binding
+  namespace: my-app
+subjects:
+- kind: ServiceAccount
+  name: ci-deployer
+  namespace: my-app
+roleRef:
+  kind: Role
+  name: deployment-manager
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+kubectl apply -f /tmp/deployment-manager-role.yaml
+
+# Audit cluster-admin bindings (review these carefully!)
+kubectl get clusterrolebindings \
+  -o json | jq '.items[] | select(.roleRef.name=="cluster-admin") | .metadata.name'
+
+# Check permissions for a specific user/SA
+kubectl auth can-i --list --as=system:serviceaccount:my-app:ci-deployer -n my-app
+
+================================================================================
+SECTION 28: SECRETS MANAGEMENT
+================================================================================
+
+28.1 HASHICORP VAULT INTEGRATION (RECOMMENDED)
+-------------------------------------------------
+# Install Vault via Helm
+helm repo add hashicorp https://helm.releases.hashicorp.com
+
+cat > /tmp/vault-values.yaml << 'EOF'
+server:
+  ha:
+    enabled: true
+    replicas: 3
+    raft:
+      enabled: true
+      
+  resources:
+    requests:
+      memory: 256Mi
+      cpu: 250m
+    limits:
+      memory: 1Gi
+      cpu: 1000m
+
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hosts:
+    - host: vault.example.com
+      paths: ["/"]
+    tls:
+    - secretName: vault-tls
+      hosts:
+      - vault.example.com
+
+  dataStorage:
+    enabled: true
+    size: 20Gi
+    storageClass: longhorn
+
+injector:
+  enabled: true
+  replicas: 2
+EOF
+
+helm install vault hashicorp/vault \
+  --namespace vault \
+  --create-namespace \
+  -f /tmp/vault-values.yaml
+
+# Initialize Vault (SAVE OUTPUT SECURELY)
+kubectl exec -n vault vault-0 -- vault operator init \
+  -key-shares=5 \
+  -key-threshold=3 \
+  -format=json > /secure/vault-init.json
+
+# Configure Vault Kubernetes auth
+kubectl exec -n vault vault-0 -- vault auth enable kubernetes
+kubectl exec -n vault vault-0 -- vault write auth/kubernetes/config \
+  kubernetes_host="https://10.0.1.10:6443"
+
+28.2 EXTERNAL SECRETS OPERATOR (ALTERNATIVE)
+----------------------------------------------
+helm repo add external-secrets https://charts.external-secrets.io
+
+helm install external-secrets \
+  external-secrets/external-secrets \
+  --namespace external-secrets \
+  --create-namespace
+
+# Connect to Vault or AWS Secrets Manager, OCI Vault, etc.
+
+================================================================================
+SECTION 29: CERTIFICATE ROTATION PROCEDURES
+================================================================================
+
+29.1 CERT-MANAGER AUTOMATIC ROTATION
+---------------------------------------
+# cert-manager automatically renews certificates before expiry
+# Default: renew 15 days before expiry
+
+# Check certificate expiry
+kubectl get certificates -A
+kubectl describe certificate rancher-tls -n cattle-system
+
+# Force manual renewal
+kubectl annotate certificate rancher-tls -n cattle-system \
+  cert-manager.io/issuing-reason="manual renewal" --overwrite
+
+# Check certificate secret
+kubectl get secret rancher-tls -n cattle-system -o jsonpath='{.data.tls\.crt}' \
+  | base64 -d | openssl x509 -noout -dates
+
+29.2 RKE2 CERTIFICATE ROTATION
+---------------------------------
+# RKE2 certificates expire after 1 year by default
+# Certificates are automatically rotated when RKE2 is restarted
+
+# Check certificate expiry dates
+for CERT in $(find /var/lib/rancher/rke2/server/tls -name "*.crt" 2>/dev/null); do
+  echo "=== $CERT ==="
+  openssl x509 -in $CERT -noout -dates 2>/dev/null
+done
+
+# Manual certificate rotation
+rke2 certificate rotate
+
+# OR force rotation with restart:
+systemctl stop rke2-server
+# Delete certificate files
+rm -rf /var/lib/rancher/rke2/server/tls
+systemctl start rke2-server
+# Certificates are regenerated on startup
+
+================================================================================
+SECTION 30: TROUBLESHOOTING GUIDE
+================================================================================
+
+30.1 COMMON ISSUES AND SOLUTIONS
+-----------------------------------
+
+ISSUE: Nodes not reaching Ready state
+--------------------------------------
+# Check node conditions
+kubectl describe node <node-name>
+
+# Check kubelet logs
+journalctl -u rke2-server -f    # On CP nodes
+journalctl -u rke2-agent -f     # On worker nodes
+
+# Check if kernel modules are loaded
+lsmod | grep br_netfilter
+lsmod | grep overlay
+
+# Check sysctl values
+sysctl net.ipv4.ip_forward
+sysctl net.bridge.bridge-nf-call-iptables
+
+ISSUE: etcd not healthy
+------------------------
+# Check etcd member list
+export ETCDCTL_ENDPOINTS='https://127.0.0.1:2379'
+export ETCDCTL_CACERT='/var/lib/rancher/rke2/server/tls/etcd/server-ca.crt'
+export ETCDCTL_CERT='/var/lib/rancher/rke2/server/tls/etcd/server-client.crt'
+export ETCDCTL_KEY='/var/lib/rancher/rke2/server/tls/etcd/server-client.key'
+export ETCDCTL_API=3
+/var/lib/rancher/rke2/bin/etcdctl member list
+/var/lib/rancher/rke2/bin/etcdctl endpoint health --cluster
+
+# Check etcd disk latency
+/var/lib/rancher/rke2/bin/etcdctl check perf
+
+# Check etcd DB size
+/var/lib/rancher/rke2/bin/etcdctl endpoint status -w table
+
+ISSUE: Pods stuck in Pending state
+------------------------------------
+# Check pod description for events
+kubectl describe pod <pod-name> -n <namespace>
+
+# Check node resource availability
+kubectl describe node | grep -A5 "Allocated resources"
+
+# Check for taints preventing scheduling
+kubectl get nodes -o custom-columns=NAME:.metadata.name,TAINTS:.spec.taints
+
+# Check storage class availability
+kubectl get pvc -A
+kubectl get storageclass
+
+ISSUE: Rancher UI not accessible
+----------------------------------
+# Check Rancher pods
+kubectl get pods -n cattle-system
+
+# Check ingress
+kubectl get ingress -n cattle-system
+kubectl describe ingress -n cattle-system
+
+# Check TLS certificate
+kubectl get certificate -n cattle-system
+kubectl describe certificate rancher-tls -n cattle-system
+
+# Check nginx ingress logs
+kubectl logs -n ingress-nginx deployment/ingress-nginx-controller
+
+# Test connectivity from within cluster
+kubectl run test-curl --image=curlimages/curl --restart=Never -- \
+  curl -k https://rancher.cattle-system.svc.cluster.local/ping
+kubectl logs test-curl
+kubectl delete pod test-curl
+
+ISSUE: SELinux denials
+-----------------------
+# Check for AVC denials
+ausearch -m avc -ts recent | grep rke2
+ausearch -m avc -ts recent | grep containerd
+
+# Temporarily set to permissive to confirm SELinux is cause (TEST ONLY)
+# setenforce 0
+# Reproduce issue, then re-enable:
+# setenforce 1
+
+# Generate policy for specific denials
+ausearch -m avc -ts recent | audit2allow -M rke2-fix
+semodule -i rke2-fix.pp
+
+ISSUE: Certificate errors
+--------------------------
+# Verify cert-manager is running
+kubectl get pods -n cert-manager
+
+# Check certificate resource
+kubectl describe certificaterequest -n cattle-system
+kubectl describe order -n cattle-system
+
+# Test ACME challenge (Let's Encrypt)
+# Ensure port 80 is accessible from internet for HTTP-01 challenge
+curl -I http://rancher.example.com/.well-known/acme-challenge/test
+
+# Check DNS propagation
+dig rancher.example.com
+nslookup rancher.example.com
+
+================================================================================
+SECTION 31: VALIDATION AND HEALTH-CHECK COMMANDS
+================================================================================
+
+31.1 CLUSTER HEALTH VALIDATION SCRIPT
+----------------------------------------
+cat > /usr/local/bin/cluster-health-check.sh << 'SCRIPT'
+#!/bin/bash
+# Cluster Health Check Script
+# Run from any CP node with kubeconfig access
+
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+export PATH=$PATH:/var/lib/rancher/rke2/bin
+
+echo "============================================"
+echo "  RKE2 + RANCHER CLUSTER HEALTH CHECK"
+echo "  $(date)"
+echo "============================================"
+
+# 1. Node Status
+echo ""
+echo "--- NODE STATUS ---"
+kubectl get nodes -o wide
+
+# Check for NotReady nodes
+NOT_READY=$(kubectl get nodes | grep -v "Ready" | grep -v "NAME" | wc -l)
+if [ "$NOT_READY" -gt 0 ]; then
+  echo "WARNING: $NOT_READY node(s) not in Ready state!"
+fi
+
+# 2. etcd Health
+echo ""
+echo "--- ETCD HEALTH ---"
+export ETCDCTL_ENDPOINTS='https://127.0.0.1:2379'
+export ETCDCTL_CACERT='/var/lib/rancher/rke2/server/tls/etcd/server-ca.crt'
+export ETCDCTL_CERT='/var/lib/rancher/rke2/server/tls/etcd/server-client.crt'
+export ETCDCTL_KEY='/var/lib/rancher/rke2/server/tls/etcd/server-client.key'
+export ETCDCTL_API=3
+etcdctl endpoint health --cluster -w table 2>/dev/null || echo "ERROR: Cannot reach etcd"
+etcdctl endpoint status --cluster -w table 2>/dev/null
+
+# 3. System Pods
+echo ""
+echo "--- SYSTEM PODS ---"
+kubectl get pods -n kube-system | grep -v "Running\|Completed"
+
+# 4. Rancher Status
+echo ""
+echo "--- RANCHER STATUS ---"
+kubectl get pods -n cattle-system
+kubectl get deployment rancher -n cattle-system
+
+# 5. Certificates
+echo ""
+echo "--- TLS CERTIFICATES ---"
+kubectl get certificates -A
+
+# 6. Storage
+echo ""
+echo "--- STORAGE ---"
+kubectl get storageclass
+kubectl get pvc -A | grep -v "Bound"
+
+# 7. Resource Usage
+echo ""
+echo "--- RESOURCE USAGE ---"
+kubectl top nodes 2>/dev/null || echo "metrics-server not available"
+
+# 8. Pending/Failed Pods
+echo ""
+echo "--- PROBLEM PODS ---"
+kubectl get pods -A | grep -v "Running\|Completed\|NAME"
+
+echo ""
+echo "============================================"
+echo "  Health check complete"
+echo "============================================"
+SCRIPT
+
+chmod +x /usr/local/bin/cluster-health-check.sh
+
+# Run the health check
+cluster-health-check.sh
+
+================================================================================
+SECTION 32: PRODUCTION OPERATIONAL RUNBOOK
+================================================================================
+
+32.1 DAILY OPERATIONS CHECKLIST
+---------------------------------
+[ ] Run cluster-health-check.sh
+[ ] Review Prometheus/Grafana alerts
+[ ] Check etcd disk usage (alert if > 6 GB)
+[ ] Verify backup jobs completed (Velero + etcd snapshots)
+[ ] Review Kubernetes audit logs for anomalies
+[ ] Check certificate expiry dates (alert if < 30 days)
+[ ] Review node resource utilization trends
+
+32.2 WEEKLY OPERATIONS CHECKLIST
+-----------------------------------
+[ ] Review and rotate logs (check log volume)
+[ ] Test a backup restore in non-prod environment
+[ ] Review RBAC permissions - any new service accounts?
+[ ] Check for available RKE2/Rancher updates
+[ ] Review Falco alerts for security anomalies
+[ ] Run kube-bench CIS scan and address new findings
+[ ] Review application resource requests vs limits
+
+32.3 MONTHLY OPERATIONS CHECKLIST
+------------------------------------
+[ ] Full DR test - restore to secondary environment
+[ ] Review and update security policies
+[ ] Rotate service account tokens
+[ ] Audit and clean unused namespaces, resources
+[ ] Capacity planning review
+[ ] Review and update runbook/documentation
+[ ] Security patch assessment and planning
+
+================================================================================
+SECTION 33: CI/CD INTEGRATION RECOMMENDATIONS
+================================================================================
+
+33.1 GITHUB ACTIONS EXAMPLE
+------------------------------
+# .github/workflows/deploy.yml
+cat << 'EOF'
+name: Deploy to Kubernetes
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Configure kubectl
+      uses: azure/k8s-set-context@v3
+      with:
+        method: kubeconfig
+        kubeconfig: ${{ secrets.KUBECONFIG }}
+    
+    - name: Build and push image
+      run: |
+        docker build -t registry.example.com/my-app:${{ github.sha }} .
+        docker push registry.example.com/my-app:${{ github.sha }}
+    
+    - name: Deploy
+      run: |
+        kubectl set image deployment/my-app \
+          my-app=registry.example.com/my-app:${{ github.sha }} \
+          -n my-app
+        kubectl rollout status deployment/my-app -n my-app --timeout=300s
+    
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n my-app
+        kubectl get ingress -n my-app
+EOF
+
+================================================================================
+SECTION 34: GITOPS SETUP (FLEET AND ARGOCD)
+================================================================================
+
+34.1 FLEET (BUILT INTO RANCHER)
+---------------------------------
+# Fleet is included with Rancher for GitOps
+# Configure in Rancher UI: Continuous Delivery -> Git Repos
+
+# Example GitRepo resource
+cat > /tmp/fleet-gitrepo.yaml << 'EOF'
+apiVersion: fleet.cattle.io/v1alpha1
+kind: GitRepo
+metadata:
+  name: my-app-repo
+  namespace: fleet-default
+spec:
+  repo: https://github.com/my-org/my-app
+  branch: main
+  paths:
+  - k8s/
+  
+  targets:
+  - name: production
+    clusterSelector:
+      matchLabels:
+        environment: production
+  
+  clientSecretName: git-credentials
+EOF
+
+kubectl apply -f /tmp/fleet-gitrepo.yaml
+
+34.2 ARGOCD INSTALLATION
+--------------------------
+kubectl create namespace argocd
+
+helm repo add argo https://argoproj.github.io/argo-helm
+helm install argocd argo/argo-cd \
+  --namespace argocd \
+  --set server.replicas=2 \
+  --set repoServer.replicas=2 \
+  --set controller.replicas=1 \
+  --set global.securityContext.runAsNonRoot=true
+
+# Initial admin password
+kubectl get secret argocd-initial-admin-secret -n argocd \
+  -o jsonpath='{.data.password}' | base64 -d
+
+# Create ArgoCD Application
+cat > /tmp/argocd-app.yaml << 'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: my-application
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/my-org/my-app
+    targetRevision: HEAD
+    path: k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: my-app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+    - CreateNamespace=true
+EOF
+
+kubectl apply -f /tmp/argocd-app.yaml
+
+================================================================================
+SECTION 35: ANSIBLE AUTOMATION EXAMPLES
+================================================================================
+
+35.1 ANSIBLE INVENTORY
+------------------------
+# inventory/production.ini
+cat << 'EOF'
+[control_plane]
+cp-node-01 ansible_host=10.0.2.11
+cp-node-02 ansible_host=10.0.2.12
+cp-node-03 ansible_host=10.0.2.13
+
+[workers]
+wrk-node-01 ansible_host=10.0.3.21
+wrk-node-02 ansible_host=10.0.3.22
+wrk-node-03 ansible_host=10.0.3.23
+
+[all:vars]
+ansible_user=svcaccount
+ansible_ssh_private_key_file=~/.ssh/cluster_key
+ansible_python_interpreter=/usr/bin/python3
+EOF
+
+35.2 ANSIBLE PLAYBOOK - NODE PREPARATION
+------------------------------------------
+# playbooks/prepare-nodes.yaml
+cat << 'EOF'
+---
+- name: Prepare Oracle Linux 9 nodes for RKE2
+  hosts: all
+  become: yes
+  vars:
+    rke2_version: "v1.28.8+rke2r1"
+  
+  tasks:
+  - name: Update all packages
+    dnf:
+      name: "*"
+      state: latest
+      update_cache: yes
+  
+  - name: Install required packages
+    dnf:
+      name:
+        - bash-completion
+        - bind-utils
+        - chrony
+        - conntrack
+        - curl
+        - ethtool
+        - ipset
+        - iscsi-initiator-utils
+        - jq
+        - lvm2
+        - nfs-utils
+        - openssl
+        - policycoreutils-python-utils
+        - socat
+        - tar
+        - vim
+        - wget
+      state: present
+  
+  - name: Disable swap
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+  
+  - name: Remove swap from fstab
+    replace:
+      path: /etc/fstab
+      regexp: '^(\s*)([^#\n]+\s+)(\w+\s+)swap(\s+.*)$'
+      replace: '#\1\2\3swap\4'
+  
+  - name: Load required kernel modules
+    modprobe:
+      name: "{{ item }}"
+      state: present
+    loop:
+      - br_netfilter
+      - overlay
+      - ip_tables
+      - nf_conntrack
+  
+  - name: Persist kernel modules
+    copy:
+      dest: /etc/modules-load.d/rke2.conf
+      content: |
+        br_netfilter
+        overlay
+        ip_tables
+        nf_conntrack
+  
+  - name: Configure sysctl for Kubernetes
+    sysctl:
+      name: "{{ item.key }}"
+      value: "{{ item.value }}"
+      sysctl_set: yes
+      state: present
+      reload: yes
+    loop:
+      - { key: "net.ipv4.ip_forward", value: "1" }
+      - { key: "net.bridge.bridge-nf-call-iptables", value: "1" }
+      - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+      - { key: "vm.swappiness", value: "0" }
+      - { key: "fs.inotify.max_user_watches", value: "1048576" }
+      - { key: "net.netfilter.nf_conntrack_max", value: "1048576" }
+  
+  - name: Install container-selinux
+    dnf:
+      name: container-selinux
+      state: present
+  
+  - name: Configure chrony NTP
+    template:
+      src: chrony.conf.j2
+      dest: /etc/chrony.conf
+    notify: restart chronyd
+  
+  - name: Enable and start services
+    systemd:
+      name: "{{ item }}"
+      state: started
+      enabled: yes
+    loop:
+      - chronyd
+      - iscsid
+      - auditd
+  
+  - name: Configure firewalld for worker nodes
+    firewalld:
+      port: "{{ item }}"
+      permanent: yes
+      state: enabled
+    loop:
+      - "10250/tcp"
+      - "8472/udp"
+      - "30000-32767/tcp"
+    when: inventory_hostname in groups['workers']
+  
+  - name: Configure firewalld for control plane nodes
+    firewalld:
+      port: "{{ item }}"
+      permanent: yes
+      state: enabled
+    loop:
+      - "6443/tcp"
+      - "9345/tcp"
+      - "2379-2380/tcp"
+      - "10250/tcp"
+      - "8472/udp"
+    when: inventory_hostname in groups['control_plane']
+  
+  - name: Reload firewalld
+    command: firewall-cmd --reload
+  
+  handlers:
+  - name: restart chronyd
+    systemd:
+      name: chronyd
+      state: restarted
+EOF
+
+================================================================================
+SECTION 36: TERRAFORM SNIPPETS
+================================================================================
+
+36.1 TERRAFORM - ORACLE CLOUD INFRASTRUCTURE VMs
+--------------------------------------------------
+cat << 'EOF'
+# Oracle Cloud Infrastructure (OCI) - RKE2 Cluster VMs
+# Requires: OCI provider configured
+
+terraform {
+  required_providers {
+    oci = {
+      source  = "oracle/oci"
+      version = "~> 5.0"
+    }
+  }
+  backend "s3" {
+    bucket   = "terraform-state"
+    key      = "rke2-cluster/terraform.tfstate"
+    region   = "us-phoenix-1"
+    endpoint = "https://<namespace>.compat.objectstorage.us-phoenix-1.oraclecloud.com"
+  }
+}
+
+# Variables
+variable "compartment_id" { type = string }
+variable "vcn_id" { type = string }
+variable "cp_subnet_id" { type = string }
+variable "worker_subnet_id" { type = string }
+variable "ssh_public_key" { type = string }
+
+# Data Source: Latest OL9 Image
+data "oci_core_images" "ol9" {
+  compartment_id           = var.compartment_id
+  operating_system         = "Oracle Linux"
+  operating_system_version = "9"
+  shape                    = "VM.Standard.E4.Flex"
+  sort_by                  = "TIMECREATED"
+  sort_order               = "DESC"
+}
+
+# Control Plane Nodes
+resource "oci_core_instance" "control_plane" {
+  count               = 3
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[count.index % 3].name
+  compartment_id      = var.compartment_id
+  display_name        = "rke2-cp-0${count.index + 1}"
+  shape               = "VM.Standard.E4.Flex"
+
+  shape_config {
+    ocpus         = 4
+    memory_in_gbs = 16
+  }
+
+  source_details {
+    source_type             = "image"
+    source_id               = data.oci_core_images.ol9.images[0].id
+    boot_volume_size_in_gbs = 100
+  }
+
+  create_vnic_details {
+    subnet_id        = var.cp_subnet_id
+    display_name     = "rke2-cp-0${count.index + 1}-vnic"
+    assign_public_ip = false
+    hostname_label   = "rke2-cp-0${count.index + 1}"
+  }
+
+  metadata = {
+    ssh_authorized_keys = var.ssh_public_key
+    user_data           = base64encode(file("scripts/cloud-init-cp.sh"))
+  }
+
+  freeform_tags = {
+    role        = "control-plane"
+    cluster     = "production"
+    managed-by  = "terraform"
+  }
+}
+
+# Worker Nodes
+resource "oci_core_instance" "workers" {
+  count               = 3
+  availability_domain = data.oci_identity_availability_domains.ads.availability_domains[count.index % 3].name
+  compartment_id      = var.compartment_id
+  display_name        = "rke2-wrk-0${count.index + 1}"
+  shape               = "VM.Standard.E4.Flex"
+
+  shape_config {
+    ocpus         = 8
+    memory_in_gbs = 32
+  }
+
+  source_details {
+    source_type             = "image"
+    source_id               = data.oci_core_images.ol9.images[0].id
+    boot_volume_size_in_gbs = 200
+  }
+
+  create_vnic_details {
+    subnet_id        = var.worker_subnet_id
+    display_name     = "rke2-wrk-0${count.index + 1}-vnic"
+    assign_public_ip = false
+  }
+
+  metadata = {
+    ssh_authorized_keys = var.ssh_public_key
+  }
+
+  freeform_tags = {
+    role       = "worker"
+    cluster    = "production"
+    managed-by = "terraform"
+  }
+}
+
+# Block Volume for etcd (NVMe equivalent performance)
+resource "oci_core_volume" "etcd_volume" {
+  count               = 3
+  compartment_id      = var.compartment_id
+  availability_domain = oci_core_instance.control_plane[count.index].availability_domain
+  display_name        = "rke2-etcd-vol-0${count.index + 1}"
+  size_in_gbs         = 50
+  vpus_per_gb         = 120  # Ultra High Performance (equivalent to NVMe)
+}
+
+resource "oci_core_volume_attachment" "etcd_attach" {
+  count           = 3
+  attachment_type = "paravirtualized"
+  instance_id     = oci_core_instance.control_plane[count.index].id
+  volume_id       = oci_core_volume.etcd_volume[count.index].id
+  is_read_only    = false
+  is_shareable    = false
+}
+EOF
+
+================================================================================
+SECTION 38: SYSTEMD TUNING
+================================================================================
+
+38.1 SYSTEM RESOURCE LIMITS
+-----------------------------
+cat > /etc/systemd/system.conf.d/rke2-limits.conf << 'EOF'
+[Manager]
+DefaultLimitNOFILE=1048576
+DefaultLimitNPROC=1048576
+DefaultLimitCORE=infinity
+DefaultTasksMax=infinity
+EOF
+
+cat > /etc/systemd/user.conf.d/rke2-limits.conf << 'EOF'
+[Manager]
+DefaultLimitNOFILE=1048576
+DefaultLimitNPROC=1048576
+EOF
+
+# Create RKE2 service override
+mkdir -p /etc/systemd/system/rke2-server.service.d/
+cat > /etc/systemd/system/rke2-server.service.d/override.conf << 'EOF'
+[Service]
+LimitNOFILE=1048576
+LimitNPROC=1048576
+LimitMEMLOCK=infinity
+TasksMax=infinity
+OOMScoreAdjust=-1000
+Restart=on-failure
+RestartSec=5s
+EOF
+
+mkdir -p /etc/systemd/system/rke2-agent.service.d/
+cat > /etc/systemd/system/rke2-agent.service.d/override.conf << 'EOF'
+[Service]
+LimitNOFILE=1048576
+LimitNPROC=1048576
+LimitMEMLOCK=infinity
+TasksMax=infinity
+OOMScoreAdjust=-999
+Restart=on-failure
+RestartSec=5s
+EOF
+
+systemctl daemon-reload
+
+================================================================================
+SECTION 39: MONITORING ALERTS
+================================================================================
+
+39.1 PROMETHEUS ALERTING RULES
+---------------------------------
+cat > /tmp/rke2-alerts.yaml << 'EOF'
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rke2-cluster-alerts
+  namespace: cattle-monitoring-system
+spec:
+  groups:
+  - name: cluster.health
+    rules:
+    - alert: NodeNotReady
+      expr: kube_node_status_condition{condition="Ready",status="true"} == 0
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Node {{ $labels.node }} is not ready"
+        description: "Node has been not ready for more than 5 minutes"
+
+    - alert: EtcdHighDiskUsage
+      expr: etcd_mvcc_db_total_size_in_bytes / 1024 / 1024 / 1024 > 6
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "etcd database size exceeds 6GB on {{ $labels.instance }}"
+        description: "etcd DB is {{ $value | humanize }}GB. Compact etcd before it hits 8GB limit."
+
+    - alert: EtcdLeaderChange
+      expr: changes(etcd_server_leader_changes_seen_total[15m]) > 1
+      labels:
+        severity: warning
+      annotations:
+        summary: "etcd leader changed more than once in 15 minutes"
+
+    - alert: APIServerHighLatency
+      expr: histogram_quantile(0.99, sum(rate(apiserver_request_duration_seconds_bucket[5m])) by (verb, le)) > 1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Kubernetes API server 99th percentile latency > 1s"
+
+    - alert: PVCAlmostFull
+      expr: (kubelet_volume_stats_available_bytes / kubelet_volume_stats_capacity_bytes) * 100 < 15
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "PVC {{ $labels.persistentvolumeclaim }} in namespace {{ $labels.namespace }} is {{ $value | humanize }}% full"
+
+    - alert: CertificateExpiringSoon
+      expr: certmanager_certificate_expiration_timestamp_seconds - time() < 604800
+      labels:
+        severity: warning
+      annotations:
+        summary: "Certificate {{ $labels.name }} in namespace {{ $labels.namespace }} expires in less than 7 days"
+
+    - alert: RancherDeploymentUnavailable
+      expr: kube_deployment_status_replicas_available{namespace="cattle-system",deployment="rancher"} < 2
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Rancher deployment has fewer than 2 replicas available"
+
+    - alert: NodeHighMemoryUsage
+      expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Node {{ $labels.instance }} memory usage is {{ $value | humanize }}%"
+
+    - alert: NodeHighCPUUsage
+      expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+      for: 10m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Node {{ $labels.instance }} CPU usage is {{ $value | humanize }}%"
+EOF
+
+kubectl apply -f /tmp/rke2-alerts.yaml
+
+================================================================================
+SECTION 40: PERFORMANCE TUNING
+================================================================================
+
+40.1 ETCD PERFORMANCE TUNING
+------------------------------
+# In /etc/rancher/rke2/config.yaml, etcd-arg settings:
+# etcd-arg:
+#   - "quota-backend-bytes=8589934592"      # 8 GB max DB size
+#   - "auto-compaction-mode=periodic"        # Compact every N hours
+#   - "auto-compaction-retention=8h"         # Keep 8 hours of revisions
+#   - "snapshot-count=5000"                  # Snapshot frequency
+#   - "heartbeat-interval=100"               # ms - increase for slow networks
+#   - "election-timeout=1000"                # ms - 10x heartbeat
+
+# Manual etcd compaction (if DB grows too large):
+export ETCDCTL_API=3
+CURRENT_REVISION=$(/var/lib/rancher/rke2/bin/etcdctl endpoint status \
+  -w json | jq '.[0].Status.header.revision')
+/var/lib/rancher/rke2/bin/etcdctl compact $CURRENT_REVISION
+/var/lib/rancher/rke2/bin/etcdctl defrag
+
+40.2 KERNEL PERFORMANCE TUNING
+---------------------------------
+# CPU scaling governor (performance mode)
+for CPU in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+  echo "performance" > $CPU 2>/dev/null || true
+done
+
+# Make persistent via tuned
+dnf install -y tuned
+tuned-adm profile throughput-performance
+systemctl enable --now tuned
+
+# Disable transparent hugepages (required for some workloads)
+echo never > /sys/kernel/mm/transparent_hugepage/enabled
+echo never > /sys/kernel/mm/transparent_hugepage/defrag
+
+# Persist via rc.local or systemd service:
+cat > /etc/systemd/system/disable-thp.service << 'EOF'
+[Unit]
+Description=Disable Transparent Huge Pages
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/enabled'
+ExecStart=/bin/sh -c 'echo never > /sys/kernel/mm/transparent_hugepage/defrag'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl enable --now disable-thp
+
+40.3 CONTAINER RUNTIME TUNING
+--------------------------------
+# Configure containerd for performance
+# RKE2 manages containerd config, but you can add overrides:
+cat > /etc/rancher/rke2/config.yaml << 'EOF'
+# Add to existing config:
+container-runtime-endpoint: unix:///run/k3s/containerd/containerd.sock
+
+# Containerd snapshotter (overlayfs is default, fastest)
+# snapshotter: overlayfs
+EOF
+
+================================================================================
+FINAL CHECKLISTS
+================================================================================
+
+================================================================================
+PRODUCTION READINESS CHECKLIST
+================================================================================
+INFRASTRUCTURE
+[ ] All nodes meet minimum hardware specifications (Section 5)
+[ ] NVMe/SSD storage used for etcd data directory
+[ ] etcd disk benchmark passed (< 10ms fsync latency)
+[ ] Load balancer configured and tested with failover
+[ ] DNS records created and propagated
+[ ] NTP synchronized on all nodes (< 100ms drift)
+[ ] Private container registry available (for air-gap)
+
+SECURITY
+[ ] SELinux in Enforcing mode on all nodes
+[ ] Firewalld enabled with correct rules
+[ ] SSH hardened (key auth, no root login, strong ciphers)
+[ ] Audit logging enabled (auditd + Kubernetes audit)
+[ ] Secrets encrypted at rest (encryption-config.yaml)
+[ ] Encryption key stored securely (Vault/KMS)
+[ ] Kubernetes API anonymous-auth=false
+[ ] RBAC properly configured
+[ ] Network policies applied
+[ ] Pod Security Standards configured
+[ ] TLS certificates valid and trusted
+[ ] No default/example passwords in use
+
+OPERATIONS
+[ ] Monitoring stack operational (Prometheus + Grafana)
+[ ] Alerting configured and tested
+[ ] Logging stack operational
+[ ] Velero backup configured and tested restore
+[ ] etcd automatic snapshots configured
+[ ] DR procedure documented and tested
+[ ] Runbook reviewed by operations team
+[ ] Escalation path defined
+[ ] On-call rotation established
+
+================================================================================
+GO-LIVE CHECKLIST
+================================================================================
+[ ] Final backup taken (etcd + Velero)
+[ ] Maintenance window communicated to stakeholders
+[ ] Rollback procedure ready and tested
+[ ] All nodes in Ready state: kubectl get nodes
+[ ] All system pods running: kubectl get pods -A
+[ ] etcd cluster healthy: etcdctl endpoint health --cluster
+[ ] Rancher UI accessible and responsive
+[ ] TLS certificate valid in browser (no warnings)
+[ ] Authentication working (OIDC/LDAP)
+[ ] Sample workload deployed and tested
+[ ] Ingress routing verified
+[ ] Monitoring dashboards showing data
+[ ] Backup job completed successfully
+[ ] Change management record updated
+
+================================================================================
+POST-DEPLOYMENT VALIDATION CHECKLIST
+================================================================================
+[ ] Run cluster-health-check.sh
+[ ] Verify all Prometheus alerts are green (no firing alerts)
+[ ] Test application deployment end-to-end
+[ ] Verify PVC creation and binding works
+[ ] Test Velero backup and restore
+[ ] Verify audit logs are being generated
+[ ] Test node drain and uncordon procedure
+[ ] Verify certificate auto-renewal is configured
+[ ] Test LoadBalancer failover (if applicable)
+[ ] Document any deviations from runbook
+[ ] Performance baseline captured (CPU, memory, etcd metrics)
+
+================================================================================
+ONGOING MAINTENANCE CHECKLIST
+================================================================================
+
+DAILY
+[ ] Review cluster health (cluster-health-check.sh)
+[ ] Check for critical alerts
+[ ] Verify backup jobs completed
+
+WEEKLY
+[ ] Review security alerts (Falco)
+[ ] Check certificate expiry dates
+[ ] Review audit log anomalies
+[ ] Check for available updates
+
+MONTHLY
+[ ] Full DR drill
+[ ] RBAC audit
+[ ] Certificate rotation review
+[ ] Capacity planning review
+[ ] CIS benchmark scan
+[ ] Update runbook/documentation
+[ ] Review and revoke unused service accounts
+
+QUARTERLY
+[ ] Minor version upgrades (RKE2/Rancher)
+[ ] Rotate encryption keys
+[ ] Penetration testing / security assessment
+[ ] Disaster recovery full test
+
+ANNUALLY
+[ ] Major version upgrade planning
+[ ] Full infrastructure review
+[ ] License renewal verification
+[ ] Business continuity plan review
+
+================================================================================
+IMPORTANT NOTES AND COMMON PITFALLS
+================================================================================
+
+PITFALL 1: etcd on slow storage
+  SYMPTOM: "etcdserver: request timed out" errors, leader elections
+  SOLUTION: Use NVMe SSD. Run fio benchmark BEFORE installation.
+
+PITFALL 2: Clock drift between nodes
+  SYMPTOM: Certificate validation errors, etcd peer rejection
+  SOLUTION: Verify chrony sync on ALL nodes. Alert at > 100ms drift.
+
+PITFALL 3: Firewalld blocking pod-to-pod communication
+  SYMPTOM: Services unreachable within cluster
+  SOLUTION: Ensure masquerading is enabled. Check that VXLAN (8472/UDP) is allowed.
+
+PITFALL 4: SELinux denying container operations
+  SYMPTOM: Pods fail to start with "permission denied"
+  SOLUTION: Install rke2-selinux package BEFORE installing RKE2.
+
+PITFALL 5: Insuffficient inotify limits
+  SYMPTOM: "too many open files", monitoring agents crash
+  SOLUTION: Set fs.inotify.max_user_watches=1048576 in sysctl.
+
+PITFALL 6: etcd DB exceeds 8GB quota
+  SYMPTOM: API writes rejected with "etcdserver: mvcc: database space exceeded"
+  SOLUTION: Enable auto-compaction. Monitor DB size. Manual compact if needed.
+
+PITFALL 7: Joining nodes with wrong token
+  SYMPTOM: "token is already expired" or "failed to find peer"
+  SOLUTION: Token must be identical on ALL nodes. Use same config.yaml.
+
+PITFALL 8: Let's Encrypt rate limits
+  SYMPTOM: "too many certificates" error from ACME
+  SOLUTION: Use staging issuer for testing. Move to prod issuer only for final setup.
+
+PITFALL 9: NodePort conflicts with existing services
+  SYMPTOM: Service fails to start, port already in use
+  SOLUTION: Check for conflicting services on ports 30000-32767 before installation.
+
+PITFALL 10: Missing br_netfilter module at boot
+  SYMPTOM: NetworkPolicy not working, pods can't communicate across nodes
+  SOLUTION: Add to /etc/modules-load.d/rke2.conf for persistence across reboots.
+
+================================================================================
+DOCUMENT END
+Document Version: 2.0
+Guide maintained by: Infrastructure/DevOps Team
+Last Reviewed: 2026
+================================================================================

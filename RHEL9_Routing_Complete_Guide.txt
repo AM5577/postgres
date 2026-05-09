@@ -1,0 +1,2173 @@
+================================================================================
+           COMPLETE GUIDE TO ROUTING IN RHEL 9 (Red Hat Enterprise Linux 9)
+                        From Beginner to Advanced Level
+================================================================================
+
+TABLE OF CONTENTS
+=================
+0. END-TO-END EASY EXPLANATION (START HERE!)
+1. Fundamentals of Routing
+2. Routing Table Structure
+3. Practical Route Management
+4. Advanced Routing Concepts
+5. Troubleshooting Routing Issues
+6. Hands-on Labs
+7. Interview Questions & Answers
+8. Quick Reference Cheat Sheet
+
+
+================================================================================
+SECTION 0: END-TO-END EASY EXPLANATION (READ THIS FIRST!)
+================================================================================
+
+This section gives you a simple, plain-English walkthrough of EVERYTHING in 
+this guide — from what a route is, to how to set one up, to how to fix it 
+when it breaks. Read this first before diving into the technical details.
+
+--------------------------------------------------------------------------------
+PART A: WHAT IS ROUTING? (The Big Picture)
+--------------------------------------------------------------------------------
+
+Imagine you want to send a letter. You don't know every street in the country.
+You just hand the letter to your local post office. They forward it to the 
+regional hub. That hub forwards it to the right city. That city delivers it.
+
+ROUTING is exactly this — for data packets on a network.
+
+  Your PC doesn't need to know the ENTIRE internet.
+  It just needs to know: "Who should I hand this packet to next?"
+  That "who" is called the GATEWAY (or next hop).
+
+  The ROUTING TABLE is your PC's internal address book that says:
+  "To reach network X, send the packet to gateway Y via interface Z."
+
+--------------------------------------------------------------------------------
+PART B: THE JOURNEY OF A PACKET (Step-by-Step)
+--------------------------------------------------------------------------------
+
+SCENARIO: You are on 192.168.1.10 and you want to visit Google (8.8.8.8)
+
+STEP 1 — Your computer asks: "Is 8.8.8.8 on MY local network?"
+         Your network is 192.168.1.0/24 (addresses .1 to .254)
+         8.8.8.8 is NOT in that range.
+         Answer: NO — I need to send this to a router!
+
+STEP 2 — Your computer checks its ROUTING TABLE:
+         "I have a default route: send all unknown traffic to 192.168.1.1"
+         192.168.1.1 is your router (gateway).
+
+STEP 3 — Your computer uses ARP to find the router's MAC address.
+         (MAC address = physical hardware address on your local network)
+         It asks: "Hey, who has IP 192.168.1.1?" The router replies with its MAC.
+
+STEP 4 — Your computer packages the packet:
+         - Destination IP: 8.8.8.8  (stays the same all the way to Google)
+         - Destination MAC: router's MAC  (changes at every hop)
+         - Source IP: 192.168.1.10
+
+STEP 5 — Packet arrives at the router (192.168.1.1)
+         The router checks ITS routing table: "Where should 8.8.8.8 go?"
+         Router sends it to YOUR Internet Service Provider (ISP).
+
+STEP 6 — ISP forwards it toward Google. Google replies. Packet comes back.
+
+RESULT: You see Google's webpage!
+
+--------------------------------------------------------------------------------
+PART C: THE ROUTING TABLE — WHAT'S IN IT?
+--------------------------------------------------------------------------------
+
+Run this command to see your routing table:
+
+  ip route show
+
+Sample output:
+
+  default via 192.168.1.1 dev ens160 proto static metric 100
+  192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10
+
+Let's decode each line in plain English:
+
+LINE 1: default via 192.168.1.1 dev ens160 proto static metric 100
+  - "default"         = For ANY destination I don't have a specific rule for
+  - "via 192.168.1.1" = Send the packet to the router at 192.168.1.1
+  - "dev ens160"      = Use network card named ens160
+  - "metric 100"      = Priority (lower number = use this route first)
+
+LINE 2: 192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10
+  - "192.168.1.0/24"  = For addresses in MY local network (.0 to .255)
+  - "dev ens160"      = Go directly via ens160 (no gateway needed)
+  - "proto kernel"    = Linux added this automatically when you set your IP
+  - "src 192.168.1.10"= Use MY IP as the source address
+
+KEY INSIGHT:
+  - Local traffic (same subnet) = Goes directly. No gateway.
+  - Remote traffic (different subnet) = Goes through a gateway.
+
+--------------------------------------------------------------------------------
+PART D: TYPES OF ROUTES — SIMPLE EXPLANATIONS
+--------------------------------------------------------------------------------
+
+1. DEFAULT ROUTE
+   "If I don't know where to send it, send it HERE."
+   Example: default via 192.168.1.1
+   Think of it as: Your front door. All outgoing traffic exits here.
+
+2. NETWORK ROUTE
+   "For this specific RANGE of addresses, use this gateway."
+   Example: 10.0.0.0/8 via 192.168.1.254
+   Think of it as: A shortcut highway to a specific part of town.
+
+3. DIRECTLY CONNECTED ROUTE
+   "These addresses are RIGHT HERE on my network card. No gateway needed."
+   Example: 192.168.1.0/24 dev ens160 scope link
+   Think of it as: Your immediate neighborhood — you walk there directly.
+
+4. HOST ROUTE
+   "Route for ONE specific computer only."
+   Example: 192.168.1.50/32 via 192.168.1.100
+   Think of it as: A dedicated courier to one specific address.
+
+--------------------------------------------------------------------------------
+PART E: HOW TO SET UP ROUTING — PRACTICAL WALKTHROUGH
+--------------------------------------------------------------------------------
+
+GOAL: Set a static IP, add a default gateway, and add a route to another network.
+
+--- Step 1: Set a static IP address ---
+
+  nmcli connection modify ens160 ipv4.addresses 192.168.1.10/24
+  nmcli connection modify ens160 ipv4.method manual
+  nmcli connection up ens160
+
+  What this does: Tells your network card "Your address is 192.168.1.10"
+
+--- Step 2: Add a default gateway ---
+
+  nmcli connection modify ens160 ipv4.gateway 192.168.1.1
+  nmcli connection up ens160
+
+  What this does: Tells your system "For all unknown traffic, go to 192.168.1.1"
+
+--- Step 3: Add a static route to another network ---
+
+  nmcli connection modify ens160 +ipv4.routes "10.0.0.0/8 192.168.1.254"
+  nmcli connection up ens160
+
+  What this does: "To reach anything in the 10.x.x.x range, go via 192.168.1.254"
+
+--- Step 4: Verify everything ---
+
+  ip route show              # See all routes
+  ip route get 10.1.1.1     # Check which route would be used for 10.1.1.1
+  ping 192.168.1.1          # Test gateway is reachable
+  ping 8.8.8.8              # Test internet is reachable
+
+--------------------------------------------------------------------------------
+PART F: HOW LINUX PICKS A ROUTE (The Decision Logic)
+--------------------------------------------------------------------------------
+
+When a packet is going to 10.1.1.50 and the routing table has:
+
+  Route A: 10.0.0.0/8     via 192.168.1.254   metric 100
+  Route B: 10.1.0.0/16    via 192.168.1.250   metric 50
+  Route C: 10.1.1.0/24    via 192.168.1.240   metric 200
+
+RULE 1 — Most specific route wins (longest prefix /XX):
+  /8  = matches 16 million addresses (least specific)
+  /16 = matches 65,000 addresses
+  /24 = matches 256 addresses (MOST specific) <-- WINNER
+
+  Linux picks Route C (10.1.1.0/24) even though it has the WORST metric (200).
+  Specificity ALWAYS beats metric.
+
+RULE 2 — If two routes have the SAME prefix length, lower metric wins:
+  10.0.0.0/8 via .254 metric 100  <-- WINNER (lower metric)
+  10.0.0.0/8 via .253 metric 200
+
+SUMMARY: Most specific first. Then lowest metric.
+
+--------------------------------------------------------------------------------
+PART G: ROUTE METRICS — PRIORITY AND FAILOVER
+--------------------------------------------------------------------------------
+
+Metrics are numbers that rank route priority. Lower = better.
+
+USE CASE 1: Two paths to same network, use one as primary:
+
+  ip route add default via 192.168.1.1 dev ens160 metric 100  <-- Primary
+  ip route add default via 192.168.1.2 dev ens192 metric 200  <-- Backup
+
+  Linux always uses metric 100 route first.
+  If that gateway goes down, Linux uses metric 200 as backup.
+  This is called FAILOVER ROUTING.
+
+USE CASE 2: Setting metric with nmcli (persistent):
+
+  nmcli connection modify ens160 +ipv4.routes "10.0.0.0/8 192.168.1.254 50"
+  #                                                                       ^^
+  #                                                              This is the metric
+
+--------------------------------------------------------------------------------
+PART H: MULTIPLE NETWORK CARDS (Multi-NIC Setup)
+--------------------------------------------------------------------------------
+
+A server may have multiple NICs for different purposes:
+
+  ens160 — Office LAN (192.168.1.0/24)
+  ens192 — Server DMZ (10.0.0.0/24)
+  ens224 — Management (172.16.0.0/24)
+
+The key rule: Traffic for each network should EXIT from the correct NIC.
+
+Setup:
+  nmcli connection modify ens192 +ipv4.routes "10.0.0.0/8 10.0.0.1"
+  nmcli connection modify ens224 +ipv4.routes "172.16.0.0/12 172.16.0.1"
+
+Test which interface is used:
+  ip route get 10.1.1.1       # Should show dev ens192
+  ip route get 172.16.5.5     # Should show dev ens224
+
+--------------------------------------------------------------------------------
+PART I: TROUBLESHOOTING — THE 5-STEP METHOD
+--------------------------------------------------------------------------------
+
+When something doesn't work, ALWAYS follow this order:
+
+STEP 1 — Can I ping MY OWN IP?
+  ping 192.168.1.10
+  If NO: Your network card isn't configured properly.
+  Fix: nmcli connection up ens160
+
+STEP 2 — Can I ping the GATEWAY?
+  ping 192.168.1.1
+  If NO: Check ARP, check physical cable, check if gateway is online.
+  Check: ip neigh show
+
+STEP 3 — Is there a ROUTE to my destination?
+  ip route get 10.1.1.1
+  If shows "Network is unreachable": You're missing a route.
+  Fix: ip route add 10.0.0.0/8 via 192.168.1.254
+
+STEP 4 — Is the RIGHT route being used?
+  ip route show | grep 10.0.0.0
+  ip route get 10.1.1.1
+  If wrong: Adjust metric or add more specific route.
+
+STEP 5 — Where does the packet STOP?
+  traceroute -n 8.8.8.8
+  Watch which hop shows "* * *" — that's where traffic is dying.
+
+QUICK CHECKLIST:
+  [ ] Interface is UP          → ip link show ens160
+  [ ] IP address is correct    → ip addr show ens160
+  [ ] Default gateway exists   → ip route show default
+  [ ] Can ping gateway         → ping 192.168.1.1
+  [ ] Route exists             → ip route get <destination>
+  [ ] Firewall not blocking    → firewall-cmd --state
+
+--------------------------------------------------------------------------------
+PART J: MAKING ROUTES SURVIVE REBOOTS
+--------------------------------------------------------------------------------
+
+IMPORTANT: "ip route add" commands are TEMPORARY. They vanish on reboot.
+
+To make routes PERMANENT, use nmcli:
+
+  # Add permanent route
+  nmcli connection modify ens160 +ipv4.routes "10.0.0.0/8 192.168.1.254"
+  nmcli connection up ens160
+
+  # Remove permanent route
+  nmcli connection modify ens160 -ipv4.routes "10.0.0.0/8 192.168.1.254"
+  nmcli connection up ens160
+
+  # View permanent routes configured for a connection
+  nmcli -f ipv4.routes connection show ens160
+
+Alternatively, edit the connection file:
+  /etc/NetworkManager/system-connections/ens160.nmconnection
+
+  [ipv4]
+  route1=10.0.0.0/8,192.168.1.254
+  route2=172.16.0.0/16,192.168.1.250
+
+Then reload: nmcli connection reload && nmcli connection up ens160
+
+--------------------------------------------------------------------------------
+PART K: ADVANCED — POLICY-BASED ROUTING IN PLAIN ENGLISH
+--------------------------------------------------------------------------------
+
+Normal routing asks: "Where is this packet GOING?"
+Policy-based routing asks: "Where did this packet COME FROM? And where is it going?"
+
+REAL-WORLD USE CASE:
+Your company has 2 ISPs (Internet providers).
+  - Department A (192.168.1.0/25)   → Always use ISP 1 (faster)
+  - Department B (192.168.1.128/25) → Always use ISP 2 (cheaper)
+
+To do this, you create separate routing tables:
+
+  1. Create tables named "isp1" and "isp2"
+     Edit /etc/iproute2/rt_tables and add:
+       100 isp1
+       101 isp2
+
+  2. Add routes to each table:
+     ip route add default via 203.0.113.9 table isp1
+     ip route add default via 198.51.100.9 table isp2
+
+  3. Add RULES to direct traffic to the right table:
+     ip rule add from 192.168.1.0/25 table isp1
+     ip rule add from 192.168.1.128/25 table isp2
+
+  4. Test:
+     ip route get 8.8.8.8 from 192.168.1.50
+     → Should show ISP1 gateway
+
+     ip route get 8.8.8.8 from 192.168.1.200
+     → Should show ISP2 gateway
+
+--------------------------------------------------------------------------------
+PART L: QUICK COMMAND CHEATSHEET (End-to-End Flow)
+--------------------------------------------------------------------------------
+
+# SEE what routes exist
+ip route show
+
+# CHECK which route would be used for a specific destination
+ip route get 8.8.8.8
+
+# ADD a temporary route (gone after reboot)
+ip route add 10.0.0.0/8 via 192.168.1.254 dev ens160
+
+# ADD a permanent route (survives reboot)
+nmcli connection modify ens160 +ipv4.routes "10.0.0.0/8 192.168.1.254"
+nmcli connection up ens160
+
+# DELETE a temporary route
+ip route del 10.0.0.0/8
+
+# DELETE a permanent route
+nmcli connection modify ens160 -ipv4.routes "10.0.0.0/8 192.168.1.254"
+nmcli connection up ens160
+
+# SET default gateway (permanent)
+nmcli connection modify ens160 ipv4.gateway 192.168.1.1
+nmcli connection up ens160
+
+# MONITOR route changes in real-time
+ip monitor route
+
+# TRACE where packets go
+traceroute -n 8.8.8.8
+
+# CAPTURE packets on an interface
+tcpdump -i ens160 icmp -n
+
+# ENABLE IP forwarding (make this system act as a router)
+sysctl -w net.ipv4.ip_forward=1
+echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.d/99-ip-forward.conf
+
+================================================================================
+  END OF SECTION 0 — You now have a complete mental model of routing!
+  Continue reading below for deeper technical details and labs.
+================================================================================
+
+
+================================================================================
+SECTION 1: FUNDAMENTALS OF ROUTING
+================================================================================
+
+1.1 WHAT IS A ROUTE?
+--------------------
+
+A ROUTE is a path that network traffic takes from a source to a destination.
+Think of it like a road map for data packets.
+
+Simple Analogy:
+  Route = Directions to get from Point A to Point B
+
+Example:
+  "To reach network 192.168.1.0/24, send packets through gateway 10.0.0.1"
+
+
+1.2 HOW PACKET ROUTING WORKS
+----------------------------
+
+ASCII Diagram - Basic Routing Flow:
+
+   +-------------+
+   |  Your PC    | IP: 192.168.1.10
+   |             | Gateway: 192.168.1.1
+   +------+------+
+          |
+          | Step 1: Check if destination is local
+          |
+          v
+   +------------------------------------+
+   |  Routing Decision Process          |
+   |                                    |
+   |  Destination: 8.8.8.8              |
+   |                                    |
+   |  Is 8.8.8.8 in 192.168.1.0/24?     |
+   |  NO --> Check routing table        |
+   +------+-----------------------------+
+          |
+          | Step 2: Use default route
+          |
+          v
+   +-------------+
+   |  Gateway    | IP: 192.168.1.1
+   |  (Router)   |
+   +------+------+
+          |
+          | Step 3: Forward to Internet
+          |
+          v
+   +-------------+
+   |  Internet   | 8.8.8.8
+   +-------------+
+
+
+1.3 DETAILED PACKET FLOW
+------------------------
+
+Step-by-Step: Packet from 192.168.1.10 to 8.8.8.8
+
+STEP 1: SOURCE HOST CHECKS
+---------------------------
+Host: 192.168.1.10/24
+Question: "Is 8.8.8.8 on my local network?"
+
+Calculation:
+  My Network: 192.168.1.0/24 (192.168.1.0 - 192.168.1.255)
+  Destination: 8.8.8.8
+  Result: NO, not local --> Need a router!
+
+
+STEP 2: CHECK ROUTING TABLE
+----------------------------
+[root@rhel9 ~]# ip route show
+default via 192.168.1.1 dev ens160
+192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10
+
+Match found: default via 192.168.1.1
+Action: Send packet to 192.168.1.1
+
+
+STEP 3: ARP RESOLUTION
+----------------------
+Question: "What is the MAC address of 192.168.1.1?"
+Check ARP cache or send ARP request
+
+[root@rhel9 ~]# ip neigh show
+192.168.1.1 dev ens160 lladdr 00:0c:29:3a:2b:1c REACHABLE
+
+
+STEP 4: ENCAPSULATION
+---------------------
+Layer 3 (IP):
+  Source IP: 192.168.1.10
+  Dest IP: 8.8.8.8
+
+Layer 2 (Ethernet):
+  Source MAC: [Your PC MAC]
+  Dest MAC: 00:0c:29:3a:2b:1c (Router's MAC)
+  
+NOTE: Dest IP stays 8.8.8.8, but Dest MAC is router's MAC!
+
+
+STEP 5: ROUTER FORWARDS
+-----------------------
+Router receives packet, decrements TTL, checks its routing table,
+and forwards toward 8.8.8.8
+
+
+================================================================================
+SECTION 2: ROUTING TABLE STRUCTURE
+================================================================================
+
+2.1 VIEWING THE ROUTING TABLE
+------------------------------
+
+# Method 1: Using ip route (Modern RHEL 9 way)
+[root@rhel9 ~]# ip route show
+
+# Method 2: Using ip route with more detail
+[root@rhel9 ~]# ip route show table all
+
+# Method 3: NetworkManager CLI
+[root@rhel9 ~]# nmcli device show ens160 | grep ROUTE
+
+# Legacy method (still works but deprecated)
+[root@rhel9 ~]# route -n
+
+
+2.2 SAMPLE ROUTING TABLE OUTPUT
+--------------------------------
+
+[root@rhel9 ~]# ip route show
+default via 192.168.1.1 dev ens160 proto static metric 100
+10.0.0.0/8 via 192.168.1.254 dev ens160 proto static metric 100
+172.16.0.0/16 dev ens224 proto kernel scope link src 172.16.10.5 metric 101
+192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10 metric 100
+192.168.100.0/24 via 192.168.1.200 dev ens160 proto static metric 100
+
+
+2.3 UNDERSTANDING EACH FIELD
+-----------------------------
+
+FORMAT:
+DESTINATION via GATEWAY dev INTERFACE [proto PROTOCOL] [scope SCOPE] [src SOURCE] [metric METRIC]
+
+Example Breakdown:
+192.168.100.0/24 via 192.168.1.200 dev ens160 proto static metric 100
+|                |                 |          |            |
+|                |                 |          |            +- Preference (lower=better)
+|                |                 |          +- How route was created
+|                |                 +- Outgoing interface
+|                +- Next hop router IP
++- Destination network
+
+
+Field Explanations:
++--------------+-------------------------------------------+
+| Field        | Meaning                                   |
++--------------+-------------------------------------------+
+| default      | 0.0.0.0/0 - matches everything            |
+| via          | Next hop gateway IP                       |
+| dev          | Network interface to use                  |
+| proto        | kernel, static, dhcp, etc.                |
+| scope        | link (local), global (routable)           |
+| src          | Preferred source IP for this route        |
+| metric       | Route priority (lower = higher priority)  |
++--------------+-------------------------------------------+
+
+
+2.4 ROUTE TYPES EXPLAINED
+--------------------------
+
++-----------------------------------------------------------+
+|                    ROUTE TYPES                            |
++-----------------------------------------------------------+
+
+1. DEFAULT ROUTE (Gateway of Last Resort)
+   ----------------------------------------
+   default via 192.168.1.1 dev ens160
+   
+   Meaning: "If no specific route matches, send here"
+   Matches: 0.0.0.0/0 (everything)
+   Use: Internet access
+
+
+2. NETWORK ROUTE (Specific Network)
+   -----------------------------------
+   10.0.0.0/8 via 192.168.1.254 dev ens160
+   
+   Meaning: "For 10.x.x.x addresses, use this gateway"
+   Matches: 10.0.0.0 - 10.255.255.255
+   Use: Reach specific remote network
+
+
+3. DIRECTLY CONNECTED ROUTE
+   ---------------------------
+   192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10
+   
+   Meaning: "This network is directly attached to my interface"
+   No Gateway: Traffic sent directly via ARP
+   Created: Automatically when you assign IP
+
+
+4. HOST ROUTE (Single IP)
+   ------------------------
+   192.168.1.50/32 via 192.168.1.100 dev ens160
+   
+   Meaning: "Route for one specific host"
+   Matches: Only 192.168.1.50
+   Use: Special routing for specific server
+
+
+================================================================================
+SECTION 3: PRACTICAL ROUTE MANAGEMENT
+================================================================================
+
+3.1 WORKING WITH DEFAULT GATEWAY
+---------------------------------
+
+===============================================================
+VIEWING DEFAULT GATEWAY
+===============================================================
+
+# Method 1: Show only default route
+[root@rhel9 ~]# ip route show default
+default via 192.168.1.1 dev ens160 proto static metric 100
+
+# Method 2: Show gateway for specific interface
+[root@rhel9 ~]# nmcli -f IP4.GATEWAY device show ens160
+IP4.GATEWAY:                            192.168.1.1
+
+# Method 3: Show with routing table
+[root@rhel9 ~]# ip route | grep default
+default via 192.168.1.1 dev ens160 proto static metric 100
+
+
+===============================================================
+ADDING DEFAULT GATEWAY (Temporary)
+===============================================================
+
+[root@rhel9 ~]# ip route add default via 192.168.1.1 dev ens160
+
+# Verify
+[root@rhel9 ~]# ip route show default
+default via 192.168.1.1 dev ens160
+
+
+===============================================================
+DELETING DEFAULT GATEWAY
+===============================================================
+
+[root@rhel9 ~]# ip route del default via 192.168.1.1
+
+# Or delete all default routes
+[root@rhel9 ~]# ip route del default
+
+
+===============================================================
+ADDING DEFAULT GATEWAY (Persistent - RHEL 9 Way)
+===============================================================
+
+# Method 1: Using nmcli (RECOMMENDED)
+[root@rhel9 ~]# nmcli connection modify ens160 ipv4.gateway 192.168.1.1
+[root@rhel9 ~]# nmcli connection up ens160
+
+# Method 2: Using nmcli interactive
+[root@rhel9 ~]# nmcli connection edit ens160
+nmcli> set ipv4.gateway 192.168.1.1
+nmcli> save
+nmcli> quit
+
+# Verify persistence
+[root@rhel9 ~]# nmcli -f ipv4.gateway connection show ens160
+ipv4.gateway:                           192.168.1.1
+
+
+3.2 STATIC ROUTES MANAGEMENT
+-----------------------------
+
+===============================================================
+ADDING STATIC ROUTES - TEMPORARY (Lost after reboot)
+===============================================================
+
+# Syntax:
+# ip route add <NETWORK>/<PREFIX> via <GATEWAY> dev <INTERFACE> [metric <VALUE>]
+
+# Example 1: Route to 10.0.0.0/8 network
+[root@rhel9 ~]# ip route add 10.0.0.0/8 via 192.168.1.254 dev ens160
+
+# Example 2: Route with metric
+[root@rhel9 ~]# ip route add 172.16.0.0/16 via 192.168.1.250 dev ens160 metric 50
+
+# Example 3: Host route (single IP)
+[root@rhel9 ~]# ip route add 192.168.100.50/32 via 192.168.1.200 dev ens160
+
+# Example 4: Direct route (no gateway)
+[root@rhel9 ~]# ip route add 192.168.200.0/24 dev ens224
+
+# Verify
+[root@rhel9 ~]# ip route show
+default via 192.168.1.1 dev ens160 proto static metric 100
+10.0.0.0/8 via 192.168.1.254 dev ens160
+172.16.0.0/16 via 192.168.1.250 dev ens160 metric 50
+192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10
+192.168.100.50 via 192.168.1.200 dev ens160
+192.168.200.0/24 dev ens224 scope link
+
+
+===============================================================
+DELETING STATIC ROUTES
+===============================================================
+
+# Delete specific route
+[root@rhel9 ~]# ip route del 10.0.0.0/8 via 192.168.1.254
+
+# Delete by destination only
+[root@rhel9 ~]# ip route del 172.16.0.0/16
+
+# Verify deletion
+[root@rhel9 ~]# ip route show | grep 10.0.0.0
+(no output = route deleted)
+
+
+===============================================================
+PERSISTENT STATIC ROUTES IN RHEL 9 (Multiple Methods)
+===============================================================
+
+-------------------------------------------------------------
+METHOD 1: Using nmcli (RECOMMENDED for RHEL 9)
+-------------------------------------------------------------
+
+# Add single route
+[root@rhel9 ~]# nmcli connection modify ens160 +ipv4.routes "10.0.0.0/8 192.168.1.254"
+
+# Add multiple routes
+[root@rhel9 ~]# nmcli connection modify ens160 +ipv4.routes "172.16.0.0/16 192.168.1.250"
+[root@rhel9 ~]# nmcli connection modify ens160 +ipv4.routes "192.168.100.0/24 192.168.1.200"
+
+# Add route with metric
+[root@rhel9 ~]# nmcli connection modify ens160 +ipv4.routes "10.20.0.0/16 192.168.1.240 100"
+
+# Apply changes
+[root@rhel9 ~]# nmcli connection up ens160
+
+# View configured routes
+[root@rhel9 ~]# nmcli -f ipv4.routes connection show ens160
+ipv4.routes:                            { ip = 10.0.0.0/8, nh = 192.168.1.254 }
+                                        { ip = 172.16.0.0/16, nh = 192.168.1.250 }
+                                        { ip = 192.168.100.0/24, nh = 192.168.1.200 }
+
+# Remove a specific route
+[root@rhel9 ~]# nmcli connection modify ens160 -ipv4.routes "10.0.0.0/8 192.168.1.254"
+
+# Remove ALL routes
+[root@rhel9 ~]# nmcli connection modify ens160 ipv4.routes ""
+
+
+-------------------------------------------------------------
+METHOD 2: Editing NetworkManager Connection Files
+-------------------------------------------------------------
+
+[root@rhel9 ~]# vi /etc/NetworkManager/system-connections/ens160.nmconnection
+
+# Add under [ipv4] section:
+[ipv4]
+method=manual
+address1=192.168.1.10/24
+gateway=192.168.1.1
+route1=10.0.0.0/8,192.168.1.254
+route2=172.16.0.0/16,192.168.1.250,100
+route3=192.168.100.0/24,192.168.1.200
+
+# Format: routeN=NETWORK/PREFIX,GATEWAY[,METRIC]
+
+# Set proper permissions
+[root@rhel9 ~]# chmod 600 /etc/NetworkManager/system-connections/ens160.nmconnection
+
+# Reload NetworkManager
+[root@rhel9 ~]# nmcli connection reload
+[root@rhel9 ~]# nmcli connection up ens160
+
+
+-------------------------------------------------------------
+METHOD 3: Using route-<interface> file (Legacy but works)
+-------------------------------------------------------------
+
+[root@rhel9 ~]# vi /etc/sysconfig/network-scripts/route-ens160
+
+# Add routes (one per line):
+10.0.0.0/8 via 192.168.1.254 dev ens160
+172.16.0.0/16 via 192.168.1.250 dev ens160 metric 100
+192.168.100.0/24 via 192.168.1.200 dev ens160
+
+# Restart NetworkManager
+[root@rhel9 ~]# systemctl restart NetworkManager
+
+# Or just the interface
+[root@rhel9 ~]# nmcli connection down ens160 && nmcli connection up ens160
+
+
+-------------------------------------------------------------
+METHOD 4: Using NetworkManager Dispatcher Scripts
+-------------------------------------------------------------
+
+[root@rhel9 ~]# vi /etc/NetworkManager/dispatcher.d/10-static-routes
+
+#!/bin/bash
+# Run when interface comes up
+
+if [ "$1" = "ens160" ] && [ "$2" = "up" ]; then
+    ip route add 10.0.0.0/8 via 192.168.1.254 dev ens160
+    ip route add 172.16.0.0/16 via 192.168.1.250 dev ens160
+fi
+
+# Make executable
+[root@rhel9 ~]# chmod +x /etc/NetworkManager/dispatcher.d/10-static-routes
+
+
+===============================================================
+VERIFICATION AND TESTING
+===============================================================
+
+# Check if route is in table
+[root@rhel9 ~]# ip route show | grep 10.0.0.0
+10.0.0.0/8 via 192.168.1.254 dev ens160 proto static metric 100
+
+# Test connectivity through route
+[root@rhel9 ~]# ping -c 2 10.1.1.1
+PING 10.1.1.1 (10.1.1.1) 56(84) bytes of data.
+64 bytes from 10.1.1.1: icmp_seq=1 ttl=64 time=0.445 ms
+
+# Trace route path
+[root@rhel9 ~]# traceroute 10.1.1.1
+traceroute to 10.1.1.1 (10.1.1.1), 30 hops max, 60 byte packets
+ 1  192.168.1.254 (192.168.1.254)  0.321 ms  0.298 ms  0.276 ms
+ 2  10.1.1.1 (10.1.1.1)  0.445 ms  0.422 ms  0.401 ms
+
+# Check route lookup for specific destination
+[root@rhel9 ~]# ip route get 10.1.1.1
+10.1.1.1 via 192.168.1.254 dev ens160 src 192.168.1.10 uid 0
+    cache
+
+
+3.3 CIDR AND SUBNET MASKS DEEP DIVE
+------------------------------------
+
+===============================================================
+CIDR NOTATION EXPLAINED
+===============================================================
+
+CIDR = Classless Inter-Domain Routing
+Format: IP_ADDRESS/PREFIX_LENGTH
+
+Example: 192.168.1.0/24
+         |           |
+         |           +- Prefix length (number of network bits)
+         +- Network address
+
+
+===============================================================
+SUBNET MASK CONVERSION TABLE
+===============================================================
+
++--------+------------------+----------------+-------------+--------------+
+| CIDR   | Subnet Mask      | Wildcard       | # of IPs    | # Usable IPs |
++--------+------------------+----------------+-------------+--------------+
+| /32    | 255.255.255.255  | 0.0.0.0        | 1           | 1            |
+| /31    | 255.255.255.254  | 0.0.0.1        | 2           | 2*           |
+| /30    | 255.255.255.252  | 0.0.0.3        | 4           | 2            |
+| /29    | 255.255.255.248  | 0.0.0.7        | 8           | 6            |
+| /28    | 255.255.255.240  | 0.0.0.15       | 16          | 14           |
+| /27    | 255.255.255.224  | 0.0.0.31       | 32          | 30           |
+| /26    | 255.255.255.192  | 0.0.0.63       | 64          | 62           |
+| /25    | 255.255.255.128  | 0.0.0.127      | 128         | 126          |
+| /24    | 255.255.255.0    | 0.0.0.255      | 256         | 254          |
+| /23    | 255.255.254.0    | 0.0.1.255      | 512         | 510          |
+| /22    | 255.255.252.0    | 0.0.3.255      | 1,024       | 1,022        |
+| /21    | 255.255.248.0    | 0.0.7.255      | 2,048       | 2,046        |
+| /20    | 255.255.240.0    | 0.0.15.255     | 4,096       | 4,094        |
+| /16    | 255.255.0.0      | 0.0.255.255    | 65,536      | 65,534       |
+| /12    | 255.240.0.0      | 0.15.255.255   | 1,048,576   | 1,048,574    |
+| /8     | 255.0.0.0        | 0.255.255.255  | 16,777,216  | 16,777,214   |
++--------+------------------+----------------+-------------+--------------+
+
+* /31 is special - used for point-to-point links, no network/broadcast
+
+
+===============================================================
+BINARY BREAKDOWN EXAMPLE: 192.168.1.0/24
+===============================================================
+
+IP Address: 192.168.1.0/24
+
+Binary Representation:
++--------+--------+--------+--------+
+|   192  |   168  |    1   |    0   |
++--------+--------+--------+--------+
+|11000000|10101000|00000001|00000000|
++--------+--------+--------+--------+
+ \________________  _______________/
+                  \/
+        Network Bits (24 bits)
+                                 \___/
+                              Host Bits (8 bits)
+
+Subnet Mask /24 = 255.255.255.0
+Binary: 11111111.11111111.11111111.00000000
+        +------  24 ones  ------++- 8 zeros -+
+
+Network Address: 192.168.1.0    (all host bits = 0)
+Broadcast Address: 192.168.1.255 (all host bits = 1)
+First Usable IP: 192.168.1.1
+Last Usable IP: 192.168.1.254
+Total Usable IPs: 254
+
+
+===============================================================
+PRACTICAL CIDR EXAMPLES
+===============================================================
+
+# Example 1: /30 Network (Point-to-Point Link)
+Network: 10.0.0.0/30
+
+10.0.0.0    - Network address
+10.0.0.1    - First usable (Router A)
+10.0.0.2    - Last usable (Router B)
+10.0.0.3    - Broadcast address
+
+Route command:
+[root@rhel9 ~]# ip route add 10.0.0.0/30 via 192.168.1.254
+
+
+# Example 2: /16 Network (Large Network)
+Network: 172.16.0.0/16
+
+172.16.0.0      - Network address
+172.16.0.1      - First usable
+172.16.255.254  - Last usable
+172.16.255.255  - Broadcast address
+Total IPs: 65,534 usable
+
+Route command:
+[root@rhel9 ~]# ip route add 172.16.0.0/16 via 192.168.1.250
+
+
+# Example 3: /27 Subnet
+Network: 192.168.1.64/27
+
+Binary breakdown:
+192.168.1.64 = 11000000.10101000.00000001.01000000
+Mask /27     = 11111111.11111111.11111111.11100000
+                                           +-5 bits-+
+                                           = 32 IPs
+
+192.168.1.64    - Network
+192.168.1.65    - First usable
+192.168.1.94    - Last usable
+192.168.1.95    - Broadcast
+
+
+===============================================================
+CIDR CALCULATIONS ON RHEL 9
+===============================================================
+
+# Install ipcalc utility
+[root@rhel9 ~]# dnf install -y ipcalc
+
+# Calculate network details
+[root@rhel9 ~]# ipcalc 192.168.1.0/24
+Address:   192.168.1.0          11000000.10101000.00000001. 00000000
+Netmask:   255.255.255.0 = 24   11111111.11111111.11111111. 00000000
+Wildcard:  0.0.0.255            00000000.00000000.00000000. 11111111
+=>
+Network:   192.168.1.0/24       11000000.10101000.00000001. 00000000
+HostMin:   192.168.1.1          11000000.10101000.00000001. 00000001
+HostMax:   192.168.1.254        11000000.10101000.00000001. 11111110
+Broadcast: 192.168.1.255        11000000.10101000.00000001. 11111111
+Hosts/Net: 254                   Class C, Private Internet
+
+# Check if IP is in subnet
+[root@rhel9 ~]# ipcalc -c 192.168.1.50/24
+192.168.1.50/24
+
+# Calculate network portion
+[root@rhel9 ~]# ipcalc -n 192.168.1.50/24
+NETWORK=192.168.1.0
+
+# Calculate broadcast
+[root@rhel9 ~]# ipcalc -b 192.168.1.50/24
+BROADCAST=192.168.1.255
+
+
+===============================================================
+SUPERNETTING AND SUMMARIZATION
+===============================================================
+
+# Combine multiple networks into one route
+# Instead of:
+10.0.0.0/24
+10.0.1.0/24
+10.0.2.0/24
+10.0.3.0/24
+
+# Use summary route:
+10.0.0.0/22  (covers 10.0.0.0 - 10.0.3.255)
+
+[root@rhel9 ~]# ip route add 10.0.0.0/22 via 192.168.1.254
+
+# This matches all four /24 networks with one route entry
+
+
+================================================================================
+SECTION 4: ADVANCED ROUTING CONCEPTS
+================================================================================
+
+4.1 ROUTE METRICS AND PRIORITY
+-------------------------------
+
+===============================================================
+UNDERSTANDING ROUTE METRICS
+===============================================================
+
+Metric = Route Priority (Lower number = Higher priority)
+
+When multiple routes match same destination, Linux uses:
+1. Most Specific Route (longest prefix match)
+2. Lowest Metric (if prefix length is same)
+
+
+===============================================================
+EXAMPLE: MULTIPLE DEFAULT ROUTES
+===============================================================
+
+# Add two default routes with different metrics
+[root@rhel9 ~]# ip route add default via 192.168.1.1 dev ens160 metric 100
+[root@rhel9 ~]# ip route add default via 192.168.1.2 dev ens192 metric 200
+
+# View routes
+[root@rhel9 ~]# ip route show
+default via 192.168.1.1 dev ens160 metric 100
+default via 192.168.1.2 dev ens192 metric 200
+
+# Traffic will use 192.168.1.1 (metric 100) as primary
+# If 192.168.1.1 fails, traffic uses 192.168.1.2 (metric 200)
+
+
+# Test which route is used
+[root@rhel9 ~]# ip route get 8.8.8.8
+8.8.8.8 via 192.168.1.1 dev ens160 src 192.168.1.10 uid 0
+    cache
+
+
+===============================================================
+ROUTE SELECTION ALGORITHM
+===============================================================
+
+ASCII Diagram of Route Selection:
++--------------------------------------------------+
+|           Packet destined for 10.1.1.1           |
++--------------------+-----------------------------+
+                     |
+                     v
++-----------------------------------------------------+
+|  Step 1: Find all matching routes                  |
+|  -------------------------------------------        |
+|  Route A: 10.0.0.0/8 via 192.168.1.254   check matches |
+|  Route B: 10.1.0.0/16 via 192.168.1.250  check matches |
+|  Route C: 10.1.1.0/24 via 192.168.1.240  check matches |
+|  Route D: 192.168.0.0/16                 X no match |
++--------------------+--------------------------------+
+                     |
+                     v
++-----------------------------------------------------+
+|  Step 2: Choose most specific (longest prefix)     |
+|  ------------------------------------------         |
+|  Route A: /8  (least specific)                     |
+|  Route B: /16                                       |
+|  Route C: /24 (most specific) <- WINNER            |
++--------------------+--------------------------------+
+                     |
+                     v
++-----------------------------------------------------+
+|  If multiple routes have same prefix length,       |
+|  choose lowest metric                              |
+|                                                     |
+|  Example:                                           |
+|  Route X: 10.1.1.0/24 via .240 metric 100 <- WINNER |
+|  Route Y: 10.1.1.0/24 via .241 metric 200          |
++-----------------------------------------------------+
+
+
+===============================================================
+PRACTICAL EXAMPLE: CONFIGURING METRICS
+===============================================================
+
+# Scenario: Two paths to same network, prefer one
+
+# Primary path (lower metric = higher priority)
+[root@rhel9 ~]# nmcli connection modify ens160 \
+  +ipv4.routes "10.0.0.0/8 192.168.1.254 50"
+
+# Backup path (higher metric = lower priority)
+[root@rhel9 ~]# nmcli connection modify ens192 \
+  +ipv4.routes "10.0.0.0/8 192.168.2.254 100"
+
+# Apply
+[root@rhel9 ~]# nmcli connection up ens160
+[root@rhel9 ~]# nmcli connection up ens192
+
+# Verify
+[root@rhel9 ~]# ip route show | grep 10.0.0.0
+10.0.0.0/8 via 192.168.1.254 dev ens160 metric 50
+10.0.0.0/8 via 192.168.2.254 dev ens192 metric 100
+
+# Test
+[root@rhel9 ~]# ip route get 10.1.1.1
+10.1.1.1 via 192.168.1.254 dev ens160 src 192.168.1.10 uid 0
+    cache
+
+# Primary path is used!
+
+
+4.2 MULTIPLE NETWORK INTERFACES
+--------------------------------
+
+===============================================================
+SCENARIO: Server with Multiple NICs
+===============================================================
+
+Topology:
++--------------------------+
+|     RHEL 9 Server        |
+|                          |
+|  ens160: 192.168.1.10/24 |---- LAN (Office Network)
+|          GW: 192.168.1.1 |
+|                          |
+|  ens192: 10.0.0.10/24    |---- DMZ (Server Network)
+|          GW: 10.0.0.1    |
+|                          |
+|  ens224: 172.16.0.10/24  |---- Management Network
+|          GW: 172.16.0.1  |
++--------------------------+
+
+
+===============================================================
+CONFIGURE MULTIPLE INTERFACES
+===============================================================
+
+# Configure ens160 (LAN)
+[root@rhel9 ~]# nmcli connection modify ens160 \
+  ipv4.addresses 192.168.1.10/24 \
+  ipv4.gateway 192.168.1.1 \
+  ipv4.method manual
+
+# Configure ens192 (DMZ)
+[root@rhel9 ~]# nmcli connection modify ens192 \
+  ipv4.addresses 10.0.0.10/24 \
+  ipv4.method manual
+
+# Configure ens224 (Management)
+[root@rhel9 ~]# nmcli connection modify ens224 \
+  ipv4.addresses 172.16.0.10/24 \
+  ipv4.method manual
+
+# Add specific routes
+# Route DMZ traffic through 10.0.0.1
+[root@rhel9 ~]# nmcli connection modify ens192 \
+  +ipv4.routes "10.0.0.0/8 10.0.0.1"
+
+# Route management traffic through 172.16.0.1
+[root@rhel9 ~]# nmcli connection modify ens224 \
+  +ipv4.routes "172.16.0.0/12 172.16.0.1"
+
+# Activate all
+[root@rhel9 ~]# nmcli connection up ens160
+[root@rhel9 ~]# nmcli connection up ens192
+[root@rhel9 ~]# nmcli connection up ens224
+
+
+===============================================================
+VIEW ROUTING TABLE
+===============================================================
+
+[root@rhel9 ~]# ip route show
+default via 192.168.1.1 dev ens160 proto static metric 100
+10.0.0.0/8 via 10.0.0.1 dev ens192 proto static metric 101
+10.0.0.0/24 dev ens192 proto kernel scope link src 10.0.0.10 metric 101
+172.16.0.0/12 via 172.16.0.1 dev ens224 proto static metric 102
+172.16.0.0/24 dev ens224 proto kernel scope link src 172.16.0.10 metric 102
+192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10 metric 100
+
+
+===============================================================
+SOURCE IP SELECTION
+===============================================================
+
+# Test which source IP is used for different destinations
+
+# To Internet (via default route)
+[root@rhel9 ~]# ip route get 8.8.8.8
+8.8.8.8 via 192.168.1.1 dev ens160 src 192.168.1.10 uid 0
+                                       +-- Source IP
+
+# To DMZ network
+[root@rhel9 ~]# ip route get 10.1.1.1
+10.1.1.1 via 10.0.0.1 dev ens192 src 10.0.0.10 uid 0
+
+# To management network
+[root@rhel9 ~]# ip route get 172.16.5.5
+172.16.5.5 via 172.16.0.1 dev ens224 src 172.16.0.10 uid 0
+
+
+===============================================================
+FORCE SPECIFIC SOURCE IP
+===============================================================
+
+# Add route with preferred source
+[root@rhel9 ~]# ip route add 192.168.100.0/24 via 10.0.0.1 dev ens192 src 10.0.0.10
+
+# Test
+[root@rhel9 ~]# ip route get 192.168.100.50
+192.168.100.50 via 10.0.0.1 dev ens192 src 10.0.0.10 uid 0
+                                           +-- Forced source
+
+
+===============================================================
+ENABLE IP FORWARDING (For Router Functionality)
+===============================================================
+
+# Check current setting
+[root@rhel9 ~]# sysctl net.ipv4.ip_forward
+net.ipv4.ip_forward = 0
+
+# Enable temporarily
+[root@rhel9 ~]# sysctl -w net.ipv4.ip_forward=1
+
+# Enable permanently
+[root@rhel9 ~]# echo "net.ipv4.ip_forward = 1" >> /etc/sysctl.d/99-ip-forward.conf
+[root@rhel9 ~]# sysctl -p /etc/sysctl.d/99-ip-forward.conf
+
+# Verify
+[root@rhel9 ~]# cat /proc/sys/net/ipv4/ip_forward
+1
+
+
+4.3 POLICY-BASED ROUTING (Advanced)
+------------------------------------
+
+===============================================================
+POLICY-BASED ROUTING (PBR) - INTRODUCTION
+===============================================================
+
+What is PBR?
+- Route based on SOURCE IP, not just destination
+- Route based on packet marking
+- Different routing tables for different criteria
+
+Use Cases:
+- Multi-homed connections (multiple ISPs)
+- Route specific users through specific gateways
+- Load balancing
+- Traffic engineering
+
+
+===============================================================
+SCENARIO: Route different subnets through different ISPs
+===============================================================
+
+Topology:
++----------------------------------+
+|        RHEL 9 Router             |
+|                                  |
+|  ens160: 192.168.1.1/24 ---------+---- LAN (Office)
+|                                  |     Users: 192.168.1.0/24
+|  ens192: 203.0.113.10/30 --------+---- ISP 1 (GW: 203.0.113.9)
+|                                  |
+|  ens224: 198.51.100.10/30 -------+---- ISP 2 (GW: 198.51.100.9)
++----------------------------------+
+
+Goal:
+- 192.168.1.0/25 (192.168.1.1-126) --> ISP 1
+- 192.168.1.128/25 (192.168.1.128-254) --> ISP 2
+
+
+===============================================================
+STEP 1: Create Custom Routing Tables
+===============================================================
+
+# Edit routing table names
+[root@rhel9 ~]# vi /etc/iproute2/rt_tables
+
+# Add custom tables (at end of file):
+200 isp1
+201 isp2
+
+# File content:
+#
+# reserved values
+#
+255     local
+254     main
+253     default
+0       unspec
+#
+# local
+#
+200     isp1
+201     isp2
+
+
+===============================================================
+STEP 2: Configure Routes in Custom Tables
+===============================================================
+
+# ISP1 table - default route through ISP1
+[root@rhel9 ~]# ip route add default via 203.0.113.9 dev ens192 table isp1
+[root@rhel9 ~]# ip route add 192.168.1.0/24 dev ens160 table isp1
+
+# ISP2 table - default route through ISP2
+[root@rhel9 ~]# ip route add default via 198.51.100.9 dev ens224 table isp2
+[root@rhel9 ~]# ip route add 192.168.1.0/24 dev ens160 table isp2
+
+# View custom table
+[root@rhel9 ~]# ip route show table isp1
+default via 203.0.113.9 dev ens192
+192.168.1.0/24 dev ens160 scope link
+
+[root@rhel9 ~]# ip route show table isp2
+default via 198.51.100.9 dev ens224
+192.168.1.0/24 dev ens160 scope link
+
+
+===============================================================
+STEP 3: Create Policy Rules
+===============================================================
+
+# Traffic from 192.168.1.0/25 uses ISP1 table
+[root@rhel9 ~]# ip rule add from 192.168.1.0/25 table isp1 priority 100
+
+# Traffic from 192.168.1.128/25 uses ISP2 table
+[root@rhel9 ~]# ip rule add from 192.168.1.128/25 table isp2 priority 101
+
+# View policy rules
+[root@rhel9 ~]# ip rule show
+0:      from all lookup local
+100:    from 192.168.1.0/25 lookup isp1
+101:    from 192.168.1.128/25 lookup isp2
+32766:  from all lookup main
+32767:  from all lookup default
+
+
+===============================================================
+STEP 4: Test Policy Routing
+===============================================================
+
+# Simulate traffic from first subnet
+[root@rhel9 ~]# ip route get 8.8.8.8 from 192.168.1.50
+8.8.8.8 from 192.168.1.50 via 203.0.113.9 dev ens192 table isp1 uid 0
+
+# Simulate traffic from second subnet
+[root@rhel9 ~]# ip route get 8.8.8.8 from 192.168.1.200
+8.8.8.8 from 192.168.1.200 via 198.51.100.9 dev ens224 table isp2 uid 0
+
+# Perfect! Different subnets use different ISPs
+
+
+===============================================================
+STEP 5: Make PBR Persistent
+===============================================================
+
+# Create script for ISP1 routes and rules
+[root@rhel9 ~]# vi /etc/NetworkManager/dispatcher.d/10-isp1-pbr
+
+#!/bin/bash
+if [ "$2" = "up" ]; then
+    # Add routes to table
+    ip route add default via 203.0.113.9 dev ens192 table isp1
+    ip route add 192.168.1.0/24 dev ens160 table isp1
+    
+    # Add policy rule
+    ip rule add from 192.168.1.0/25 table isp1 priority 100
+fi
+
+if [ "$2" = "down" ]; then
+    # Clean up
+    ip route flush table isp1
+    ip rule del from 192.168.1.0/25 table isp1
+fi
+
+# Make executable
+[root@rhel9 ~]# chmod +x /etc/NetworkManager/dispatcher.d/10-isp1-pbr
+
+
+# Create script for ISP2
+[root@rhel9 ~]# vi /etc/NetworkManager/dispatcher.d/11-isp2-pbr
+
+#!/bin/bash
+if [ "$2" = "up" ]; then
+    ip route add default via 198.51.100.9 dev ens224 table isp2
+    ip route add 192.168.1.0/24 dev ens160 table isp2
+    ip rule add from 192.168.1.128/25 table isp2 priority 101
+fi
+
+if [ "$2" = "down" ]; then
+    ip route flush table isp2
+    ip rule del from 192.168.1.128/25 table isp2
+fi
+
+[root@rhel9 ~]# chmod +x /etc/NetworkManager/dispatcher.d/11-isp2-pbr
+
+
+===============================================================
+ADVANCED: Mark-Based Routing
+===============================================================
+
+# Use firewall marks with routing
+
+# Mark packets from specific source
+[root@rhel9 ~]# nft add rule ip filter forward ip saddr 192.168.1.0/25 meta mark set 1
+[root@rhel9 ~]# nft add rule ip filter forward ip saddr 192.168.1.128/25 meta mark set 2
+
+# Route based on mark
+[root@rhel9 ~]# ip rule add fwmark 1 table isp1 priority 200
+[root@rhel9 ~]# ip rule add fwmark 2 table isp2 priority 201
+
+# View rules
+[root@rhel9 ~]# ip rule show
+0:      from all lookup local
+100:    from 192.168.1.0/25 lookup isp1
+101:    from 192.168.1.128/25 lookup isp2
+200:    from all fwmark 0x1 lookup isp1
+201:    from all fwmark 0x2 lookup isp2
+32766:  from all lookup main
+32767:  from all lookup default
+
+
+===============================================================
+ROUTING CACHE AND FLUSHING
+===============================================================
+
+# Note: Linux kernel 3.6+ doesn't use routing cache
+# But you may need to flush connection tracking
+
+# Flush routing cache (for older kernels)
+[root@rhel9 ~]# ip route flush cache
+
+# Flush connection tracking (affects active connections!)
+[root@rhel9 ~]# conntrack -F
+
+
+4.4 DYNAMIC ROUTING BASICS
+---------------------------
+
+===============================================================
+DYNAMIC ROUTING PROTOCOLS - OVERVIEW
+===============================================================
+
+Static Routing vs Dynamic Routing:
++-----------------+--------------------------------------+
+| Static Routing  | Manual configuration                 |
+|                 | No automatic updates                 |
+|                 | Good for small networks              |
+|                 | Complete control                     |
++-----------------+--------------------------------------+
+| Dynamic Routing | Automatic route discovery            |
+|                 | Adapts to topology changes           |
+|                 | Good for large networks              |
+|                 | Requires routing protocol            |
++-----------------+--------------------------------------+
+
+
+Common Dynamic Routing Protocols:
++----------+----------+---------------------------------+
+| Protocol | Type     | Description                     |
++----------+----------+---------------------------------+
+| RIP      | Distance | Old, simple, max 15 hops        |
+| OSPF     | Link-St  | Enterprise standard, fast       |
+| BGP      | Path Vec | Internet routing, ISPs          |
+| EIGRP    | Hybrid   | Cisco proprietary               |
++----------+----------+---------------------------------+
+
+
+===============================================================
+INSTALL FRRouting (Open Source Routing Suite)
+===============================================================
+
+# FRRouting supports OSPF, BGP, RIP, IS-IS, etc.
+
+# Add FRR repository
+[root@rhel9 ~]# curl -O https://rpm.frrouting.org/repo/frr-9-repo-1-0.el9.noarch.rpm
+[root@rhel9 ~]# dnf install -y ./frr-9-repo-1-0.el9.noarch.rpm
+
+# Install FRRouting
+[root@rhel9 ~]# dnf install -y frr
+
+# Enable required daemons
+[root@rhel9 ~]# vi /etc/frr/daemons
+
+# Change these lines:
+ospfd=yes
+bgpd=yes
+zebra=yes
+
+# Start FRR
+[root@rhel9 ~]# systemctl enable --now frr
+[root@rhel9 ~]# systemctl status frr
+
+
+===============================================================
+CONFIGURE OSPF (Example)
+===============================================================
+
+# Enter FRR shell
+[root@rhel9 ~]# vtysh
+
+# Configure OSPF
+router# configure terminal
+router(config)# router ospf
+router(config-router)# network 192.168.1.0/24 area 0
+router(config-router)# network 10.0.0.0/24 area 0
+router(config-router)# exit
+router(config)# exit
+router# write memory
+router# exit
+
+# View OSPF neighbors
+[root@rhel9 ~]# vtysh -c "show ip ospf neighbor"
+
+# View OSPF routes
+[root@rhel9 ~]# vtysh -c "show ip ospf route"
+
+# OSPF routes are automatically added to kernel routing table
+[root@rhel9 ~]# ip route show
+...
+10.1.0.0/24 via 192.168.1.254 dev ens160 proto ospf metric 20
+10.2.0.0/24 via 192.168.1.253 dev ens160 proto ospf metric 30
+
+
+===============================================================
+UNDERSTANDING DYNAMIC ROUTE UPDATES
+===============================================================
+
+Scenario: Network failure
+
+Before failure:
+[root@rhel9 ~]# ip route show | grep 10.1.0.0
+10.1.0.0/24 via 192.168.1.254 dev ens160 proto ospf metric 20
+
+Network link fails...
+
+After OSPF convergence (automatic):
+[root@rhel9 ~]# ip route show | grep 10.1.0.0
+10.1.0.0/24 via 192.168.1.253 dev ens160 proto ospf metric 40
+
+Route automatically updated to use backup path!
+
+
+===============================================================
+MONITOR DYNAMIC ROUTING
+===============================================================
+
+# Watch routing table changes in real-time
+[root@rhel9 ~]# ip monitor route
+10.1.0.0/24 via 192.168.1.254 dev ens160 proto ospf metric 20
+Deleted 10.1.0.0/24 via 192.168.1.254 dev ens160 proto ospf metric 20
+10.1.0.0/24 via 192.168.1.253 dev ens160 proto ospf metric 40
+
+# View FRR logs
+[root@rhel9 ~]# tail -f /var/log/frr/frr.log
+
+
+================================================================================
+SECTION 5: TROUBLESHOOTING ROUTING ISSUES
+================================================================================
+
+5.1 COMPREHENSIVE TROUBLESHOOTING METHODOLOGY
+----------------------------------------------
+
+===============================================================
+ROUTING TROUBLESHOOTING FLOWCHART
+===============================================================
+
+Problem: Cannot reach destination
+
++-------------------------------------+
+|  Step 1: Verify Local Network       |
+|  Can you ping your own IP?          |
++-----------+--------------------------+
+            |
+            +- NO  --> Interface/IP config issue
+            |
+            +- YES --> Continue
+            v
++-------------------------------------+
+|  Step 2: Verify Gateway              |
+|  Can you ping default gateway?      |
++-----------+--------------------------+
+            |
+            +- NO  --> Check ARP, gateway config
+            |
+            +- YES --> Continue
+            v
++-------------------------------------+
+|  Step 3: Check Routing Table         |
+|  Is there a route to destination?   |
++-----------+--------------------------+
+            |
+            +- NO  --> Add route
+            |
+            +- YES --> Continue
+            v
++-------------------------------------+
+|  Step 4: Test Route Selection        |
+|  Correct route being used?           |
++-----------+--------------------------+
+            |
+            +- NO  --> Check metrics, more specific routes
+            |
+            +- YES --> Continue
+            v
++-------------------------------------+
+|  Step 5: Trace Route Path           |
+|  Where does traffic stop?            |
++-----------+--------------------------+
+            |
+            +- Identifies problem hop
+
+
+===============================================================
+STEP 1: VERIFY LOCAL CONNECTIVITY
+===============================================================
+
+# Check interface status
+[root@rhel9 ~]# ip link show ens160
+2: ens160: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DEFAULT group default qlen 1000
+    link/ether 00:0c:29:3a:2b:1c brd ff:ff:ff:ff:ff:ff
+#          +- Should say UP
+
+# Check IP address
+[root@rhel9 ~]# ip addr show ens160
+2: ens160: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP group default qlen 1000
+    link/ether 00:0c:29:3a:2b:1c brd ff:ff:ff:ff:ff:ff
+    inet 192.168.1.10/24 brd 192.168.1.255 scope global noprefixroute ens160
+#        +- IP should be correct
+
+# Ping your own IP
+[root@rhel9 ~]# ping -c 2 192.168.1.10
+PING 192.168.1.10 (192.168.1.10) 56(84) bytes of data.
+64 bytes from 192.168.1.10: icmp_seq=1 ttl=64 time=0.046 ms
+64 bytes from 192.168.1.10: icmp_seq=2 ttl=64 time=0.052 ms
+
+# If this fails, check:
+[root@rhel9 ~]# nmcli device status
+DEVICE  TYPE      STATE         CONNECTION
+ens160  ethernet  connected     ens160
+#                 +- Should be "connected"
+
+[root@rhel9 ~]# nmcli connection show ens160 | grep ipv4
+ipv4.method:                            manual
+ipv4.addresses:                         192.168.1.10/24
+ipv4.gateway:                           192.168.1.1
+
+
+===============================================================
+STEP 2: VERIFY GATEWAY CONNECTIVITY
+===============================================================
+
+# Check default gateway
+[root@rhel9 ~]# ip route show default
+default via 192.168.1.1 dev ens160 proto static metric 100
+
+# Ping gateway
+[root@rhel9 ~]# ping -c 2 192.168.1.1
+PING 192.168.1.1 (192.168.1.1) 56(84) bytes of data.
+64 bytes from 192.168.1.1: icmp_seq=1 ttl=64 time=0.445 ms
+64 bytes from 192.168.1.1: icmp_seq=2 ttl=64 time=0.422 ms
+
+# If ping fails, check ARP
+[root@rhel9 ~]# ip neigh show
+192.168.1.1 dev ens160 FAILED
+#                      +- Problem!
+
+# Try to ARP manually
+[root@rhel9 ~]# arping -I ens160 192.168.1.1
+ARPING 192.168.1.1 from 192.168.1.10 ens160
+^C
+--- 192.168.1.1 statistics ---
+3 packets transmitted, 0 packets received, 100% unanswered
+
+# Gateway not responding - physical issue or gateway down
+
+
+===============================================================
+STEP 3: CHECK ROUTING TABLE
+===============================================================
+
+# Show full routing table
+[root@rhel9 ~]# ip route show
+default via 192.168.1.1 dev ens160 proto static metric 100
+192.168.1.0/24 dev ens160 proto kernel scope link src 192.168.1.10 metric 100
+
+# Check route to specific destination
+[root@rhel9 ~]# ip route get 10.1.1.1
+RTNETLINK answers: Network is unreachable
+# +- No route!
+
+# Add missing route
+[root@rhel9 ~]# ip route add 10.0.0.0/8 via 192.168.1.254 dev ens160
+
+# Test again
+[root@rhel9 ~]# ip route get 10.1.1.1
+10.1.1.1 via 192.168.1.254 dev ens160 src 192.168.1.10 uid 0
+    cache
+
+
+===============================================================
+STEP 4: VERIFY ROUTE SELECTION
+===============================================================
+
+# Problem: Traffic not using expected route
+
+# Current routes to 10.0.0.0/8:
+[root@rhel9 ~]# ip route show | grep "10.0.0.0/8"
+10.0.0.0/8 via 192.168.1.254 dev ens160 metric 100
+10.0.0.0/8 via 192.168.1.250 dev ens192 metric 50
+
+# Check which one is being used
+[root@rhel9 ~]# ip route get 10.1.1.1
+10.1.1.1 via 192.168.1.250 dev ens192 src 192.168.2.10 uid 0
+#        +- Using lower metric (50 < 100)
+
+# If you want to use the other route, adjust metric
+[root@rhel9 ~]# ip route change 10.0.0.0/8 via 192.168.1.254 dev ens160 metric 40
+
+# Or check for more specific routes overriding
+[root@rhel9 ~]# ip route show | grep 10.
+10.0.0.0/8 via 192.168.1.254 dev ens160 metric 100
+10.1.0.0/16 via 192.168.1.240 dev ens160 metric 50  <- More specific!
+
+[root@rhel9 ~]# ip route get 10.1.1.1
+10.1.1.1 via 192.168.1.240 dev ens160 src 192.168.1.10 uid 0
+#        +- Uses /16 route because it's more specific
+
+
+===============================================================
+STEP 5: TRACE ROUTE PATH
+===============================================================
+
+# Install traceroute if needed
+[root@rhel9 ~]# dnf install -y traceroute
+
+# Trace path to destination
+[root@rhel9 ~]# traceroute 8.8.8.8
+traceroute to 8.8.8.8 (8.8.8.8), 30 hops max, 60 byte packets
+ 1  192.168.1.1 (192.168.1.1)  0.445 ms  0.422 ms  0.401 ms
+ 2  10.0.0.1 (10.0.0.1)  1.234 ms  1.210 ms  1.189 ms
+ 3  * * *  <- Timeout! Problem here
+ 4  * * *
+ 5  * * *
+
+# Problem at hop 3 - contact network admin for 10.0.0.1
+
+# Use MTR for continuous monitoring
+[root@rhel9 ~]# dnf install -y mtr
+[root@rhel9 ~]# mtr 8.8.8.8
+                             My traceroute  [v0.94]
+rhel9 (192.168.1.10)                                   
+Host                          Loss%   Snt   Last   Avg
+1. 192.168.1.1                 0.0%    10    0.4   0.5
+2. 10.0.0.1                    0.0%    10    1.2   1.3
+3. 203.0.113.1               100.0%    10    0.0   0.0  <- Problem!
+
+
+===============================================================
+ADVANCED: PACKET CAPTURE
+===============================================================
+
+# Capture ICMP packets on specific interface
+[root@rhel9 ~]# tcpdump -i ens160 icmp -n
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on ens160, link-type EN10MB (Ethernet), capture size 262144 bytes
+
+# In another terminal, ping
+[root@rhel9 ~]# ping -c 1 8.8.8.8
+
+# tcpdump output:
+15:23:45.123456 IP 192.168.1.10 > 8.8.8.8: ICMP echo request, id 12345, seq 1
+15:23:45.234567 IP 8.8.8.8 > 192.168.1.10: ICMP echo reply, id 12345, seq 1
+
+# Capture to file for analysis
+[root@rhel9 ~]# tcpdump -i ens160 -w /tmp/capture.pcap
+
+# Analyze with tcpdump
+[root@rhel9 ~]# tcpdump -r /tmp/capture.pcap -n | less
+
+# Or transfer to workstation and open in Wireshark
+
+
+5.2 COMMON ROUTING PROBLEMS AND SOLUTIONS
+------------------------------------------
+
+===============================================================
+PROBLEM 1: Asymmetric Routing
+===============================================================
+
+Scenario: Packets go out one interface but return via another
+
+Solution 1: Use policy-based routing (see section 4.3)
+
+Solution 2: Enable rp_filter=2 (loose mode)
+[root@rhel9 ~]# echo "net.ipv4.conf.all.rp_filter=2" >> /etc/sysctl.d/99-rp-filter.conf
+[root@rhel9 ~]# sysctl -p /etc/sysctl.d/99-rp-filter.conf
+
+# rp_filter values:
+# 0 = No filtering (dangerous)
+# 1 = Strict mode (default, rejects asymmetric routing)
+# 2 = Loose mode (allows asymmetric routing)
+
+
+===============================================================
+PROBLEM 2: Blackhole Routes
+===============================================================
+
+# Find all blackhole/unreachable routes
+[root@rhel9 ~]# ip route show | grep -E "blackhole|unreachable|prohibit"
+
+# Remove blackhole
+[root@rhel9 ~]# ip route del blackhole 10.99.99.0/24
+
+
+===============================================================
+PROBLEM 3: Duplicate/Conflicting Routes
+===============================================================
+
+# Show duplicate routes
+[root@rhel9 ~]# ip route show | sort
+
+# Check for conflicting specific routes
+[root@rhel9 ~]# ip route show | grep "10.0.0.0/24"
+
+
+===============================================================
+PROBLEM 4: MTU Issues (Path MTU Discovery)
+===============================================================
+
+# Test with different packet sizes
+[root@rhel9 ~]# ping -c 1 -M do -s 1472 8.8.8.8
+
+# Change interface MTU
+[root@rhel9 ~]# nmcli connection modify ens160 802-3-ethernet.mtu 1400
+[root@rhel9 ~]# nmcli connection up ens160
+
+
+===============================================================
+PROBLEM 5: Routing Loops
+===============================================================
+
+# Symptom: TTL exceeded
+# Check with traceroute - if you see same hops repeating, it's a loop
+[root@rhel9 ~]# traceroute 10.1.1.1
+
+# Fix routes on the routers causing the loop
+
+
+5.3 TROUBLESHOOTING TOOLS SUMMARY
+----------------------------------
+
+# Show routing table
+ip route show
+
+# Show route to specific destination
+ip route get 8.8.8.8
+
+# Monitor route changes
+ip monitor route
+
+# Basic ping
+ping -c 4 8.8.8.8
+
+# Traceroute
+traceroute -n 8.8.8.8
+
+# Continuous traceroute
+mtr 8.8.8.8
+
+# Show ARP cache
+ip neigh show
+
+# Capture packets
+tcpdump -i ens160 icmp -n
+
+# Show device status
+nmcli device status
+
+# Troubleshooting script
+[root@rhel9 ~]# vi /usr/local/bin/route-check.sh
+
+#!/bin/bash
+DEST=${1:-8.8.8.8}
+echo "====================================="
+echo "Routing Diagnostic for $DEST"
+echo "====================================="
+echo -e "\n1. Interface Status:"
+ip link show | grep -E "^[0-9]|state"
+echo -e "\n2. IP Addresses:"
+ip addr show | grep "inet "
+echo -e "\n3. Default Gateway:"
+ip route show default
+echo -e "\n4. Route to Destination:"
+ip route get $DEST
+echo -e "\n5. Ping Gateway:"
+GW=$(ip route show default | awk '{print $3}' | head -1)
+ping -c 2 -W 1 $GW 2>&1 | tail -2
+echo -e "\n6. Ping Destination:"
+ping -c 2 -W 2 $DEST 2>&1 | tail -2
+echo -e "\n7. Traceroute:"
+traceroute -n -m 10 -w 1 $DEST 2>&1 | head -10
+echo -e "\n8. ARP Cache:"
+ip neigh show | grep -v FAILED
+echo -e "\n====================================="
+
+[root@rhel9 ~]# chmod +x /usr/local/bin/route-check.sh
+[root@rhel9 ~]# route-check.sh 10.1.1.1
+
+
+================================================================================
+SECTION 6: HANDS-ON LABS
+================================================================================
+
+LAB 1: BASIC ROUTING SETUP
+---------------------------
+
+Objectives:
+- Configure static IP address
+- Set default gateway
+- Add static routes
+- Test connectivity
+
+Lab Topology:
++------------------------------------------------+
+|                                                |
+|  [VM1 - RHEL9]          [VM2 - Router]         |
+|   192.168.1.10/24       ens160: 192.168.1.1/24 |
+|   GW: 192.168.1.1       ens192: 10.0.0.1/24    |
+|                                                |
++------------------------------------------------+
+
+STEP 1: Configure VM1
+[root@vm1 ~]# nmcli connection modify ens160 \
+  ipv4.addresses 192.168.1.10/24 \
+  ipv4.gateway 192.168.1.1 \
+  ipv4.dns 8.8.8.8 \
+  ipv4.method manual
+[root@vm1 ~]# nmcli connection up ens160
+
+STEP 2: Configure VM2 (Router)
+[root@vm2 ~]# nmcli connection modify ens160 ipv4.addresses 192.168.1.1/24 ipv4.method manual
+[root@vm2 ~]# nmcli connection modify ens192 ipv4.addresses 10.0.0.1/24 ipv4.method manual
+[root@vm2 ~]# nmcli connection up ens160
+[root@vm2 ~]# nmcli connection up ens192
+[root@vm2 ~]# sysctl -w net.ipv4.ip_forward=1
+
+STEP 3: Add static route on VM1
+[root@vm1 ~]# nmcli connection modify ens160 +ipv4.routes "10.0.0.0/24 192.168.1.1"
+[root@vm1 ~]# nmcli connection up ens160
+
+STEP 4: Test
+[root@vm1 ~]# ping -c 2 192.168.1.1
+[root@vm1 ~]# ip route get 10.0.0.10
+[root@vm1 ~]# traceroute -n 10.0.0.1
+
+Challenges:
+1. Add a third VM on 10.0.0.0/24 network
+2. Configure routing so VM1 can reach VM3
+3. Use tcpdump to capture traffic between VMs
+4. Change route metric and observe behavior
+
+
+LAB 2: MULTI-PATH ROUTING
+--------------------------
+
+Objectives:
+- Configure multiple routes
+- Understand metric-based routing
+- Simulate route failover
+
+STEP 1: Add two default routes
+[root@vm1 ~]# nmcli connection modify ens160 \
+  +ipv4.routes "default 192.168.1.1 100" \
+  +ipv4.routes "default 192.168.1.2 200"
+[root@vm1 ~]# nmcli connection up ens160
+
+STEP 2: Test route selection
+[root@vm1 ~]# ip route get 8.8.8.8
+
+STEP 3: Simulate primary router failure and verify backup works
+[root@routera ~]# nmcli connection down ens160
+[root@vm1 ~]# ip route get 8.8.8.8  # Should now show Router B
+
+
+LAB 3: POLICY-BASED ROUTING
+----------------------------
+
+(Full configuration covered in Section 4.3)
+
+Objectives:
+- Create custom routing tables
+- Route different source subnets through different ISPs
+- Make configuration persistent
+
+
+================================================================================
+SECTION 7: INTERVIEW QUESTIONS & ANSWERS
+================================================================================
+
+Q1: How does Linux decide which route to use when multiple routes match?
+
+ANSWER:
+1. LONGEST PREFIX MATCH first (most specific /XX wins)
+2. LOWEST METRIC second (if prefix length is equal)
+Example: /24 beats /16 beats /8, regardless of metric.
+
+
+Q2: What is the difference between a gateway and a route?
+
+ANSWER:
+Gateway = A specific router with an IP address (the next hop)
+Route = A rule in the routing table: "To reach X, use gateway Y via interface Z"
+Analogy: Route = directions ("Take I-95 North"), Gateway = the on-ramp
+
+
+Q3: You can ping the gateway but not the Internet. What do you check?
+
+ANSWER:
+1. Check default route exists: ip route show default
+2. Check gateway has Internet: ping -I 192.168.1.1 8.8.8.8
+3. Check NAT/firewall on gateway
+4. Check DNS: ping 8.8.8.8 (IP) vs ping google.com (hostname)
+5. Check IP forwarding on gateway: sysctl net.ipv4.ip_forward
+6. Trace route: traceroute 8.8.8.8
+
+
+Q4: What does "ip route get 8.8.8.8" do?
+
+ANSWER:
+Performs a routing table lookup to show EXACTLY which route would be used
+for a specific destination. Shows gateway, interface, and source IP.
+Used for debugging route selection and PBR.
+
+
+Q5: Difference between 'ip route' and 'route'?
+
+ANSWER:
+'route'    = Old/deprecated (net-tools package)
+'ip route' = Modern, recommended in RHEL 9 (iproute2)
+'ip route' supports policy routing, multiple tables, advanced features.
+
+
+Q6: How do you make a route persistent across reboots in RHEL 9?
+
+ANSWER:
+Use nmcli (recommended):
+  nmcli connection modify ens160 +ipv4.routes "10.0.0.0/8 192.168.1.254"
+  nmcli connection up ens160
+Never use just "ip route add" for persistence — it's lost on reboot.
+
+
+Q7: Explain routing metrics and when they matter.
+
+ANSWER:
+Metric = route cost/priority. Lower = preferred.
+Matters when: multiple routes to same destination exist.
+Used for: primary/backup failover, protocol preference.
+Example: metric 50 route used over metric 100 route to same destination.
+
+
+Q8: What is policy-based routing?
+
+ANSWER:
+Route traffic based on SOURCE IP (or marks), not just destination.
+Used for: multi-ISP setups, traffic engineering, load balancing.
+Implemented with: ip rule (policies) + custom routing tables.
+
+
+Q9: Server has two NICs. How to force specific traffic through one?
+
+ANSWER:
+Add a specific route tied to that interface:
+  nmcli connection modify ens192 +ipv4.routes "172.16.0.0/16 10.0.0.1"
+Verify: ip route get 172.16.1.1 — should show dev ens192.
+
+
+Q10: How to troubleshoot "Network is unreachable"?
+
+ANSWER:
+1. ip route show — check if route exists
+2. ip route show default — check for default gateway
+3. ip route get 10.1.1.1 — confirm "Network is unreachable"
+4. ip route add 10.0.0.0/8 via 192.168.1.254 — add missing route
+5. ping 10.1.1.1 — verify fix
+Common cause: missing default gateway or missing static route.
+
+
+================================================================================
+SECTION 8: QUICK REFERENCE CHEAT SHEET
+================================================================================
+
+# VIEW ROUTES
+ip route show                          # Show routing table
+ip route show table all                # Show all routing tables
+ip route get 8.8.8.8                   # Check route to specific destination
+ip -6 route show                       # Show IPv6 routes
+
+# ADD ROUTES (Temporary)
+ip route add 10.0.0.0/8 via 192.168.1.254
+ip route add default via 192.168.1.1
+ip route add 172.16.0.0/16 dev ens192
+ip route add 192.168.100.0/24 via 192.168.1.250 metric 100
+
+# DELETE ROUTES
+ip route del 10.0.0.0/8
+ip route del default via 192.168.1.1
+
+# CHANGE ROUTES
+ip route change 10.0.0.0/8 via 192.168.1.253 metric 50
+
+# PERSISTENT ROUTES (nmcli)
+nmcli con mod ens160 +ipv4.routes "10.0.0.0/8 192.168.1.254"
+nmcli con mod ens160 ipv4.gateway 192.168.1.1
+nmcli con up ens160
+
+# POLICY ROUTING
+ip rule show                           # Show policy rules
+ip rule add from 192.168.1.0/25 table 100
+ip route add default via 192.168.1.254 table 100
+
+# MONITORING
+ip monitor route                       # Watch route changes
+ip -s link                            # Show interface statistics
+ss -s                                 # Socket statistics summary
+
+# TROUBLESHOOTING
+ping -c 4 8.8.8.8                     # Basic connectivity
+traceroute -n 8.8.8.8                 # Trace route path
+mtr 8.8.8.8                           # Continuous traceroute
+ip neigh show                         # Show ARP cache
+tcpdump -i ens160 icmp -n             # Capture ICMP packets
+
+# NETWORKMANAGER
+nmcli device status                   # Show device status
+nmcli connection show                 # List connections
+nmcli -f ipv4.routes con show ens160  # Show routes for connection
+systemctl restart NetworkManager       # Restart NetworkManager
+
+# SYSTEM SETTINGS
+sysctl net.ipv4.ip_forward            # Check IP forwarding
+sysctl -w net.ipv4.ip_forward=1       # Enable IP forwarding
+cat /proc/sys/net/ipv4/ip_forward     # Alternative check
+
+# COMMON FILES
+/etc/sysconfig/network-scripts/route-<interface>
+/etc/NetworkManager/system-connections/<connection>.nmconnection
+/etc/iproute2/rt_tables               # Routing table names
+/proc/net/route                       # Kernel routing table
+
+
+================================================================================
+CONCLUSION
+================================================================================
+
+This comprehensive guide covered routing in RHEL 9 from basic concepts to 
+advanced enterprise scenarios. Key takeaways:
+
+1. START WITH SECTION 0 — The end-to-end explanation gives you the mental model
+2. MODERN TOOLS — Use 'ip route' and 'nmcli' instead of deprecated commands
+3. PERSISTENCE — Always use NetworkManager for persistent configuration
+4. TROUBLESHOOTING — Follow systematic approach (local > gateway > route > path)
+5. ADVANCED FEATURES — Policy-based routing enables sophisticated traffic engineering
+6. BEST PRACTICES: 
+   - Document all routing changes
+   - Test routes before deploying to production
+   - Use metrics for automatic failover
+   - Monitor routing table changes
+
+NEXT STEPS:
+- Practice labs in virtual environment
+- Study dynamic routing protocols (FRR)
+- Learn iptables/nftables integration with routing
+- Explore IPv6 routing
+- Study BGP for enterprise/ISP scenarios
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
