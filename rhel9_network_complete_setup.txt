@@ -1,0 +1,511 @@
+================================================================================
+   RHEL 9.7 - COMPLETE NETWORK SETUP GUIDE
+   Static IP | Routes | Gateway | DNS | NTP
+   OS: Red Hat Enterprise Linux 9.7 (Plow)
+================================================================================
+
+
+================================================================================
+SECTION 1: PRE-CHECK - CURRENT STATE
+================================================================================
+
+# Check OS version
+cat /etc/os-release
+
+# Check interface name
+ip a
+
+# Check current routes
+ip r
+
+# Check NetworkManager connections
+nmcli connection show
+
+# Check device details
+nmcli device show ens160
+
+# Check DNS
+cat /etc/resolv.conf
+
+# Check NTP status
+timedatectl status
+
+
+================================================================================
+SECTION 2: STATIC IP CONFIGURATION
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 Set Static IP Address (Disable DHCP)
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 \
+  ipv4.method manual \
+  ipv4.addresses 192.168.121.55/24 \
+  ipv4.gateway 192.168.121.2 \
+  ipv4.dns 192.168.121.2 \
+  ipv4.dns-search localdomain
+
+nmcli connection modify ens160 ipv4.method manual ipv4.addresses 192.168.121.55/24 ipv4.gateway 192.168.121.2 ipv4.dns 192.168.121.2 ipv4.dns-search localdomain
+
+# Apply changes
+nmcli connection up ens160
+
+# Verify
+ip a show ens160
+
+
+--------------------------------------------------------------------------------
+2.2 Add Extra IP Address (Secondary IP)
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 +ipv4.addresses 192.168.121.100/24
+
+# Apply
+nmcli connection up ens160
+
+# Verify
+ip a show ens160
+
+
+--------------------------------------------------------------------------------
+2.3 Remove an IP Address
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 -ipv4.addresses 192.168.121.100/24
+
+# Apply
+nmcli connection up ens160
+
+# Verify
+ip a show ens160
+
+
+--------------------------------------------------------------------------------
+2.4 Expected Output
+--------------------------------------------------------------------------------
+
+# ip a show ens160
+2: ens160: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
+    inet 192.168.121.55/24 brd 192.168.121.255 scope global noprefixroute ens160
+       valid_lft forever preferred_lft forever
+
+
+================================================================================
+SECTION 3: GATEWAY CONFIGURATION
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 Set Default Gateway
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.gateway 192.168.121.2
+
+# Apply
+nmcli connection up ens160
+
+# Verify
+ip r | grep default
+
+
+--------------------------------------------------------------------------------
+3.2 Change Gateway
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.gateway 192.168.121.1
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+3.3 Remove Gateway
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.gateway ""
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+3.4 Expected Output
+--------------------------------------------------------------------------------
+
+# ip r
+default via 192.168.121.2 dev ens160 proto static metric 100
+
+
+================================================================================
+SECTION 4: STATIC ROUTES CONFIGURATION
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 Add Single Static Route
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 +ipv4.routes "10.10.8.0/21 192.168.121.2"
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+4.2 Add Multiple Static Routes
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.routes \
+  "10.10.8.0/21 192.168.121.2, 10.20.0.0/16 192.168.121.254"
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+4.3 Remove a Static Route
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 -ipv4.routes "10.20.0.0/16 192.168.121.254"
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+4.4 View All Routes
+--------------------------------------------------------------------------------
+
+ip r
+
+
+--------------------------------------------------------------------------------
+4.5 Temporary Route (lost on reboot)
+--------------------------------------------------------------------------------
+
+ip route add 10.30.0.0/16 via 192.168.121.2 dev ens160
+
+# Remove temporary route
+ip route del 10.30.0.0/16 via 192.168.121.2 dev ens160
+
+
+--------------------------------------------------------------------------------
+4.6 Expected Output
+--------------------------------------------------------------------------------
+
+# ip r
+default via 192.168.121.2 dev ens160 proto static metric 100
+10.10.8.0/21 via 192.168.121.2 dev ens160 proto static metric 100
+192.168.121.0/24 dev ens160 proto kernel scope link src 192.168.121.55 metric 100
+
+
+================================================================================
+SECTION 5: DNS CONFIGURATION
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 Set Primary DNS
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.dns 192.168.121.2
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+5.2 Set Multiple DNS Servers
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.dns "192.168.121.2 8.8.8.8 8.8.4.4"
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+5.3 Set DNS Search Domain
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.dns-search "localdomain example.com"
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+5.4 Remove DNS
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 ipv4.dns ""
+
+# Apply
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+5.5 Verify DNS
+--------------------------------------------------------------------------------
+
+# Check resolv.conf
+cat /etc/resolv.conf
+
+# Check via nmcli
+nmcli connection show ens160 | grep DNS
+
+# Test DNS resolution
+nslookup google.com
+dig google.com
+
+
+--------------------------------------------------------------------------------
+5.6 Expected Output
+--------------------------------------------------------------------------------
+
+# cat /etc/resolv.conf
+nameserver 192.168.121.2
+nameserver 8.8.8.8
+search localdomain
+
+
+================================================================================
+SECTION 6: NTP CONFIGURATION
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 Check Current NTP Status
+--------------------------------------------------------------------------------
+
+timedatectl status
+timedatectl show-timesync
+
+
+--------------------------------------------------------------------------------
+6.2 Check NTP Service
+--------------------------------------------------------------------------------
+
+systemctl status chronyd
+
+
+--------------------------------------------------------------------------------
+6.3 View Current NTP Servers
+--------------------------------------------------------------------------------
+
+cat /etc/chrony.conf | grep server
+chronyc sources -v
+
+
+--------------------------------------------------------------------------------
+6.4 Add Custom NTP Server
+--------------------------------------------------------------------------------
+
+# Edit chrony config
+vi /etc/chrony.conf
+
+# Add your NTP server line (example):
+server 192.168.121.2 iburst
+server 0.rhel.pool.ntp.org iburst
+server 1.rhel.pool.ntp.org iburst
+
+
+--------------------------------------------------------------------------------
+6.5 Restart and Enable NTP Service
+--------------------------------------------------------------------------------
+
+systemctl restart chronyd
+systemctl enable chronyd
+
+
+--------------------------------------------------------------------------------
+6.6 Set Timezone
+--------------------------------------------------------------------------------
+
+# List available timezones
+timedatectl list-timezones | grep Asia
+
+# Set timezone (example: India)
+timedatectl set-timezone Asia/Kolkata
+
+# Verify
+timedatectl status
+
+
+--------------------------------------------------------------------------------
+6.7 Enable NTP Sync
+--------------------------------------------------------------------------------
+
+timedatectl set-ntp true
+
+# Verify
+timedatectl status
+
+
+--------------------------------------------------------------------------------
+6.8 Force Time Sync
+--------------------------------------------------------------------------------
+
+chronyc makestep
+
+
+--------------------------------------------------------------------------------
+6.9 Verify NTP Sync
+--------------------------------------------------------------------------------
+
+chronyc tracking
+chronyc sources -v
+timedatectl status
+
+
+--------------------------------------------------------------------------------
+6.10 Expected Output
+--------------------------------------------------------------------------------
+
+# timedatectl status
+               Local time: Sun 2026-05-10 11:48:05 IST
+           Universal time: Sun 2026-05-10 06:18:05 UTC
+                 RTC time: Sun 2026-05-10 06:18:05
+                Time zone: Asia/Kolkata (IST, +0530)
+System clock synchronized: yes
+              NTP service: active
+          RTC in local TZ: no
+
+# chronyc tracking
+Reference ID    : C0A87902 (192.168.121.2)
+Stratum         : 3
+System time     : 0.000123456 seconds fast of NTP time
+Last offset     : +0.000234567 seconds
+RMS offset      : 0.000345678 seconds
+Frequency       : 1.234 ppm slow
+Residual freq   : +0.012 ppm
+Skew            : 0.123 ppm
+Root delay      : 0.012345678 seconds
+Root dispersion : 0.001234567 seconds
+Update interval : 64.2 seconds
+Leap status     : Normal
+
+
+================================================================================
+SECTION 7: FULL VERIFICATION CHECKLIST
+================================================================================
+
+# 1. Check IP address
+ip a show ens160
+
+# 2. Check routing table
+ip r
+
+# 3. Check DNS
+cat /etc/resolv.conf
+
+# 4. Check NTP
+timedatectl status
+chronyc sources -v
+
+# 5. Check NM connection details
+nmcli connection show ens160
+
+# 6. Check NM config file
+cat /etc/NetworkManager/system-connections/ens160.nmconnection
+
+# 7. Test connectivity
+ping -c 4 192.168.121.2        # ping gateway
+ping -c 4 8.8.8.8              # ping internet IP
+ping -c 4 google.com           # ping hostname (tests DNS)
+
+# 8. Check NM service
+systemctl status NetworkManager
+
+# 9. Check chrony service
+systemctl status chronyd
+
+
+================================================================================
+SECTION 8: QUICK REFERENCE - ALL COMMANDS
+================================================================================
+
+STATIC IP
+---------
+Set static IP          : nmcli connection modify ens160 ipv4.method manual ipv4.addresses 192.168.121.55/24
+Add extra IP           : nmcli connection modify ens160 +ipv4.addresses 192.168.121.100/24
+Remove IP              : nmcli connection modify ens160 -ipv4.addresses 192.168.121.100/24
+
+GATEWAY
+-------
+Set gateway            : nmcli connection modify ens160 ipv4.gateway 192.168.121.2
+Remove gateway         : nmcli connection modify ens160 ipv4.gateway ""
+
+ROUTES
+------
+Add route              : nmcli connection modify ens160 +ipv4.routes "10.10.8.0/21 192.168.121.2"
+Remove route           : nmcli connection modify ens160 -ipv4.routes "10.10.8.0/21 192.168.121.2"
+View routes            : ip r
+
+DNS
+---
+Set DNS                : nmcli connection modify ens160 ipv4.dns "192.168.121.2 8.8.8.8"
+Set search domain      : nmcli connection modify ens160 ipv4.dns-search localdomain
+Remove DNS             : nmcli connection modify ens160 ipv4.dns ""
+Verify DNS             : cat /etc/resolv.conf
+
+NTP
+---
+Check NTP status       : timedatectl status
+Enable NTP             : timedatectl set-ntp true
+Set timezone           : timedatectl set-timezone Asia/Kolkata
+View NTP servers       : chronyc sources -v
+Force sync             : chronyc makestep
+Restart chrony         : systemctl restart chronyd
+
+APPLY & VERIFY
+--------------
+Apply changes          : nmcli connection up ens160
+Restart NM             : systemctl restart NetworkManager
+Check NM status        : systemctl status NetworkManager
+Show connection        : nmcli connection show ens160
+Show device            : nmcli device show ens160
+
+
+================================================================================
+SECTION 9: NM CONFIG FILE REFERENCE
+Location: /etc/NetworkManager/system-connections/ens160.nmconnection
+================================================================================
+
+[connection]
+id=ens160
+type=ethernet
+interface-name=ens160
+
+[ethernet]
+
+[ipv4]
+method=manual
+address1=192.168.121.55/24,192.168.121.2
+dns=192.168.121.2;8.8.8.8;
+dns-search=localdomain;
+route1=10.10.8.0/21,192.168.121.2
+
+[ipv6]
+method=disabled
+
+[proxy]
+
+
+================================================================================
+SECTION 10: TROUBLESHOOTING
+================================================================================
+
+ISSUE                          FIX
+-----------------------------  -------------------------------------------------
+IP not showing after reboot    nmcli connection up ens160
+DHCP IP keeps coming back      nmcli connection modify ens160 ipv4.method manual
+No internet access             Check default gateway: ip r | grep default
+DNS not resolving              Check: cat /etc/resolv.conf
+NTP not syncing                systemctl restart chronyd && chronyc makestep
+Route not working              Check gateway is reachable: ping 192.168.121.2
+NM not managing interface      nmcli device set ens160 managed yes
+Connection not activating      journalctl -u NetworkManager -f
+
+
+================================================================================
+   Configuration is fully persistent across reboots on RHEL 9.7
+   Always run: nmcli connection up ens160 after any change
+================================================================================

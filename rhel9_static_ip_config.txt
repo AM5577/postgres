@@ -1,0 +1,167 @@
+================================================================================
+   RHEL 9.7 - STATIC IP & ROUTING CONFIGURATION - END TO END GUIDE
+   OS: Red Hat Enterprise Linux 9.7 (Plow)
+================================================================================
+
+
+--------------------------------------------------------------------------------
+STEP 1: CHECK CURRENT STATE
+--------------------------------------------------------------------------------
+
+nmcli connection show
+nmcli device show ens160
+ip a
+ip r
+
+
+--------------------------------------------------------------------------------
+STEP 2: SET STATIC IP (DISABLE DHCP)
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 \
+  ipv4.method manual \
+  ipv4.addresses 192.168.121.200/24 \
+  ipv4.gateway 192.168.121.2 \
+  ipv4.dns 192.168.121.2 \
+  ipv4.dns-search localdomain
+
+
+--------------------------------------------------------------------------------
+STEP 3: ADD STATIC ROUTES
+--------------------------------------------------------------------------------
+
+# Single route
+nmcli connection modify ens160 \
+  ipv4.routes "10.10.8.0/21 192.168.121.2"
+
+# Multiple routes
+nmcli connection modify ens160 \
+  ipv4.routes "10.10.8.0/21 192.168.121.2, 10.20.0.0/16 192.168.121.2"
+
+
+--------------------------------------------------------------------------------
+STEP 4: DISABLE IPv6 (OPTIONAL)
+--------------------------------------------------------------------------------
+
+nmcli connection modify ens160 \
+  ipv6.method disabled
+
+
+--------------------------------------------------------------------------------
+STEP 5: APPLY CHANGES
+--------------------------------------------------------------------------------
+
+nmcli connection up ens160
+
+
+--------------------------------------------------------------------------------
+STEP 6: VERIFY EVERYTHING
+--------------------------------------------------------------------------------
+
+# IP address
+ip a show ens160
+
+# Routing table
+ip r
+
+# DNS
+cat /etc/resolv.conf
+
+# Full NM connection details
+nmcli connection show ens160
+
+# NM config file
+cat /etc/NetworkManager/system-connections/ens160.nmconnection
+
+
+--------------------------------------------------------------------------------
+STEP 7: EXPECTED OUTPUT
+--------------------------------------------------------------------------------
+
+# ip a show ens160
+2: ens160: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 ...
+    inet 192.168.121.200/24 brd 192.168.121.255 scope global noprefixroute ens160
+       valid_lft forever preferred_lft forever
+
+# ip r
+default via 192.168.121.2 dev ens160 proto static metric 100
+10.10.8.0/21 via 192.168.121.2 dev ens160 proto static metric 100
+192.168.121.0/24 dev ens160 proto kernel scope link src 192.168.121.200 metric 100
+
+# cat /etc/resolv.conf
+nameserver 192.168.121.2
+search localdomain
+
+
+--------------------------------------------------------------------------------
+STEP 8: NM CONFIG FILE (AUTO-GENERATED)
+   Location: /etc/NetworkManager/system-connections/ens160.nmconnection
+--------------------------------------------------------------------------------
+
+[connection]
+id=ens160
+type=ethernet
+interface-name=ens160
+
+[ethernet]
+
+[ipv4]
+method=manual
+address1=192.168.121.200/24,192.168.121.2
+dns=192.168.121.2
+dns-search=localdomain
+route1=10.10.8.0/21,192.168.121.2
+
+[ipv6]
+method=disabled
+
+[proxy]
+
+
+--------------------------------------------------------------------------------
+STEP 9: QUICK REFERENCE - DAY TO DAY COMMANDS
+--------------------------------------------------------------------------------
+
+TASK                        COMMAND
+--------------------------  ---------------------------------------------------
+Show connections            nmcli connection show
+Show device details         nmcli device show ens160
+Add extra IP                nmcli connection modify ens160 +ipv4.addresses 10.0.0.1/24
+Remove extra IP             nmcli connection modify ens160 -ipv4.addresses 10.0.0.1/24
+Add a route                 nmcli connection modify ens160 +ipv4.routes "10.0.0.0/8 192.168.121.2"
+Remove a route              nmcli connection modify ens160 -ipv4.routes "10.0.0.0/8 192.168.121.2"
+Reload connection           nmcli connection up ens160
+Restart NetworkManager      systemctl restart NetworkManager
+Check NM status             systemctl status NetworkManager
+
+
+--------------------------------------------------------------------------------
+STEP 10: REBOOT TEST
+--------------------------------------------------------------------------------
+
+reboot
+
+# After reboot verify:
+ip a
+ip r
+cat /etc/resolv.conf
+
+
+--------------------------------------------------------------------------------
+NOTES - RHEL 9 vs RHEL 7/8 DIFFERENCES
+--------------------------------------------------------------------------------
+
+FEATURE             RHEL 7/8                        RHEL 9
+------------------  ------------------------------  ----------------------------
+Config files        /etc/sysconfig/network-scripts/ /etc/NetworkManager/
+                    ifcfg-*                         system-connections/*.nmconnection
+ifcfg files         Supported                       DEPRECATED
+Primary tool        nmcli / ifcfg                   nmcli ONLY (recommended)
+network service     Available                       REMOVED
+
+NOTE: On RHEL 9, always use nmcli.
+      Never edit ifcfg files or use the old network service.
+
+================================================================================
+   Configuration is fully persistent across reboots on RHEL 9.7
+================================================================================

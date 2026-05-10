@@ -1,0 +1,198 @@
+================================================================================
+         RHEL 9 SESSION NOTES - SUMMARY & EXPLANATION
+================================================================================
+Date   : May 10, 2026
+System : RHEL 9 (Red Hat Enterprise Linux)
+Host   : rhel-jes
+User   : root
+--------------------------------------------------------------------------------
+
+
+================================================================================
+SECTION 1: SYSTEM REGISTRATION & SUBSCRIPTION
+================================================================================
+
+COMMANDS USED:
+  subscription-manager register --username amaddukuri --password <hidden>
+  subscription-manager attach --auto
+  subscription-manager list --available
+  subscription-manager repos \
+      --enable=rhel-9-for-x86_64-baseos-rpms \
+      --enable=rhel-9-for-x86_64-appstream-rpms
+
+EXPLANATION:
+  - The system was registered with Red Hat using a username and password.
+    NOTE: The password was typed in plaintext in the terminal — this is a
+    security risk as it gets stored in shell history. Always clear history
+    or use environment variables for credentials.
+
+  - "--attach --auto" automatically attaches the best available subscription
+    to this system based on what is available in the account.
+
+  - Two repositories were enabled:
+      * rhel-9-for-x86_64-baseos-rpms   --> Core OS packages
+      * rhel-9-for-x86_64-appstream-rpms --> Application packages
+
+--------------------------------------------------------------------------------
+
+
+================================================================================
+SECTION 2: SYSTEM UPDATE & VERIFICATION
+================================================================================
+
+COMMANDS USED:
+  dnf repolist
+  yum clean all
+  yum update -y
+  reboot
+  uname -r
+  cat /etc/os-release
+
+EXPLANATION:
+  - "dnf repolist" lists all enabled repositories to confirm they are active.
+  - "yum clean all" clears the package cache to ensure fresh metadata.
+  - "yum update -y" updates all installed packages to the latest version.
+    The "-y" flag auto-confirms all prompts.
+  - "reboot" restarts the system to apply kernel or critical updates.
+  - "uname -r" shows the currently running kernel version after reboot.
+  - "cat /etc/os-release" displays the OS name, version, and build info.
+
+--------------------------------------------------------------------------------
+
+
+================================================================================
+SECTION 3: NETWORK CONFIGURATION - INTERFACE ens160
+================================================================================
+
+INTERFACE  : ens160
+ORIGINAL IP: 192.168.121.179/24  (later removed)
+ADDED IP   : 192.168.121.200/24  (secondary static IP)
+GATEWAY    : 192.168.121.2
+STATIC ROUTE: 10.10.10.0/24 via 192.168.121.2
+
+--------------------------------------------------------------------------------
+
+STEP 3A: TEMPORARY IP ASSIGNMENT (using "ip" command)
+------------------------------------------------------
+COMMANDS USED:
+  ip addr add 192.168.121.200/24 dev ens160
+  ip route add 10.10.10.0/24 via 192.168.121.2 dev ens160
+  ip addr show ens160
+  ip r
+
+EXPLANATION:
+  - "ip addr add" adds a secondary IP address to the ens160 interface.
+  - "ip route add" adds a static route so traffic destined for the
+    10.10.10.0/24 network goes via the gateway 192.168.121.2.
+  !! IMPORTANT: These changes are TEMPORARY. They are lost after reboot.
+     That is why nmcli was used next to make changes persistent.
+
+--------------------------------------------------------------------------------
+
+STEP 3B: PERSISTENT CONFIGURATION (using "nmcli")
+--------------------------------------------------
+COMMANDS USED:
+  nmcli con mod ens160 +ipv4.addresses 192.168.121.200/24
+  nmcli con mod ens160 +ipv4.routes "10.10.10.0/21 192.168.121.2"
+  nmcli con up ens160
+  nmcli connection modify ens160 ipv4.gateway 192.168.121.2
+  nmcli connection up ens160
+
+EXPLANATION:
+  - "nmcli con mod" modifies the NetworkManager connection profile for ens160.
+    The "+" prefix means ADD to existing settings (not replace).
+  - "+ipv4.addresses" adds the new static IP 192.168.121.200/24 persistently.
+  - "+ipv4.routes" adds the static route persistently.
+  - "ipv4.gateway" sets the default gateway for this connection.
+  - "nmcli connection up ens160" applies all changes by restarting the
+    connection. A reboot was also done to fully verify persistence.
+
+  !! NOTE: There is a prefix mismatch to verify:
+     - "ip route add" used /24  (256 addresses)
+     - "nmcli con mod" used /21  (2048 addresses)
+     Make sure the intended subnet mask is correct and consistent.
+
+--------------------------------------------------------------------------------
+
+STEP 3C: REMOVE OLD IP ADDRESS
+-------------------------------
+COMMAND USED:
+  ip addr del 192.168.121.179/24 dev ens160
+
+EXPLANATION:
+  - The original IP 192.168.121.179/24 was removed from ens160.
+  - This was done using the temporary "ip" command, so if it needs to be
+    permanently removed, also run:
+      nmcli con mod ens160 -ipv4.addresses 192.168.121.179/24
+      nmcli con up ens160
+
+--------------------------------------------------------------------------------
+
+
+================================================================================
+SECTION 4: ERRORS & TYPOS FOUND IN SESSION
+================================================================================
+
+  LINE 32: "n,cli connection up ens160"
+           --> TYPO! Should be "nmcli connection up ens160"
+           --> The comma instead of 'm' caused a command-not-found error.
+           --> It was corrected on Line 33.
+
+  LINE 1 & 2: Password typed in plaintext
+           --> Both attempts stored the password in shell history.
+           --> ACTION REQUIRED: Change the Red Hat account password immediately.
+           --> Clear history with: history -c && history -w
+
+--------------------------------------------------------------------------------
+
+
+================================================================================
+SECTION 5: RECOMMENDED ACTIONS / FOLLOW-UP
+================================================================================
+
+  [1] CHANGE YOUR PASSWORD IMMEDIATELY
+      - Your Red Hat subscription password is stored in shell history.
+      - Go to: https://access.redhat.com and change your password now.
+      - Then clear history: history -c && history -w
+
+  [2] VERIFY SUBNET MASK CONSISTENCY
+      - Route was added with /24 via "ip" command
+      - Route was added with /21 via "nmcli"
+      - Confirm which is correct for your network design.
+
+  [3] MAKE IP DELETION PERMANENT
+      - The removal of 192.168.121.179 was done with "ip addr del" (temporary).
+      - To make it permanent:
+          nmcli con mod ens160 -ipv4.addresses 192.168.121.179/24
+          nmcli con up ens160
+
+  [4] VERIFY FINAL NETWORK STATE
+      - Run these to confirm everything looks right:
+          ip a show ens160
+          ip r
+          nmcli con show ens160
+
+  [5] CHECK SUBSCRIPTION STATUS
+      - Run: subscription-manager status
+      - Run: subscription-manager list --consumed
+
+--------------------------------------------------------------------------------
+
+
+================================================================================
+QUICK REFERENCE: USEFUL COMMANDS
+================================================================================
+
+  Check OS version       : cat /etc/os-release
+  Check kernel           : uname -r
+  Check IP addresses     : ip a
+  Check routes           : ip r
+  Check NM connection    : nmcli con show ens160
+  Restart interface      : nmcli con up ens160
+  List enabled repos     : subscription-manager repos --list-enabled
+  Check subscription     : subscription-manager status
+  Clear bash history     : history -c && history -w
+
+================================================================================
+                          END OF SESSION NOTES
+================================================================================
