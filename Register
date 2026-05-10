@@ -1,0 +1,13 @@
+# Step 1 — Switch to root
+sudo su -
+
+# Step 2 — Register the system
+subscription-manager register --username <your-username> --password <your-password>
+
+# Step 3 — Enable repos (SCA handles subscription automatically)
+subscription-manager repos \
+  --enable=rhel-9-for-x86_64-baseos-rpms \
+  --enable=rhel-9-for-x86_64-appstream-rpms
+
+# Step 4 — Verify
+dnf repolist
