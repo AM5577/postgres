@@ -13,7 +13,7 @@ SECTION 1: SYSTEM REGISTRATION & SUBSCRIPTION
 ================================================================================
 
 COMMANDS USED:
-  subscription-manager register --username amaddukuri --password <hidden>
+  subscription-manager register --username am --password <hidden>
   subscription-manager attach --auto
   subscription-manager list --available
   subscription-manager repos \
