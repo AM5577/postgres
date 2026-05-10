@@ -1,0 +1,206 @@
+================================================================================
+                        VLAN SETUP & TROUBLESHOOTING GUIDE
+                        RHEL Linux Server + Windows PuTTY
+================================================================================
+
+THE SETUP
+---------
+Your Windows PC  <--->  Linux Server (RHEL)
+192.168.121.x           192.168.121.155  (ens160 - main interface)
+                         192.168.10.1     (vlan10 - virtual interface)
+
+
+================================================================================
+1. WHAT IS A VLAN?
+================================================================================
+- VLAN = Virtual LAN
+- It allows you to create multiple virtual networks on a single physical interface
+- Instead of needing a separate network card, you create a logical/virtual
+  interface on top of the existing one
+- In our case: vlan10 was created on top of ens160
+
+
+================================================================================
+2. WHAT WE DID ON THE LINUX SERVER
+================================================================================
+
+Step 1 - Created the VLAN interface:
+--------------------------------------
+  ip link add link ens160 vlan10 type vlan id 10
+
+  - ens160  --> physical interface (parent)
+  - vlan10  --> new virtual interface name
+  - id 10   --> VLAN tag number
+
+Step 2 - Assigned an IP address:
+----------------------------------
+  ip addr add 192.168.10.1/24 dev vlan10
+
+  - Gave vlan10 the IP 192.168.10.1
+
+Step 3 - Brought the interface UP:
+------------------------------------
+  ip link set vlan10 up
+
+  - Interface was created but DOWN -- this activated it
+
+Verify with:
+  ip a
+  ip link show
+
+
+================================================================================
+3. WHY PUTTY COULDN'T CONNECT TO 192.168.10.1
+================================================================================
+
+Windows PC (192.168.121.x)
+        |
+        | knows about 192.168.121.0/24  --> YES (reachable)
+        | doesn't know about 192.168.10.0/24 --> NO (unreachable)
+        |
+        Router (192.168.121.2)
+        |
+        Linux Server
+        |-- ens160 --> 192.168.121.155   reachable
+        |-- vlan10 --> 192.168.10.1      NOT reachable (no route on Windows)
+
+Your Windows PC only knew how to reach 192.168.121.x network.
+It had no idea that 192.168.10.0/24 existed or how to get there.
+
+
+================================================================================
+4. WHAT IS A ROUTE?
+================================================================================
+- A route tells your PC: "To reach network X, send traffic via gateway Y"
+- Without a route, your PC drops the packet -- it doesn't know where to send it
+
+We added this route on Windows (Run CMD as Administrator):
+  route add 192.168.10.0 mask 255.255.255.0 192.168.121.155
+
+This means:
+  - To reach 192.168.10.0/24 network
+  - Send traffic via 192.168.121.155 (the Linux server's main IP)
+  - The Linux server then forwards it to its own vlan10 interface
+
+
+================================================================================
+5. THE FULL FLOW AFTER FIX
+================================================================================
+
+PuTTY --> 192.168.10.1
+    |
+    v
+Windows checks route table
+    |
+    v
+Found: 192.168.10.0/24 --> via 192.168.121.155
+    |
+    v
+Packet sent to 192.168.121.155
+    |
+    v
+Linux server receives it on ens160
+    |
+    v
+Forwards to vlan10 (192.168.10.1)
+    |
+    v
+SSH connection established [OK]
+
+
+================================================================================
+6. FIREWALL & SSH CHECKS (Linux Server)
+================================================================================
+
+Check firewall:
+  firewall-cmd --list-all
+
+Check SSH is listening:
+  ss -tlnp | grep 22
+
+Allow SSH through firewall (if needed):
+  firewall-cmd --add-service=ssh --permanent
+  firewall-cmd --reload
+
+
+================================================================================
+7. MAKING CONFIGURATION PERMANENT
+================================================================================
+
++---------------------------+--------------------+------------------+
+| Command                   | Tool               | Survives Reboot? |
++---------------------------+--------------------+------------------+
+| ip link add               | Linux (iproute2)   | NO               |
+| ip addr add               | Linux (iproute2)   | NO               |
+| route add (Windows)       | Windows CMD        | NO               |
+| nmcli con add             | Linux (NetworkMgr) | YES              |
+| route add -p (Windows)    | Windows CMD        | YES              |
++---------------------------+--------------------+------------------+
+
+To make VLAN permanent on Linux (NetworkManager):
+  nmcli con add type vlan con-name vlan10 ifname vlan10 dev ens160 id 10 ip4 192.168.10.1/24
+  nmcli con up vlan10
+
+To make route permanent on Windows (Run CMD as Administrator):
+  route add 192.168.10.0 mask 255.255.255.0 192.168.121.155 -p
+
+  (The -p flag makes it persistent across reboots)
+
+
+================================================================================
+8. USEFUL COMMANDS REFERENCE
+================================================================================
+
+LINUX COMMANDS:
+---------------
+  ip a                          --> Show all IP addresses
+  ip link show                  --> Show all interfaces
+  ip route show                 --> Show routing table
+  ip link add link ens160 vlan10 type vlan id 10   --> Create VLAN
+  ip addr add 192.168.10.1/24 dev vlan10           --> Assign IP
+  ip link set vlan10 up                            --> Bring interface up
+  ip link delete vlan10                            --> Delete VLAN interface
+  nmcli con show                --> Show NetworkManager connections
+  systemctl status sshd         --> Check SSH service status
+  firewall-cmd --list-all       --> Show firewall rules
+  ss -tlnp | grep 22            --> Check SSH listening ports
+  ping 192.168.10.1             --> Test connectivity
+
+WINDOWS COMMANDS (Run CMD as Administrator):
+---------------------------------------------
+  ping 192.168.10.1                                        --> Test connectivity
+  route print                                              --> Show routing table
+  route add 192.168.10.0 mask 255.255.255.0 192.168.121.155     --> Add temp route
+  route add 192.168.10.0 mask 255.255.255.0 192.168.121.155 -p  --> Add perm route
+  route delete 192.168.10.0                                --> Delete route
+
+
+================================================================================
+9. ERRORS WE ENCOUNTERED & FIXES
+================================================================================
+
+Error 1: Cannot find device "eth0"
+  Cause:  Wrong interface name used
+  Fix:    Use correct interface name (ens160 in our case)
+          Check with: ip link show
+
+Error 2: ip con show --> Object "con" is unknown
+  Cause:  Wrong command (ip con is invalid)
+  Fix:    Use: nmcli con show
+
+Error 3: route/findstr command not found (on Linux)
+  Cause:  Windows commands run on Linux terminal
+  Fix:    Use Linux equivalent: ip route show
+
+Error 4: The requested operation requires elevation (Windows)
+  Cause:  CMD not run as Administrator
+  Fix:    Right-click CMD --> Run as administrator
+
+Error 5: Request timed out (ping 192.168.10.1 from Windows)
+  Cause:  No route to 192.168.10.0/24 on Windows PC
+  Fix:    route add 192.168.10.0 mask 255.255.255.0 192.168.121.155
+
+
+================================================================================
+                              END OF DOCUMENT
+================================================================================
