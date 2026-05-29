@@ -1,0 +1,16 @@
+-e \"GROUP_NAME=${GROUP_NAME} EMAIL_RECEIPTS=${EMAIL_RECEIPTS} EMAIL_CC_RECEIPTS=${EMAIL_CC_RECEIPTS} PATCH_MONTH=${env.PATCH_MONTH} PATCH_YEAR=${env.PATCHING_YEAR} PATCH_MONTH_BKP=${env.PATCH_MONTH} NONPROD_PATCH_SCHEDULE=${env.NONPROD_PATCH_SCHEDULE} PROD_PATCH_SCHEDULE=${env.PROD_PATCH_SCHEDULE}\"
+
+- name: Mail the Patching schedules to respective teams
+  mail:
+    to: "{{ EMAIL_RECEIPTS }}"
+    cc: "{{ EMAIL_CC_RECEIPTS }}"
+    subject: "Monthly Patching Schedule for {{ GROUP_NAME }} - {{ PATCH_MONTH_BKP }}"
+    body: "{{ lookup('template', 'templates/mail_body.j2') }}"
+  vars:
+    group_hosts: "{{ groups[GROUP_NAME] }}"
+  run_once: true
+
+
+{% for host in group_hosts %}
+{{ host }}
+{% endfor %}
