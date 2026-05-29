@@ -1,0 +1,26 @@
+- name: Build host list
+  set_fact:
+    host_list: "{{ groups['iris:birdseye'] | join('\n') }}"
+  run_once: true
+
+- name: Mail the Patching schedules to respective teams
+  mail:
+    to: "{{ EMAIL_RECEIPTS }}"
+    cc: "{{ EMAIL_CC_RECEIPTS }}"
+    subject: "Monthly Patching Schedule for {{ GROUP_NAME }} servers - {{ PATCH_MONTH_BKP }} {{ PATCH_YEAR }}"
+    body: "{{ lookup('template', 'templates/mail_body.j2') }}"
+  delegate_to: localhost
+  run_once: true
+
+Hi Team,
+
+Please find the {{ PATCH_MONTH_BKP }} month patching schedule for {{ GROUP_NAME }} servers.
+
+Kindly create a change record and send it to supporting application team.
+
+Non-Production Servers schedule 3rd Tuesday of every month || {{ NONPROD_PATCH_SCHEDULE }}
+Production Servers schedule 3rd Thursday of every month    || {{ PROD_PATCH_SCHEDULE }}
+
+Below {{ GROUP_NAME }} servers will be patched:
+
+{{ host_list }}
