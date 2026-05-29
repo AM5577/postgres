@@ -1,0 +1,115 @@
+pipeline {
+    agent any
+    environment {
+        EMAIL_RECEIPTS    = 'test$2222.com'
+        EMAIL_CC_RECEIPTS = 'test$2222.com'
+    }
+
+    stages {
+        stage('Patch Schedule') {
+            steps {
+                script {
+                    def DATE_TIME              = sh(script: "date", returnStdout: true).trim()
+                    def PATCH_MONTH_BKP        = sh(script: "date '+%b'", returnStdout: true).trim()
+                    def PATCH_YEAR             = sh(script: "date '+%Y'", returnStdout: true).trim()
+                    def PATCH_MONTH            = sh(script: "date '+%m'", returnStdout: true).trim()
+                    def NONPROD_PATCH_DATE     = sh(script: "cal \${PATCH_MONTH} \${PATCH_YEAR} | awk 'NR>2 {print \$3}' | grep -v '^\$' | sed -n '2p'", returnStdout: true).trim()
+                    def PROD_PATCH_DATE        = sh(script: "cal \${PATCH_MONTH} \${PATCH_YEAR} | awk 'NR>2 {print \$5}' | grep -v '^\$' | sed -n '2p'", returnStdout: true).trim()
+                    def NONPROD_PATCH_SCHEDULE = sh(script: "echo \${PATCH_MONTH_BKP}-\${NONPROD_PATCH_DATE}-\${PATCH_YEAR}", returnStdout: true).trim()
+                    def PROD_PATCH_SCHEDULE    = sh(script: "echo \${PATCH_MONTH_BKP}-\${PROD_PATCH_DATE}-\${PATCH_YEAR}", returnStdout: true).trim()
+
+                    echo "=============================="
+                    echo "Date/Time : \${DATE_TIME}"
+                    echo "=============================="
+                    echo "Non-PROD (2nd Tuesday)  :: \${NONPROD_PATCH_SCHEDULE}"
+                    echo "PROD     (2nd Thursday) :: \${PROD_PATCH_SCHEDULE}"
+                    echo "=============================="
+                }
+            }
+        }
+
+        stage('Send mail for 123 Team Servers') {
+            environment {
+                GROUP_NAME        = '123'
+                EMAIL_RECEIPTS    = 'test$2222.com'
+                EMAIL_CC_RECEIPTS = 'test$2222.com'
+            }
+            steps {
+                sh 'sudo ansible-playbook -i /etc/ansible/ansible/monthly-patch-report-inventory /etc/ansible/ansible/playbooks/monthly_patch_report/mails.yaml -u svc_an --private-key "/home/svc_an/.ssh/id_rsa" --vault-password-file "/home/svc_an/.vault_pass" -i ${GROUP_NAME} -e "group_name=${GROUP_NAME}"'
+            }
+        }
+
+        stage('Send mail for 123 Owned Servers') {
+            environment {
+                GROUP_NAME        = '123'
+                EMAIL_RECEIPTS    = 'test$2222.com'
+                EMAIL_CC_RECEIPTS = 'test$2222.com'
+            }
+            steps {
+                sh 'sudo ansible-playbook -i /etc/ansible/ansible/monthly-patch-report-inventory /etc/ansible/ansible/playbooks/monthly_patch_report/mails.yaml -u svc_an --private-key "/home/svc_an/.ssh/id_rsa" --vault-password-file "/home/svc_an/.vault_pass" -i ${GROUP_NAME} -e "group_name=${GROUP_NAME}"'
+            }
+        }
+
+        stage('Send mail for 123 Owned Servers') {
+            environment {
+                GROUP_NAME        = '123'
+                EMAIL_RECEIPTS    = 'test$2222.com'
+                EMAIL_CC_RECEIPTS = 'test$2222.com'
+            }
+            steps {
+                sh 'sudo ansible-playbook -i /etc/ansible/ansible/monthly-patch-report-inventory /etc/ansible/ansible/playbooks/monthly_patch_report/mails.yaml -u svc_an --private-key "/home/svc_an/.ssh/id_rsa" --vault-password-file "/home/svc_an/.vault_pass" -i ${GROUP_NAME} -e "group_name=${GROUP_NAME}"'
+            }
+        }
+
+        stage('Send mail for 123 Servers') {
+            environment {
+                GROUP_NAME        = '123'
+                EMAIL_RECEIPTS    = 'test$2222.com'
+                EMAIL_CC_RECEIPTS = 'test$2222.com'
+            }
+            steps {
+                sh 'sudo ansible-playbook -i /etc/ansible/ansible/monthly-patch-report-inventory /etc/ansible/ansible/playbooks/monthly_patch_report/mails.yaml -u svc_an --private-key "/home/svc_an/.ssh/id_rsa" --vault-password-file "/home/svc_an/.vault_pass" -i ${GROUP_NAME} -e "group_name=${GROUP_NAME}"'
+            }
+        }
+
+        stage('Send mail for 123 Servers') {
+            environment {
+                GROUP_NAME        = '123'
+                EMAIL_RECEIPTS    = 'test$2222.com'
+                EMAIL_CC_RECEIPTS = 'test$2222.com'
+            }
+            steps {
+                sh 'sudo ansible-playbook -i /etc/ansible/ansible/monthly-patch-report-inventory /etc/ansible/ansible/playbooks/monthly_patch_report/mails.yaml -u svc_an --private-key "/home/svc_an/.ssh/id_rsa" --vault-password-file "/home/svc_an/.vault_pass" -i ${GROUP_NAME} -e "group_name=${GROUP_NAME}"'
+            }
+        }
+
+        stage('Send mail for 123 servers') {
+            environment {
+                GROUP_NAME        = '123_ADMINS'
+                EMAIL_RECEIPTS    = 'test$2222.com'
+                EMAIL_CC_RECEIPTS = 'test$2222.com'
+            }
+            steps {
+                sh 'sudo ansible-playbook -i /etc/ansible/ansible/monthly-patch-report-inventory /etc/ansible/ansible/playbooks/monthly_patch_report/mails.yaml -u svc_an --private-key "/home/svc_an/.ssh/id_rsa" --vault-password-file "/home/svc_an/.vault_pass" -i ${GROUP_NAME} -e "group_name=${GROUP_NAME}"'
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                currentTime = sh(returnStdout: true, script: 'date').trim()
+            }
+        }
+        success {
+            mail to: "${EMAIL_RECEIPTS}, ${EMAIL_CC_RECEIPTS}",
+                 subject: "Success : ${currentBuild.fullDisplayName}",
+                 body: "${currentBuild.fullDisplayName} has been completed successfully at ${currentTime}\n\nTime taken to complete the task: ${currentBuild.durationString.minus(' and counting')}\n\nInfo see the Job output click on the URL\n\n ${BUILD_URL}/consoleText"
+        }
+        failure {
+            mail to: "${EMAIL_RECEIPTS}, ${EMAIL_CC_RECEIPTS}",
+                 subject: "Failed : ${currentBuild.fullDisplayName}",
+                 body: "Something is wrong with ${currentBuild.fullDisplayName}, \n\nTo see the Job output click on this URL\n\n ${BUILD_URL}/consoleText"
+        }
+    }
+}
