@@ -1,0 +1,63 @@
+pipeline {
+    agent any
+    environment {
+        EMAIL_RECEIPTS    = 'afff812345.com'
+        EMAIL_CC_RECEIPTS = 'afff812345.com'
+    }
+
+    stages {
+        stage('Patch Schedule') {
+            steps {
+                script {
+                    def DATE_TIME = sh(script: "date", returnStdout: true).trim()
+                    def PATCHING_YEAR = sh(script: "date +%Y", returnStdout: true).trim()
+                    env.PATCH_MONTH = sh(script: "date +%m", returnStdout: true).trim()
+                    env.PATCH_MONTH_RF2 = sh(script: "date +%b", returnStdout: true).trim()
+                    def NONPROD_DATE = sh(script: "cal \${env.PATCH_MONTH} \${env.PATCHING_YEAR} | awk 'NR>2 {print \$3}' | grep -v '^\$' | sed -n '2p'", returnStdout: true).trim()
+                    def PROD_DATE = sh(script: "cal \${env.PATCH_MONTH} \${env.PATCHING_YEAR} | awk 'NR>2 {print \$5}' | grep -v '^\$' | sed -n '2p'", returnStdout: true).trim()
+                    env.NONPROD_PATCH_SCHEDULE = "\${env.PATCH_MONTH_RF2}-\${NONPROD_DATE}-\${env.PATCHING_YEAR}"
+                    env.PROD_PATCH_SCHEDULE    = "\${env.PATCH_MONTH_RF2}-\${PROD_DATE}-\${env.PATCHING_YEAR}"
+
+                    echo "=============================="
+                    echo "Date/Time : \${DATE_TIME}"
+                    echo "=============================="
+                    echo "Non-PROD (2nd Tuesday) :: \${env.NONPROD_PATCH_SCHEDULE}"
+                    echo "PROD     (2nd Thursday) :: \${env.PROD_PATCH_SCHEDULE}"
+                    echo "=============================="
+                }
+            }
+        }
+
+        stage('Send mail for test Team Servers') {
+            environment {
+                GROUP_NAME        = 'test:mango'
+                EMAIL_RECEIPTS    = 'afff812345.com'
+                EMAIL_CC_RECEIPTS = 'afff812345.com'
+            }
+
+            steps {
+                sh "sudo ansible-playbook -i /etc/ansible/ansible/jenkins /etc/ansible/playbooks/patching_notifications/main.yaml -u mango --private-key '/home/mango/.ssh/id_rsa' --vault-password-file '/home/mango/.vault_pass' -e \"group_name=\${GROUP_NAME} EMAIL_RECEIPTS=\${EMAIL_RECEIPTS} EMAIL_CC_RECEIPTS=\${EMAIL_CC_RECEIPTS}\""
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                currentTime = sh(returnStdout: true, script: 'date').trim()
+            }
+        }
+
+        success {
+            mail to: "\${EMAIL_RECEIPTS}, \${EMAIL_CC_RECEIPTS}",
+                 subject: "Success : \${currentBuild.fullDisplayName}",
+                 body: "\${currentBuild.fullDisplayName} has been completed successfully at \${currentTime}\n\nTime taken to complete the task: \${currentBuild.durationString.minus(' and counting')}\n\nTo see the Job output click on the URL\n\n \${BUILD_URL}/consoleText"
+        }
+
+        failure {
+            mail to: "\${EMAIL_RECEIPTS}, \${EMAIL_CC_RECEIPTS}",
+                 subject: "Failed : \${currentBuild.fullDisplayName}",
+                 body: "Something is wrong with \${currentBuild.fullDisplayName}. \n\nTo see the Job output click on this URL\n\n \${BUILD_URL}/consoleText"
+        }
+    }
+}
