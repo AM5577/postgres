@@ -1,0 +1,79 @@
+pipeline {
+    agent any
+    environment {
+        EMAIL_RECEIPTS    = 'your@email.com'
+        EMAIL_CC_RECEIPTS = 'yourcc@email.com'
+    }
+
+    stages {
+        stage('Patch Schedule') {
+            steps {
+                script {
+                    def DATE_TIME       = sh(script: "date", returnStdout: true).trim()
+                    def PATCHING_YEAR   = sh(script: "date +%Y", returnStdout: true).trim()
+                    def PATCH_MONTH     = sh(script: "date +%m", returnStdout: true).trim()
+                    def PATCH_MONTH_RF2 = sh(script: "date +%b", returnStdout: true).trim()
+
+                    env.PATCHING_YEAR   = PATCHING_YEAR
+                    env.PATCH_MONTH     = PATCH_MONTH
+                    env.PATCH_MONTH_RF2 = PATCH_MONTH_RF2
+
+                    def NONPROD_DATE = sh(
+                        script: "cal ${PATCH_MONTH} ${PATCHING_YEAR} | awk 'NR>2 {print \$3}' | grep -v '^\$' | sed -n '2p'",
+                        returnStdout: true
+                    ).trim()
+
+                    def PROD_DATE = sh(
+                        script: "cal ${PATCH_MONTH} ${PATCHING_YEAR} | awk 'NR>2 {print \$5}' | grep -v '^\$' | sed -n '2p'",
+                        returnStdout: true
+                    ).trim()
+
+                    env.NONPROD_PATCH_SCHEDULE = "${PATCH_MONTH_RF2}-${NONPROD_DATE}-${PATCHING_YEAR}"
+                    env.PROD_PATCH_SCHEDULE    = "${PATCH_MONTH_RF2}-${PROD_DATE}-${PATCHING_YEAR}"
+
+                    echo "=============================="
+                    echo "Date/Time : ${DATE_TIME}"
+                    echo "=============================="
+                    echo "Non-PROD (2nd Tuesday)  :: ${env.NONPROD_PATCH_SCHEDULE}"
+                    echo "PROD     (2nd Thursday) :: ${env.PROD_PATCH_SCHEDULE}"
+                    echo "=============================="
+                }
+            }
+        }
+
+        stage('Send mail for 111 Team Servers') {
+            environment {
+                GROUP_NAME        = '111'
+                EMAIL_RECEIPTS    = 'your@email.com'
+                EMAIL_CC_RECEIPTS = 'yourcc@email.com'
+            }
+            steps {
+                // FIX: Added PATCH_MONTH_BKP and PATCH_YEAR required by Ansible main.yml
+                sh "sudo ansible-playbook -i /etc/ansible/ansible/jenkins /etc/ansible/playbooks/patching_notifications/main.yaml -u mango --private-key '/home/mango/.ssh/id_rsa' --vault-password-file '/home/mango/.vault_pass' -e \"group_name=${env.GROUP_NAME} EMAIL_RECEIPTS=${env.EMAIL_RECEIPTS} EMAIL_CC_RECEIPTS=${env.EMAIL_CC_RECEIPTS} GROUP_NAME=${env.GROUP_NAME} PATCH_MONTH_BKP=${env.PATCH_MONTH_RF2} PATCH_YEAR=${env.PATCHING_YEAR}\""
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                def currentTime = sh(returnStdout: true, script: 'date').trim()
+                env.CURRENT_TIME = currentTime
+            }
+        }
+
+        success {
+            mail to: "${EMAIL_RECEIPTS}",
+                 cc: "${EMAIL_CC_RECEIPTS}",
+                 subject: "Success : ${currentBuild.fullDisplayName}",
+                 body: "${currentBuild.fullDisplayName} has been completed successfully at ${env.CURRENT_TIME}\n\nTime taken to complete the task: ${currentBuild.durationString.minus(' and counting')}\n\nTo see the Job output click on the URL\n\n ${BUILD_URL}/consoleText"
+        }
+
+        failure {
+            mail to: "${EMAIL_RECEIPTS}",
+                 cc: "${EMAIL_CC_RECEIPTS}",
+                 subject: "Failed : ${currentBuild.fullDisplayName}",
+                 body: "Something is wrong with ${currentBuild.fullDisplayName}. \n\nTo see the Job output click on this URL\n\n ${BUILD_URL}/consoleText"
+        }
+    }
+}
