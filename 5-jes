@@ -1,0 +1,120 @@
+#!/bin/bash
+
+#PATCHING_YEAR=`date +%Y`
+PATCHING_YEAR=`date +%Y -d 'next year'`
+
+echo "January-`date +%Y -d 'next year'`"
+#echo "January-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 01 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-01-${PATCHING_YEAR}"
+echo "PROD     :: `cal 01 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-01-${PATCHING_YEAR}"
+printf "\n"
+
+echo "February-`date +%Y -d 'next year'`"
+#echo "February-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 02 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-02-${PATCHING_YEAR}"
+echo "PROD     :: `cal 02 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-02-${PATCHING_YEAR}"
+printf "\n"
+
+echo "March-`date +%Y -d 'next year'`"
+#echo "March-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 03 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-03-${PATCHING_YEAR}"
+echo "PROD     :: `cal 03 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-03-${PATCHING_YEAR}"
+printf "\n"
+
+echo "April-`date +%Y -d 'next year'`"
+#echo "April-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 04 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-04-${PATCHING_YEAR}"
+echo "PROD     :: `cal 04 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-04-${PATCHING_YEAR}"
+printf "\n"
+
+echo "May-`date +%Y -d 'next year'`"
+#echo "May-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 05 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-05-${PATCHING_YEAR}"
+echo "PROD     :: `cal 05 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-05-${PATCHING_YEAR}"
+printf "\n"
+
+echo "June-`date +%Y -d 'next year'`"
+#echo "June-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 06 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-06-${PATCHING_YEAR}"
+echo "PROD     :: `cal 06 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-06-${PATCHING_YEAR}"
+printf "\n"
+
+echo "July-`date +%Y -d 'next year'`"
+#echo "July-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 07 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-07-${PATCHING_YEAR}"
+echo "PROD     :: `cal 07 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-07-${PATCHING_YEAR}"
+printf "\n"
+
+echo "August-`date +%Y -d 'next year'`"
+#echo "August-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 08 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-08-${PATCHING_YEAR}"
+echo "PROD     :: `cal 08 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-08-${PATCHING_YEAR}"
+printf "\n"
+
+echo "September-`date +%Y -d 'next year'`"
+#echo "September-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 09 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-09-${PATCHING_YEAR}"
+echo "PROD     :: `cal 09 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-09-${PATCHING_YEAR}"
+printf "\n"
+
+echo "October-`date +%Y -d 'next year'`"
+#echo "October-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 10 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-10-${PATCHING_YEAR}"
+echo "PROD     :: `cal 10 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-10-${PATCHING_YEAR}"
+printf "\n"
+
+echo "November-`date +%Y -d 'next year'`"
+#echo "November-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 11 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-11-${PATCHING_YEAR}"
+echo "PROD     :: `cal 11 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-11-${PATCHING_YEAR}"
+printf "\n"
+
+echo "December-`date +%Y -d 'next year'`"
+#echo "December-`date +%Y`"
+echo "=================================="
+echo "Non-PROD :: `cal 12 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c7,8 | xargs`-12-${PATCHING_YEAR}"
+echo "PROD     :: `cal 12 ${PATCHING_YEAR} | grep ^[11-19] | tail -1 | cut -c13,14 | xargs`-12-${PATCHING_YEAR}"
+printf "\n"
+
+
+pipeline {
+    agent any
+    environment {
+        EMAIL_RECEIPTS    = '123.123@123.com'
+        EMAIL_CC_RECEIPTS = '123.123@123.com'
+    }
+    stages {
+        stage('Patch Schedule') {
+            steps {
+                script {
+                    def DATE_TIME          = sh(script: "date", returnStdout: true).trim()
+                    def PATCH_MONTH_BKP    = sh(script: "date '+%B'", returnStdout: true).trim()
+                    def PATCH_YEAR         = sh(script: "date '+%Y'", returnStdout: true).trim()
+                    def PATCH_MONTH        = sh(script: "date '+%m'", returnStdout: true).trim()
+                    def NONPROD_PATCH_DATE = sh(script: "cal ${PATCH_MONTH} ${PATCH_YEAR} | awk 'NR>2 {print \$3}' | grep -v '^\$' | sed -n '2p'", returnStdout: true).trim()
+                    def PROD_PATCH_DATE    = sh(script: "cal ${PATCH_MONTH} ${PATCH_YEAR} | awk 'NR>2 {print \$5}' | grep -v '^\$' | sed -n '2p'", returnStdout: true).trim()
+                    def NONPROD_PATCH_SCHEDULE = sh(script: "echo ${PATCH_MONTH_BKP}-${NONPROD_PATCH_DATE}-${PATCH_YEAR}", returnStdout: true).trim()
+                    def PROD_PATCH_SCHEDULE    = sh(script: "echo ${PATCH_MONTH_BKP}-${PROD_PATCH_DATE}-${PATCH_YEAR}", returnStdout: true).trim()
+
+                    echo "=================================="
+                    echo "Date/Time : ${DATE_TIME}"
+                    echo "=================================="
+                    echo "Non-PROD (2nd Tuesday)  :: ${NONPROD_PATCH_SCHEDULE}"
+                    echo "PROD     (2nd Thursday) :: ${PROD_PATCH_SCHEDULE}"
+                    echo "=================================="
+                }
+            }
+        }
+    }
+}
