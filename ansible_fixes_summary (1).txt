@@ -1,0 +1,195 @@
+=====================================================
+ANSIBLE UPGRADE - END TO END FIXES SUMMARY
+Date: May 24, 2026
+=====================================================
+
+ENVIRONMENT
+-----------
+Control Node  : RHEL (svc_ans user)
+Target OS     : Ubuntu 22.04, Ubuntu 24.04, Oracle Linux 8/9
+Ansible Venv  : /home/svc_ans/ansible-venv
+Config File   : /etc/ansible/ansible.cfg
+
+=====================================================
+ISSUE 1: ansible.module_utils.six.moves error
+=====================================================
+ROOT CAUSE  : ansible-core 2.13.13 incompatible with Python 3.12
+FIX         : Upgraded ansible and ansible-core
+COMMANDS    :
+  source /home/svc_ans/ansible-venv/bin/activate
+  pip install ansible==9.5.1 ansible-core==2.16.6
+
+FINAL VERSIONS:
+  ansible       : 9.5.1
+  ansible-core  : 2.16.6
+
+=====================================================
+ISSUE 2: interpreter_python pointing to venv path
+=====================================================
+ROOT CAUSE  : ansible.cfg had venv path for remote interpreter
+  interpreter_python = /home/svc_ans/ansible-venv/bin/python3
+FIX         : Changed to system python on target
+FILE        : /etc/ansible/ansible.cfg
+CHANGE      :
+  interpreter_python = /usr/bin/python3
+
+=====================================================
+ISSUE 3: pyVmomi VmomiJSONEncoder error
+=====================================================
+ROOT CAUSE  : pyVmomi 9.x broke VmomiJSONEncoder
+FIX         : Downgraded pyVmomi to 8.x
+COMMAND     :
+  pip install pyvmomi==8.0.3.0.1
+
+=====================================================
+ISSUE 4: sudo command not found in Jenkins
+=====================================================
+ROOT CAUSE  : Jenkins sudo restricted PATH
+FIX         : Used sudo -E with full venv path in Jenkins
+JENKINS CMD :
+  sudo -E /home/svc_ans/ansible-venv/bin/ansible-playbook \
+  -i /etc/ansible/ansible/${VM_HOSTNAME} \
+  /etc/ansible/ansible/playbooks/provisioning/main.yml \
+  -u svc_ans \
+  --private-key /home/svc_ans/.ssh/id_rsa \
+  --vault-password-file /home/svc_ans/.vault_pass
+
+=====================================================
+ISSUE 5: community.vmware - VM powered on after clone
+=====================================================
+ROOT CAUSE  : community.vmware 3.x+ changed default behaviour
+             state: present now powers on VM after clone
+             Old version left VM powered off
+FIX         : Modified playbook to explicitly control power state
+FILE        : /etc/ansible/ansible/playbooks/vmware-ansible/
+             deployment/main_buildwithdisk.yml
+CHANGES     :
+  1. Clone task - changed state: present to state: poweredoff
+  2. Clone task - changed wait_for_ip_address: True to False
+  3. Added power off task before disk add
+  4. Added power on task after disk add
+
+PLAYBOOK FLOW:
+  Clone VM (poweredoff)
+      |
+  Power off VM (safety check)
+      |
+  Add disk
+      |
+  Power on VM
+      |
+  Wait 120s for network
+      |
+  Continue provisioning
+
+=====================================================
+ISSUE 6: ansible.builtin.include removed
+=====================================================
+ROOT CAUSE  : ansible-core 2.16 removed ansible.builtin.include
+FIX         : Replaced all include: with include_tasks:
+COMMAND     :
+  # Backup first
+  cp -r /etc/ansible/ansible/roles/ /etc/ansible/ansible/roles_backup/
+
+  # Fix all files
+  find /etc/ansible/ansible/roles/ -name "*.yml" \
+  -exec sed -i 's/^\(\s*\)include:/\1include_tasks:/g' {} \;
+
+=====================================================
+ISSUE 7: /etc/resolvconf/resolv.conf.d does not exist
+=====================================================
+ROOT CAUSE  : Ubuntu 22/24 doesn't create this directory by default
+FIX         : Added directory creation task before DNS config
+FILE        : /etc/ansible/ansible/roles/provisioning/tasks/Ubuntu.yaml
+ADDED TASK  :
+  - name: Ubuntu | create resolvconf directory
+    file:
+      path: /etc/resolvconf/resolv.conf.d/
+      state: directory
+      mode: '0755'
+    tags: resolvconf
+
+=====================================================
+ISSUE 8: sshd service not found on Ubuntu
+=====================================================
+ROOT CAUSE  : Ubuntu uses 'ssh' not 'sshd' as service name
+FIX         : Changed service name in role files
+FILES       :
+  /etc/ansible/ansible/roles/provisioning/tasks/Ubuntu.yaml (line 104)
+  /etc/ansible/ansible/roles/access/tasks/main.yaml (line 11)
+CHANGE      :
+  name: sshd  ->  name: ssh
+
+=====================================================
+ISSUE 9: lwsmd service not found
+=====================================================
+ROOT CAUSE  : PBIS not installed on Ubuntu VM
+FIX         : Added ignore_errors: yes to service task
+FILE        : /etc/ansible/ansible/roles/pbis/tasks/main.yaml
+CHANGE      :
+  - name: PBIS | Ensure PBIS service is running.
+    service:
+      name: lwsmd
+      state: started
+      enabled: yes
+    ignore_errors: yes
+    tags: pbis
+
+=====================================================
+ISSUE 10: PBIS domainjoin-cli not found
+=====================================================
+ROOT CAUSE  : No Ubuntu task file for PBIS installation
+FIX         : Created Ubuntu.yaml for PBIS role
+FILE CREATED: /etc/ansible/ansible/roles/pbis/tasks/Ubuntu.yaml
+CONTENT     :
+  ---
+  - name: Ubuntu | Add PBIS apt repository
+    apt_repository:
+      repo: "deb [trusted=yes] http://1235 default all"
+      state: present
+
+  - name: Ubuntu | Install PBIS packages
+    apt:
+      pkg:
+        - pbis-open
+        - pbis-open-upgrade
+      state: present
+
+ADDED TO main.yaml:
+  - include_tasks: Ubuntu.yaml
+    when: ansible_distribution == 'Ubuntu'
+
+=====================================================
+ISSUE 11: Ubuntu 24 missing sshd config template
+=====================================================
+FIX         : Added Ubuntu 24 task in provisioning role
+FILE        : /etc/ansible/ansible/roles/provisioning/tasks/Ubuntu.yaml
+ADDED       :
+  - name: Ubuntu24 | Apply standard sshd config
+    template:
+      src: sshd.conf-ubuntu24.j2
+      dest: /etc/ssh/sshd_config
+    when: ansible_facts['distribution_major_version'] == "24"
+
+=====================================================
+FINAL COMPONENT VERSIONS
+=====================================================
+ansible              : 9.5.1
+ansible-core         : 2.16.6
+pyVmomi              : 8.0.3.0.1
+community.vmware     : 3.11.0
+vmware.vmware_rest   : 2.3.1
+Python (venv)        : 3.11.13
+Python (targets)     : 3.12.x (/usr/bin/python3)
+
+=====================================================
+COMPATIBLE WITH
+=====================================================
+- Oracle Linux 8
+- Oracle Linux 9
+- Ubuntu 22.04
+- Ubuntu 24.04
+
+=====================================================
+END OF SUMMARY
+=====================================================

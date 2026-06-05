@@ -1,0 +1,727 @@
+==================================================================================
+NGINX REVERSE PROXY SETUP — JENKINS & RUNDECK (HTTPS ONLY, PRODUCTION GRADE)
+==================================================================================
+
+OVERVIEW
+--------
+This configuration sets up Nginx as a secure reverse proxy for two internal
+pre-production services:
+
+  1. Jenkins  → https://jenkinspreprod.local  (proxied to 127.0.0.1:8080)
+  2. Rundeck  → https://rundeckpreprod.local  (proxied to 127.0.0.1:4440)
+
+Both services:
+  - Are only accessible over HTTPS (TLS 1.2 / 1.3)
+  - Listen on IPv4 ONLY — IPv6 is explicitly disabled
+  - Drop all plain HTTP connections silently (no redirect, no response)
+  - Use self-signed SSL certificates (internal/preprod use)
+  - Are protected by rate limiting, security headers, and sensitive file blocking
+  - Log access and errors to separate log files
+
+NOTE — IPV4 ONLY:
+  All "listen [::]:PORT" (IPv6) directives have been removed. Nginx will only
+  bind to 0.0.0.0 (all IPv4 interfaces). If your OS has "net.ipv6.bindv6only=0"
+  (dual-stack mode, common on Linux), a single IPv4 listen would also accept
+  IPv6 — removing the [::] lines makes the intent unambiguous and ensures
+  IPv6 clients are never served regardless of kernel settings.
+
+
+==================================================================================
+STEP 1: SSL CERTIFICATE GENERATION
+==================================================================================
+
+PURPOSE:
+  Before Nginx can serve HTTPS, it needs an SSL certificate and private key for
+  each domain. Since these are internal .local domains (not public internet),
+  we generate self-signed certificates using OpenSSL.
+
+  A self-signed cert is trusted only if you manually add it to your browser or
+  OS trust store. For internal/preprod use, this is acceptable.
+
+-- Jenkins Certificate --
+
+  [ -f /etc/ssl/certs/jenkins.crt ] || \
+  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /etc/ssl/private/jenkins.key \
+    -out    /etc/ssl/certs/jenkins.crt \
+    -subj   "/CN=jenkinspreprod.local/O=Preprod/C=US" \
+    -addext "subjectAltName=DNS:jenkinspreprod.local"
+
+  EXPLANATION:
+    [ -f ... ] ||       → Only generate if the file does NOT already exist
+                          (prevents accidentally overwriting a working cert)
+    -x509               → Output a self-signed certificate (not a CSR)
+    -nodes              → No passphrase on the private key (required for Nginx
+                          to start without manual password entry)
+    -days 365           → Certificate valid for 1 year
+    -newkey rsa:2048    → Generate a new 2048-bit RSA key pair
+    -keyout             → Where to save the private key
+    -out                → Where to save the certificate
+    -subj               → Certificate subject: CN = hostname, O = org, C = country
+    -addext SAN         → Subject Alternative Name — modern browsers require this;
+                          the CN alone is no longer sufficient for hostname validation
+
+  chmod 600 /etc/ssl/private/jenkins.key
+    → Restrict private key to root-only read/write. If this file is readable by
+      other users, your TLS security is compromised.
+
+-- Rundeck Certificate --
+
+  Same process as Jenkins, just different CN/SAN and output file paths:
+    -keyout /etc/ssl/private/rundeck.key
+    -out    /etc/ssl/certs/rundeck.crt
+    -subj   "/CN=rundeckpreprod.local/O=Preprod/C=US"
+    -addext "subjectAltName=DNS:rundeckpreprod.local"
+
+-- Shared DH Parameters --
+
+  [ -f /etc/ssl/certs/dhparam.pem ] || \
+    openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
+
+  EXPLANATION:
+    DH (Diffie-Hellman) parameters are used by the DHE cipher suites to
+    negotiate a session key. Using a custom dhparam.pem (instead of the OpenSSL
+    default) prevents the Logjam attack. Both Jenkins and Rundeck share the same
+    file — this is safe and avoids generating it twice (it can take 1-2 minutes).
+
+
+==================================================================================
+STEP 2: NGINX CONFIG FILE
+==================================================================================
+
+Written to: /etc/nginx/conf.d/jenkins-rundeck.conf
+
+------------------------------------------------------------------
+PART A: RATE LIMITING ZONES
+------------------------------------------------------------------
+
+  limit_req_zone $binary_remote_addr zone=jenkins:10m rate=30r/s;
+  limit_req_zone $binary_remote_addr zone=rundeck:10m  rate=30r/s;
+
+  EXPLANATION:
+    limit_req_zone defines a shared memory zone for tracking request rates.
+
+    $binary_remote_addr → Track by client IP address (binary format uses less
+                          memory than string format)
+    zone=jenkins:10m    → Name the zone "jenkins", allocate 10MB of memory.
+                          10MB holds ~160,000 IP entries — sufficient for preprod.
+    rate=30r/s          → Allow a maximum of 30 requests per second per IP.
+
+    WHY SEPARATE ZONES?
+      Each zone is an independent counter. If Rundeck gets a traffic spike or a
+      bot hammering it, it won't consume Jenkins's rate limit budget and vice
+      versa. Shared zones would mean one service's abuse affects the other.
+
+------------------------------------------------------------------
+PART B: UPSTREAM BLOCKS
+------------------------------------------------------------------
+
+  upstream jenkins {
+      keepalive 32;
+      server 127.0.0.1:8080;
+  }
+
+  upstream rundeck {
+      keepalive 32;
+      server 127.0.0.1:4440;
+  }
+
+  EXPLANATION:
+    upstream defines the backend server that Nginx forwards requests to.
+
+    server 127.0.0.1:PORT → Jenkins listens on port 8080 (default).
+                             Rundeck listens on port 4440 (default).
+                             Using loopback (127.0.0.1) means traffic never
+                             leaves the machine — more secure than binding
+                             to a public/private NIC.
+
+    keepalive 32 → Maintain up to 32 persistent (keep-alive) connections to
+                   the backend. Without this, each proxied request would open
+                   and close a new TCP connection — wasteful. Keep-alive
+                   connections are reused, reducing latency and CPU overhead.
+
+------------------------------------------------------------------
+PART C: HTTP BLOCK — SILENT DROP
+------------------------------------------------------------------
+
+  server {
+      listen      80;
+      server_name jenkinspreprod.local rundeckpreprod.local;
+      return      444;
+  }
+
+  EXPLANATION:
+    This block handles all plain HTTP (port 80) traffic for both domains.
+
+    listen 80   → IPv4 only. The [::]:80 IPv6 directive has been removed.
+                  Nginx binds to 0.0.0.0:80 — all IPv4 interfaces on the host.
+    return 444  → Nginx-specific: closes the connection immediately with
+                  NO response sent to the client. This is intentionally
+                  different from a 301 redirect to HTTPS.
+
+    WHY 444 INSTEAD OF REDIRECT?
+      - A 301 redirect tells attackers/scanners the service exists and where
+        to find it. Silent drop gives nothing away.
+      - Bots and port scanners get no response — they move on faster.
+      - For internal preprod, users should always use the HTTPS URL directly.
+
+------------------------------------------------------------------
+PART D: JENKINS HTTPS SERVER BLOCK
+------------------------------------------------------------------
+
+  server {
+      listen      443 ssl http2;
+      server_name jenkinspreprod.local;
+
+      EXPLANATION:
+        listen 443 ssl http2 → Accept HTTPS connections on IPv4 only.
+                                The [::]:443 IPv6 directive has been removed.
+                                "http2" enables HTTP/2 protocol, which is
+                                multiplexed (multiple requests over one
+                                connection), header-compressed, and faster
+                                than HTTP/1.1 for browser clients.
+
+  ── TLS CONFIGURATION ──────────────────────────────────────────
+
+      ssl_certificate     /etc/ssl/certs/jenkins.crt;
+      ssl_certificate_key /etc/ssl/private/jenkins.key;
+      ssl_dhparam         /etc/ssl/certs/dhparam.pem;
+
+        → Point Nginx to the cert, private key, and DH params generated in Step 1.
+
+      ssl_protocols TLSv1.2 TLSv1.3;
+
+        → Only allow TLS 1.2 and 1.3.
+          TLS 1.0 and 1.1 are deprecated (vulnerable to BEAST, POODLE attacks).
+
+      ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:...;
+
+        → Whitelist of strong cipher suites. All use:
+            ECDHE/DHE  = Perfect Forward Secrecy (PFS) — past sessions can't
+                         be decrypted even if the private key is later stolen.
+            AES-GCM    = Authenticated encryption (no separate HMAC needed).
+            CHACHA20   = Fast, secure alternative for clients without AES hardware.
+
+      ssl_prefer_server_ciphers off;
+
+        → Let the client pick the cipher from our approved list. Modern clients
+          pick well. This improves compatibility without sacrificing security.
+
+      ssl_session_cache shared:SSL:10m;
+      ssl_session_timeout 1d;
+      ssl_session_tickets off;
+
+        → Session cache: store negotiated TLS sessions for up to 1 day so
+          returning clients skip the full handshake (faster reconnects).
+          Session tickets are disabled because they can undermine PFS if the
+          ticket encryption key is compromised.
+
+      ssl_buffer_size 4k;
+
+        → Default buffer is 16k. Smaller buffer (4k) reduces TTFB (Time To
+          First Byte) for small responses like API calls and HTML pages.
+
+      ssl_stapling off;
+      ssl_stapling_verify off;
+
+        → OCSP stapling is disabled because self-signed certs have no OCSP
+          responder. Enabling it with self-signed certs causes Nginx warnings
+          and delays. (Enable this if you switch to CA-signed certs.)
+
+  ── SECURITY HEADERS ───────────────────────────────────────────
+
+      These HTTP response headers instruct the browser to enforce additional
+      security policies. The "always" keyword ensures they're sent even on
+      error responses (4xx, 5xx).
+
+      Strict-Transport-Security (HSTS):
+        "max-age=63072000; includeSubDomains; preload"
+        → Tell browsers to ONLY connect via HTTPS for the next 2 years (63072000s).
+          includeSubDomains = applies to all subdomains.
+          preload = eligible for browser HSTS preload lists (hardcoded HTTPS).
+          WARNING: Only use preload if ALL subdomains support HTTPS.
+
+      X-Frame-Options: SAMEORIGIN
+        → Prevent this page from being embedded in an <iframe> on another domain.
+          Blocks clickjacking attacks.
+
+      X-Content-Type-Options: nosniff
+        → Prevent browsers from MIME-sniffing (guessing content type). Forces
+          browser to use the declared Content-Type. Blocks drive-by download attacks.
+
+      X-XSS-Protection: 1; mode=block
+        → Legacy XSS filter for older browsers (IE/early Chrome). Modern browsers
+          use CSP instead, but this is kept for defence-in-depth.
+
+      Referrer-Policy: strict-origin-when-cross-origin
+        → When navigating to another domain, only send the origin (no path/query).
+          Prevents leaking internal URLs or tokens via the Referer header.
+
+      Permissions-Policy: geolocation=(), microphone=(), camera=()
+        → Disable access to geolocation, microphone, and camera for this page.
+          Good practice for CI/CD tools that have no need for these browser APIs.
+
+      Content-Security-Policy (CSP):
+        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval';
+         style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;"
+        → Controls what resources the page can load.
+          'self'           = only same origin allowed by default.
+          'unsafe-inline'  = required by Jenkins/Rundeck (inline scripts/styles).
+          'unsafe-eval'    = required by some Jenkins UI components (eval()).
+          data:            = allows inline base64 images and fonts.
+          NOTE: unsafe-inline/eval weaken CSP but are unavoidable for Jenkins/
+          Rundeck without major UI patching.
+
+      server_tokens off;
+        → Hide the Nginx version number from error pages and response headers.
+          Reduces attacker reconnaissance (they can't target version-specific CVEs).
+
+  ── LOGGING ────────────────────────────────────────────────────
+
+      access_log /var/log/nginx/jenkins.access.log combined buffer=16k flush=5s;
+      error_log  /var/log/nginx/jenkins.error.log warn;
+
+        → Separate log files per service — easier to grep and tail in isolation.
+          buffer=16k  = batch log writes in 16KB chunks (reduces disk I/O).
+          flush=5s    = flush buffer to disk every 5 seconds at minimum.
+          warn level  = only log warnings and above (suppress info/debug noise).
+
+  ── REQUEST LIMITS ─────────────────────────────────────────────
+
+      client_max_body_size 100m;
+        → Allow uploads up to 100MB (needed for Jenkins artifact uploads,
+          Rundeck job imports). Increase if you upload large build artifacts.
+
+      client_body_timeout 60s;
+        → If client stops sending body data for 60s, drop the connection.
+          Prevents slow-upload DoS attacks (Slowloris-style).
+
+      client_header_timeout 30s;
+        → If client stops sending headers for 30s, drop the connection.
+
+      keepalive_timeout 65s;
+        → Keep idle client connections open for 65s before closing.
+          Matches common browser keep-alive defaults.
+
+      send_timeout 60s;
+        → If client stops receiving response data for 60s, drop the connection.
+
+  ── GZIP COMPRESSION ───────────────────────────────────────────
+
+      gzip on;
+        → Enable gzip compression for responses.
+
+      gzip_vary on;
+        → Add "Vary: Accept-Encoding" header so CDNs/proxies cache both
+          compressed and uncompressed versions correctly.
+
+      gzip_proxied any;
+        → Compress responses for all proxied requests (not just direct clients).
+
+      gzip_comp_level 6;
+        → Compression level 1-9. Level 6 is a good balance of CPU vs ratio.
+          Higher = smaller files but more CPU. Lower = faster but larger.
+
+      gzip_min_length 1024;
+        → Don't compress responses smaller than 1KB — overhead isn't worth it
+          for tiny payloads.
+
+      gzip_types ...;
+        → Only compress these MIME types. Images (JPEG, PNG) are already
+          compressed — trying to gzip them wastes CPU and may increase size.
+
+  ── BLOCK SENSITIVE FILES ──────────────────────────────────────
+
+      location ~* \.(git|env|htaccess|htpasswd|ini|log|sh|sql|conf|bak|swp)$ {
+          deny all;
+          return 404;
+      }
+
+        → Regex match (case-insensitive ~*) for common sensitive file extensions.
+          Returns 404 instead of 403 — 403 reveals the file exists but is
+          forbidden. 404 gives nothing away.
+          Prevents accidental exposure of .env files, shell scripts, DB dumps,
+          swap files, etc. that might be in the web root.
+
+  ── PROXY LOCATION BLOCK ───────────────────────────────────────
+
+      location / {
+
+        limit_req zone=jenkins burst=20 nodelay;
+          → Apply the jenkins rate limit zone here.
+            burst=20   = allow up to 20 extra requests above the 30r/s rate
+                         in a short burst before throttling kicks in.
+            nodelay    = don't queue burst requests — either serve immediately
+                         or reject with 503. Prevents memory buildup from queuing.
+
+        proxy_pass http://jenkins;
+          → Forward the request to the upstream "jenkins" block (127.0.0.1:8080).
+
+        proxy_http_version 1.1;
+          → Required for keep-alive connections to the upstream. HTTP/1.0 doesn't
+            support persistent connections.
+
+        proxy_set_header Host $host;
+          → Pass the original Host header to Jenkins. Without this, Jenkins
+            sees "127.0.0.1:8080" as the host and may generate wrong URLs
+            in redirects and emails.
+
+        proxy_set_header X-Real-IP $remote_addr;
+          → Pass the real client IP. Jenkins logs and access controls use this.
+
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+          → Pass the full IP chain (client → proxy hops). Standard header used
+            by apps behind proxies to determine origin IP.
+
+        proxy_set_header X-Forwarded-Proto $scheme;
+          → Tell Jenkins the original protocol was HTTPS. Without this, Jenkins
+            thinks it's receiving plain HTTP and may redirect to HTTP URLs.
+
+        proxy_set_header X-Forwarded-Port $server_port;
+          → Pass the original port (443) to Jenkins for correct URL generation.
+
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $http_connection;
+          → Required to support WebSocket connections (used by Jenkins for
+            real-time build log streaming and the terminal).
+
+        proxy_connect_timeout 90s;
+          → Time to wait for the upstream (Jenkins/Rundeck) to accept a connection.
+            90s is generous — reduce to 10-15s if backend is always fast.
+
+        proxy_send_timeout 90s;
+          → Time to wait while sending a request to the upstream.
+
+        proxy_read_timeout 90s;
+          → Time to wait for the upstream to send a response. Long CI/CD jobs
+            may need this increased (e.g. 300s) for blocking API calls.
+
+        proxy_buffer_size 128k;
+          → Buffer for the first part of the backend response (headers).
+            128k handles large Jenkins/Rundeck response headers comfortably.
+
+        proxy_buffers 4 256k;
+          → 4 buffers of 256k each for the response body. Allows Nginx to
+            buffer the response from Jenkins before sending to the client,
+            freeing the upstream connection sooner.
+
+        proxy_busy_buffers_size 256k;
+          → Max data Nginx can send to the client while the rest is being
+            read from the backend. Must be <= total proxy_buffers size.
+
+        proxy_request_buffering off;
+          → Don't buffer request bodies (e.g. file uploads) in Nginx before
+            forwarding. Send them directly to upstream. Reduces memory usage
+            and improves large upload performance.
+
+        proxy_hide_header X-Powered-By;
+        proxy_hide_header Server;
+          → Strip these headers from the backend response before sending to
+            client. Prevents technology fingerprinting (hides "Jetty", "Java",
+            version numbers, etc.).
+      }
+  }
+
+------------------------------------------------------------------
+PART E: RUNDECK HTTPS SERVER BLOCK
+------------------------------------------------------------------
+
+  Identical structure to Jenkins with these differences:
+
+    server_name  → rundeckpreprod.local
+    ssl_certificate/key → /etc/ssl/certs/rundeck.crt / rundeck.key
+    access_log   → /var/log/nginx/rundeck.access.log
+    error_log    → /var/log/nginx/rundeck.error.log
+    limit_req    → zone=rundeck (separate counter from Jenkins)
+    proxy_pass   → http://rundeck (upstream pointing to 127.0.0.1:4440)
+
+  Both blocks use "listen 443 ssl http2" (IPv4 only) — no [::]:443 directive.
+  Everything else (TLS settings, headers, timeouts, gzip, buffers) is identical
+  because both services warrant the same security and performance posture.
+
+
+==================================================================================
+STEP 3: VALIDATE AND APPLY
+==================================================================================
+
+  nginx -t
+    → Dry-run test of the nginx configuration. Checks syntax and logic without
+      reloading. ALWAYS run this before reloading to avoid taking down the service
+      with a config error.
+
+  && systemctl reload nginx
+    → If the test passes (exit code 0), gracefully reload Nginx.
+      "reload" sends SIGHUP — Nginx finishes in-flight requests on old config,
+      then workers pick up the new config. Zero downtime.
+      Use "restart" only if reload fails or you change listen ports.
+
+
+==================================================================================
+COMPLETE CONFIG FILE
+==================================================================================
+
+cat > /etc/nginx/conf.d/jenkins-rundeck.conf << 'NGINXEOF'
+
+limit_req_zone $binary_remote_addr zone=jenkins:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=rundeck:10m  rate=30r/s;
+
+# ── Upstreams ──────────────────────────────────────────────────────────────────
+upstream jenkins {
+    keepalive 32;
+    server 127.0.0.1:8080;
+}
+
+upstream rundeck {
+    keepalive 32;
+    server 127.0.0.1:4440;
+}
+
+# ── Silently drop all HTTP — IPv4 only ────────────────────────────────────────
+server {
+    listen      80;
+    server_name jenkinspreprod.local rundeckpreprod.local;
+    return      444;
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Jenkins HTTPS
+# ══════════════════════════════════════════════════════════════════════════════
+server {
+    listen      443 ssl http2;
+    server_name jenkinspreprod.local;
+
+    # ── TLS ────────────────────────────────────────────────────────────────
+    ssl_certificate     /etc/ssl/certs/jenkins.crt;
+    ssl_certificate_key /etc/ssl/private/jenkins.key;
+    ssl_dhparam         /etc/ssl/certs/dhparam.pem;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache         shared:SSL:10m;
+    ssl_session_timeout       1d;
+    ssl_session_tickets       off;
+    ssl_buffer_size           4k;
+    ssl_stapling              off;
+    ssl_stapling_verify       off;
+
+    # ── Security headers ───────────────────────────────────────────────────
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options           "SAMEORIGIN"                                   always;
+    add_header X-Content-Type-Options    "nosniff"                                      always;
+    add_header X-XSS-Protection          "1; mode=block"                                always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin"              always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()"     always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;" always;
+
+    server_tokens off;
+
+    # ── Logging ────────────────────────────────────────────────────────────
+    access_log /var/log/nginx/jenkins.access.log combined buffer=16k flush=5s;
+    error_log  /var/log/nginx/jenkins.error.log  warn;
+
+    # ── Request limits ─────────────────────────────────────────────────────
+    client_max_body_size  100m;
+    client_body_timeout   60s;
+    client_header_timeout 30s;
+    keepalive_timeout     65s;
+    send_timeout          60s;
+
+    # ── Gzip ───────────────────────────────────────────────────────────────
+    gzip            on;
+    gzip_vary       on;
+    gzip_proxied    any;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_types      text/plain text/css text/xml text/javascript
+                    application/json application/javascript
+                    application/xml application/rss+xml
+                    image/svg+xml;
+
+    # ── Block sensitive files ──────────────────────────────────────────────
+    location ~* \.(git|env|htaccess|htpasswd|ini|log|sh|sql|conf|bak|swp)$ {
+        deny all;
+        return 404;
+    }
+
+    # ── Proxy to Jenkins ───────────────────────────────────────────────────
+    location / {
+        limit_req               zone=jenkins burst=20 nodelay;
+
+        proxy_pass              http://jenkins;
+        proxy_http_version      1.1;
+
+        proxy_set_header        Host              $host;
+        proxy_set_header        X-Real-IP         $remote_addr;
+        proxy_set_header        X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header        X-Forwarded-Proto $scheme;
+        proxy_set_header        X-Forwarded-Port  $server_port;
+        proxy_set_header        Upgrade           $http_upgrade;
+        proxy_set_header        Connection        $http_connection;
+
+        proxy_connect_timeout   90s;
+        proxy_send_timeout      90s;
+        proxy_read_timeout      90s;
+
+        proxy_buffer_size       128k;
+        proxy_buffers           4 256k;
+        proxy_busy_buffers_size 256k;
+        proxy_request_buffering off;
+
+        proxy_hide_header       X-Powered-By;
+        proxy_hide_header       Server;
+    }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Rundeck HTTPS
+# ══════════════════════════════════════════════════════════════════════════════
+server {
+    listen      443 ssl http2;
+    server_name rundeckpreprod.local;
+
+    # ── TLS ────────────────────────────────────────────────────────────────
+    ssl_certificate     /etc/ssl/certs/rundeck.crt;
+    ssl_certificate_key /etc/ssl/private/rundeck.key;
+    ssl_dhparam         /etc/ssl/certs/dhparam.pem;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache         shared:SSL:10m;
+    ssl_session_timeout       1d;
+    ssl_session_tickets       off;
+    ssl_buffer_size           4k;
+    ssl_stapling              off;
+    ssl_stapling_verify       off;
+
+    # ── Security headers ───────────────────────────────────────────────────
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options           "SAMEORIGIN"                                   always;
+    add_header X-Content-Type-Options    "nosniff"                                      always;
+    add_header X-XSS-Protection          "1; mode=block"                                always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin"              always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()"     always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;" always;
+
+    server_tokens off;
+
+    # ── Logging ────────────────────────────────────────────────────────────
+    access_log /var/log/nginx/rundeck.access.log combined buffer=16k flush=5s;
+    error_log  /var/log/nginx/rundeck.error.log  warn;
+
+    # ── Request limits ─────────────────────────────────────────────────────
+    client_max_body_size  100m;
+    client_body_timeout   60s;
+    client_header_timeout 30s;
+    keepalive_timeout     65s;
+    send_timeout          60s;
+
+    # ── Gzip ───────────────────────────────────────────────────────────────
+    gzip            on;
+    gzip_vary       on;
+    gzip_proxied    any;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_types      text/plain text/css text/xml text/javascript
+                    application/json application/javascript
+                    application/xml application/rss+xml
+                    image/svg+xml;
+
+    # ── Block sensitive files ──────────────────────────────────────────────
+    location ~* \.(git|env|htaccess|htpasswd|ini|log|sh|sql|conf|bak|swp)$ {
+        deny all;
+        return 404;
+    }
+
+    # ── Proxy to Rundeck ───────────────────────────────────────────────────
+    location / {
+        limit_req               zone=rundeck burst=20 nodelay;
+
+        proxy_pass              http://rundeck;
+        proxy_http_version      1.1;
+
+        proxy_set_header        Host              $host;
+        proxy_set_header        X-Real-IP         $remote_addr;
+        proxy_set_header        X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header        X-Forwarded-Proto $scheme;
+        proxy_set_header        X-Forwarded-Port  $server_port;
+        proxy_set_header        Upgrade           $http_upgrade;
+        proxy_set_header        Connection        $http_connection;
+
+        proxy_connect_timeout   90s;
+        proxy_send_timeout      90s;
+        proxy_read_timeout      90s;
+
+        proxy_buffer_size       128k;
+        proxy_buffers           4 256k;
+        proxy_busy_buffers_size 256k;
+        proxy_request_buffering off;
+
+        proxy_hide_header       X-Powered-By;
+        proxy_hide_header       Server;
+    }
+}
+NGINXEOF
+
+
+==================================================================================
+STEP 4: SSL CERTIFICATE COMMANDS (COPY-PASTE READY)
+==================================================================================
+
+# Jenkins cert (skip if already exists)
+[ -f /etc/ssl/certs/jenkins.crt ] || \
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/jenkins.key \
+  -out    /etc/ssl/certs/jenkins.crt \
+  -subj   "/CN=jenkinspreprod.local/O=Preprod/C=US" \
+  -addext "subjectAltName=DNS:jenkinspreprod.local"
+
+chmod 600 /etc/ssl/private/jenkins.key
+
+# Rundeck cert (skip if already exists)
+[ -f /etc/ssl/certs/rundeck.crt ] || \
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/rundeck.key \
+  -out    /etc/ssl/certs/rundeck.crt \
+  -subj   "/CN=rundeckpreprod.local/O=Preprod/C=US" \
+  -addext "subjectAltName=DNS:rundeckpreprod.local"
+
+chmod 600 /etc/ssl/private/rundeck.key
+
+# Shared DH params (slow — skip if already exists)
+[ -f /etc/ssl/certs/dhparam.pem ] || \
+  openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
+
+# Test config syntax, then reload Nginx
+nginx -t && systemctl reload nginx
+
+
+==================================================================================
+QUICK REFERENCE — WHAT EACH DIRECTIVE PROTECTS AGAINST
+==================================================================================
+
+  Directive / Setting               Threat Mitigated
+  ─────────────────────────────────────────────────────────────────────────────
+  TLSv1.2 TLSv1.3 only             POODLE, BEAST (TLS 1.0/1.1 downgrade attacks)
+  ECDHE/DHE ciphers only            Session decryption if private key stolen (PFS)
+  ssl_session_tickets off           Ticket key compromise undermining PFS
+  ssl_dhparam (custom)              Logjam attack (weak DH parameters)
+  HSTS header                       SSL stripping / HTTP downgrade attacks
+  X-Frame-Options: SAMEORIGIN      Clickjacking
+  X-Content-Type-Options: nosniff  MIME-type confusion / drive-by downloads
+  X-XSS-Protection                 Reflected XSS (legacy browsers)
+  Content-Security-Policy          XSS, data injection, resource hijacking
+  Referrer-Policy                  Internal URL / token leakage via Referer header
+  Permissions-Policy               Unauthorized access to browser device APIs
+  server_tokens off                 Version-based vulnerability targeting
+  return 444 (HTTP)                 Information disclosure, HTTP downgrade
+  Block sensitive file extensions  Config/credential/log file exposure
+  limit_req_zone (rate limit)      Brute force, DoS, credential stuffing
+  proxy_hide_header Server         Backend technology fingerprinting
+  client_body/header_timeout       Slowloris-style slow HTTP DoS attacks
+  proxy_request_buffering off      Memory exhaustion on large upload buffering
+
+==================================================================================
+END OF DOCUMENT
+==================================================================================

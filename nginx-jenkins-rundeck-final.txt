@@ -1,0 +1,208 @@
+cat > /etc/nginx/conf.d/jenkins-rundeck.conf << 'NGINXEOF'
+
+limit_req_zone $binary_remote_addr zone=jenkins:10m rate=30r/s;
+limit_req_zone $binary_remote_addr zone=rundeck:10m  rate=30r/s;
+
+upstream jenkins {
+    keepalive 32;
+    server 127.0.0.1:8080;
+}
+
+upstream rundeck {
+    keepalive 32;
+    server 127.0.0.1:4440;
+}
+
+server {
+    listen      80;
+    server_name jenkinspreprod.local rundeckpreprod.local;
+    return      444;
+}
+
+server {
+    listen      443 ssl http2;
+    server_name jenkinspreprod.local;
+
+    ssl_certificate     /etc/ssl/certs/jenkins.crt;
+    ssl_certificate_key /etc/ssl/private/jenkins.key;
+    ssl_dhparam         /etc/ssl/certs/dhparam.pem;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache         shared:SSL:10m;
+    ssl_session_timeout       1d;
+    ssl_session_tickets       off;
+    ssl_buffer_size           4k;
+    ssl_stapling              off;
+    ssl_stapling_verify       off;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options           "SAMEORIGIN"                                   always;
+    add_header X-Content-Type-Options    "nosniff"                                      always;
+    add_header X-XSS-Protection          "1; mode=block"                                always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin"              always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()"     always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;" always;
+
+    server_tokens off;
+
+    access_log /var/log/nginx/jenkins.access.log combined buffer=16k flush=5s;
+    error_log  /var/log/nginx/jenkins.error.log  warn;
+
+    client_max_body_size  100m;
+    client_body_timeout   60s;
+    client_header_timeout 30s;
+    keepalive_timeout     65s;
+    send_timeout          60s;
+
+    gzip            on;
+    gzip_vary       on;
+    gzip_proxied    any;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_types      text/plain text/css text/xml text/javascript
+                    application/json application/javascript
+                    application/xml application/rss+xml
+                    image/svg+xml;
+
+    location ~* \.(git|env|htaccess|htpasswd|ini|log|sh|sql|conf|bak|swp)$ {
+        deny all;
+        return 404;
+    }
+
+    location / {
+        limit_req               zone=jenkins burst=20 nodelay;
+
+        proxy_pass              http://jenkins;
+        proxy_http_version      1.1;
+
+        proxy_set_header        Host              $host;
+        proxy_set_header        X-Real-IP         $remote_addr;
+        proxy_set_header        X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header        X-Forwarded-Proto $scheme;
+        proxy_set_header        X-Forwarded-Port  $server_port;
+        proxy_set_header        Upgrade           $http_upgrade;
+        proxy_set_header        Connection        $http_connection;
+
+        proxy_connect_timeout   90s;
+        proxy_send_timeout      90s;
+        proxy_read_timeout      90s;
+
+        proxy_buffer_size       128k;
+        proxy_buffers           4 256k;
+        proxy_busy_buffers_size 256k;
+        proxy_request_buffering off;
+
+        proxy_hide_header       X-Powered-By;
+        proxy_hide_header       Server;
+    }
+}
+
+server {
+    listen      443 ssl http2;
+    server_name rundeckpreprod.local;
+
+    ssl_certificate     /etc/ssl/certs/rundeck.crt;
+    ssl_certificate_key /etc/ssl/private/rundeck.key;
+    ssl_dhparam         /etc/ssl/certs/dhparam.pem;
+
+    ssl_protocols             TLSv1.2 TLSv1.3;
+    ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache         shared:SSL:10m;
+    ssl_session_timeout       1d;
+    ssl_session_tickets       off;
+    ssl_buffer_size           4k;
+    ssl_stapling              off;
+    ssl_stapling_verify       off;
+
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header X-Frame-Options           "SAMEORIGIN"                                   always;
+    add_header X-Content-Type-Options    "nosniff"                                      always;
+    add_header X-XSS-Protection          "1; mode=block"                                always;
+    add_header Referrer-Policy           "strict-origin-when-cross-origin"              always;
+    add_header Permissions-Policy        "geolocation=(), microphone=(), camera=()"     always;
+    add_header Content-Security-Policy   "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:;" always;
+
+    server_tokens off;
+
+    access_log /var/log/nginx/rundeck.access.log combined buffer=16k flush=5s;
+    error_log  /var/log/nginx/rundeck.error.log  warn;
+
+    client_max_body_size  100m;
+    client_body_timeout   60s;
+    client_header_timeout 30s;
+    keepalive_timeout     65s;
+    send_timeout          60s;
+
+    gzip            on;
+    gzip_vary       on;
+    gzip_proxied    any;
+    gzip_comp_level 6;
+    gzip_min_length 1024;
+    gzip_types      text/plain text/css text/xml text/javascript
+                    application/json application/javascript
+                    application/xml application/rss+xml
+                    image/svg+xml;
+
+    location ~* \.(git|env|htaccess|htpasswd|ini|log|sh|sql|conf|bak|swp)$ {
+        deny all;
+        return 404;
+    }
+
+    location / {
+        limit_req               zone=rundeck burst=20 nodelay;
+
+        proxy_pass              http://rundeck;
+        proxy_http_version      1.1;
+
+        proxy_set_header        Host              $host;
+        proxy_set_header        X-Real-IP         $remote_addr;
+        proxy_set_header        X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header        X-Forwarded-Proto $scheme;
+        proxy_set_header        X-Forwarded-Port  $server_port;
+        proxy_set_header        Upgrade           $http_upgrade;
+        proxy_set_header        Connection        $http_connection;
+
+        proxy_connect_timeout   90s;
+        proxy_send_timeout      90s;
+        proxy_read_timeout      90s;
+
+        proxy_buffer_size       128k;
+        proxy_buffers           4 256k;
+        proxy_busy_buffers_size 256k;
+        proxy_request_buffering off;
+
+        proxy_hide_header       X-Powered-By;
+        proxy_hide_header       Server;
+    }
+}
+NGINXEOF
+
+# Jenkins cert
+[ -f /etc/ssl/certs/jenkins.crt ] || \
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/jenkins.key \
+  -out    /etc/ssl/certs/jenkins.crt \
+  -subj   "/CN=jenkinspreprod.local/O=Preprod/C=US" \
+  -addext "subjectAltName=DNS:jenkinspreprod.local"
+
+chmod 600 /etc/ssl/private/jenkins.key
+
+# Rundeck cert
+[ -f /etc/ssl/certs/rundeck.crt ] || \
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/rundeck.key \
+  -out    /etc/ssl/certs/rundeck.crt \
+  -subj   "/CN=rundeckpreprod.local/O=Preprod/C=US" \
+  -addext "subjectAltName=DNS:rundeckpreprod.local"
+
+chmod 600 /etc/ssl/private/rundeck.key
+
+# Shared DH params
+[ -f /etc/ssl/certs/dhparam.pem ] || \
+  openssl dhparam -out /etc/ssl/certs/dhparam.pem 2048
+
+# Test and reload
+nginx -t && systemctl reload nginx
