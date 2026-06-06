@@ -1,0 +1,6794 @@
+================================================================================
+FOREMAN 3.11 TO 3.18 ENTERPRISE PRODUCTION UPGRADE RUNBOOK
+================================================================================
+Environment: Oracle Linux 9.x
+Source: Foreman 3.11 / Katello 4.13
+Target: Foreman 3.18 / Katello 4.15
+Database: External PostgreSQL 16
+Deployment: Production Multi-Tier Architecture
+================================================================================
+
+TABLE OF CONTENTS
+================================================================================
+1.  Architecture Review
+2.  Pre-Upgrade Health Checks
+3.  External PostgreSQL 16 Validation
+4.  Backup Strategy
+5.  Supported Upgrade Path
+6.  Oracle Linux 9 Repository Configuration
+7.  Upgrade Execution (3.11 -> 3.18)
+8.  External PostgreSQL Validation After Every Hop
+9.  Smart Proxy Upgrade Procedure
+10. Post Upgrade Tasks
+11. Production Validation Checklist
+12. Rollback Plan
+13. Troubleshooting
+14. Final Sign-Off
+
+================================================================================
+SECTION 1 – ARCHITECTURE REVIEW
+================================================================================
+
+LOGICAL ARCHITECTURE
+--------------------
+
+┌─────────────────────────────────────────────────────────────────┐
+│                    PRODUCTION ENVIRONMENT                        │
+└─────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────┐         ┌──────────────────────┐
+│   FOREMAN SERVER     │◄────────┤  EXTERNAL POSTGRES   │
+│   (Oracle Linux 9)   │  5432   │  (PostgreSQL 16)     │
+│                      │         │                      │
+│ - Foreman 3.11       │         │ - foreman DB         │
+│ - Katello 4.13       │         │ - candlepin DB       │
+│ - Pulp 3.x           │         │ - pulpcore DB        │
+│ - Apache/Passenger   │         │                      │
+│ - Dynflow            │         └──────────────────────┘
+│ - Candlepin          │
+│ - Remote Execution   │
+└──────────┬───────────┘
+           │
+           │ 9090, 443
+           │
+    ┌──────┴─────────────────────────────┐
+    │                                     │
+┌───▼─────────────┐              ┌───────▼──────────┐
+│ SMART PROXY 1   │              │ SMART PROXY 2    │
+│ (Capsule)       │              │ (Capsule)        │
+│                 │              │                  │
+│ - Pulp Mirror   │              │ - Pulp Mirror    │
+│ - TFTP          │              │ - TFTP           │
+│ - DHCP          │              │ - DHCP           │
+│ - DNS           │              │ - DNS            │
+└────────┬────────┘              └────────┬─────────┘
+         │                                │
+         │                                │
+    ┌────▼────────────────────────────────▼────┐
+    │        CONTENT HOSTS (Clients)           │
+    │  - RHEL/Oracle Linux/CentOS              │
+    │  - Registered via Activation Keys        │
+    │  - Managed via Remote Execution          │
+    └──────────────────────────────────────────┘
+
+UPGRADE DEPENDENCIES
+--------------------
+1. Foreman Server must be upgraded BEFORE Smart Proxies
+2. PostgreSQL 16 compatibility validated for all versions
+3. Content must be synced before upgrade
+4. All tasks must be completed before upgrade
+5. Smart Proxies must be within N-2 version compatibility
+
+SUPPORTED UPGRADE PATH
+----------------------
+Direct upgrade from 3.11 to 3.18 is NOT SUPPORTED.
+
+Foreman follows a sequential upgrade model. Each minor version must be 
+upgraded in sequence:
+
+3.11 (Katello 4.13) -> 3.12 (Katello 4.14)
+3.12 (Katello 4.14) -> 3.13 (Katello 4.14)
+3.13 (Katello 4.14) -> 3.14 (Katello 4.14)
+3.14 (Katello 4.14) -> 3.15 (Katello 4.15)
+3.15 (Katello 4.15) -> 3.16 (Katello 4.15)
+3.16 (Katello 4.15) -> 3.17 (Katello 4.15)
+3.17 (Katello 4.15) -> 3.18 (Katello 4.15)
+
+UPGRADE RATIONALE
+-----------------
+- Database schema changes require sequential migrations
+- Pulp 3.x migrations are version-dependent
+- Candlepin schema migrations are incremental
+- foreman-maintain enforces version checks
+- Skip upgrades risk data corruption
+
+INTERMEDIATE VERSIONS REQUIRED
+-------------------------------
+Version   Katello   Release Date   Status
+---------------------------------------------
+3.11      4.13      Active         Source
+3.12      4.14      Stable         Required
+3.13      4.14      Stable         Required
+3.14      4.14      Stable         Required
+3.15      4.15      Stable         Required
+3.16      4.15      Stable         Required
+3.17      4.15      Stable         Required
+3.18      4.15      Stable         Target
+
+ESTIMATED TIMELINE
+------------------
+Each hop: 30-60 minutes
+Total hops: 7
+Total estimated time: 4-7 hours
+Recommended: 8-hour maintenance window
+
+================================================================================
+SECTION 2 – PRE-UPGRADE HEALTH CHECKS
+================================================================================
+
+[FOREMAN SERVER]
+
+----------------------------
+HEALTH CHECK 1: foreman-maintain
+----------------------------
+
+# Run comprehensive health check
+foreman-maintain health check
+
+# Expected output:
+# Running ForemanMaintain::Scenarios::Check
+# ================================================================================
+# Check server health before upgrade:
+# ================================================================================
+# 
+# 1/15 [OK] - Check for paused tasks
+# 2/15 [OK] - Check for old tasks
+# 3/15 [OK] - Check for running tasks
+# 4/15 [OK] - Check for pending tasks
+# 5/15 [OK] - Check services status
+# 6/15 [OK] - Check for postgresql client version
+# 7/15 [OK] - Check candlepin database connection
+# 8/15 [OK] - Check foreman database connection
+# 9/15 [OK] - Check pulpcore database connection
+# 10/15 [OK] - Check disk speed
+# 11/15 [OK] - Check available space in /var/lib/pulp
+# 12/15 [OK] - Check available space in /var/log
+# 13/15 [OK] - Check available space in /var/cache
+# 14/15 [OK] - Check SELinux status
+# 15/15 [OK] - Check system registration
+
+# Failure interpretation:
+# - [FAIL] Check for running tasks -> Wait for tasks to complete
+# - [FAIL] Check services status -> Investigate failed services
+# - [FAIL] Check database connection -> Validate external PostgreSQL
+# - [WARN] Disk space warnings -> Free up space before upgrade
+
+# Remediation for running tasks:
+foreman-rake katello:disable_tasks
+foreman-maintain service stop --exclude postgresql
+
+----------------------------
+HEALTH CHECK 2: Upgrade Check
+----------------------------
+
+# Run Katello upgrade check
+foreman-rake katello:upgrade_check
+
+# Expected output:
+# Checking for running tasks...
+# 0 tasks running
+# 
+# Checking for paused tasks...
+# 0 paused tasks
+# 
+# Checking content view publish/promote...
+# All content view operations completed
+# 
+# Checking for orphaned content...
+# Orphaned content: 0 units
+# 
+# System ready for upgrade
+
+# If failures:
+# - Running tasks: Wait or cancel non-critical tasks
+# - Content view issues: Complete all publishes before upgrade
+
+----------------------------
+HEALTH CHECK 3: Service Validation
+----------------------------
+
+# Check hammer connectivity
+hammer ping
+
+# Expected output:
+# candlepin:
+#     Status:          ok
+#     Server Response: Duration: 45ms
+# candlepin_auth:
+#     Status:          ok
+#     Server Response: Duration: 12ms
+# pulp3:
+#     Status:          ok
+#     Server Response: Duration: 89ms
+# pulp3_content:
+#     Status:          ok
+#     Server Response: Duration: 34ms
+# foreman_tasks:
+#     Status:          ok
+#     Server Response: Duration: 23ms
+
+# Failure remediation:
+# candlepin not ok -> systemctl restart tomcat
+# pulp3 not ok -> systemctl restart pulpcore-api pulpcore-content pulpcore-worker@*
+# foreman_tasks not ok -> systemctl restart dynflowd
+
+----------------------------
+HEALTH CHECK 4: System Services
+----------------------------
+
+# Check all critical services
+systemctl status foreman
+systemctl status httpd
+systemctl status tomcat
+systemctl status dynflowd
+systemctl status pulpcore-api
+systemctl status pulpcore-content
+systemctl status pulpcore-worker@1
+systemctl status pulpcore-worker@2
+systemctl status redis
+systemctl status foreman-proxy
+
+# All should show: Active: active (running)
+
+# List all foreman-related services
+systemctl list-units | grep -E 'foreman|katello|pulp|dynflow'
+
+# Verify service file integrity
+systemctl cat foreman
+systemctl cat pulpcore-api
+
+----------------------------
+HEALTH CHECK 5: Repository Validation
+----------------------------
+
+# List enabled repositories
+dnf repolist enabled
+
+# Expected repositories for Oracle Linux 9:
+# ol9_baseos_latest
+# ol9_appstream
+# foreman-3.11
+# katello-4.13
+# pulpcore
+# foreman-client-3.11
+
+# Verify repository metadata
+dnf clean all
+dnf makecache
+
+# Check for obsolete packages
+dnf check-update
+
+----------------------------
+HEALTH CHECK 6: RPM Verification
+----------------------------
+
+# Verify package integrity
+rpm -Va foreman katello candlepin pulpcore
+
+# Expected: No output or only config file changes
+# Warning signs:
+# S.5....T.  c /etc/foreman/settings.yaml -> Config changed (acceptable)
+# missing    /usr/share/foreman/file -> Package corruption (reinstall)
+
+# Verify critical packages
+rpm -q foreman
+rpm -q katello
+rpm -q candlepin
+rpm -q pulpcore-selinux
+
+# Expected output format:
+# foreman-3.11.0-1.el9.noarch
+# katello-4.13.0-1.el9.noarch
+
+----------------------------
+HEALTH CHECK 7: Disk Usage Validation
+----------------------------
+
+# Check disk space on critical filesystems
+df -h /
+df -h /var
+df -h /var/lib/pulp
+df -h /var/log
+df -h /var/cache
+df -h /usr/share/foreman
+df -h /tmp
+
+# Minimum requirements:
+# /var/lib/pulp: 20GB free (depends on content)
+# /var: 10GB free
+# /var/log: 5GB free
+# /: 5GB free
+
+# Check inode usage
+df -i /var/lib/pulp
+
+# Detailed Pulp storage analysis
+du -sh /var/lib/pulp/*
+du -sh /var/lib/pulp/media/*
+
+# Expected large directories:
+# /var/lib/pulp/media/artifact/
+# /var/lib/pulp/assets/
+
+# Cleanup if needed (only orphaned content):
+foreman-rake katello:delete_orphaned_content
+
+----------------------------
+HEALTH CHECK 8: Memory Validation
+----------------------------
+
+# Check available memory
+free -h
+
+# Expected minimum:
+# Total: 20GB for production
+# Available: 4GB before upgrade
+
+# Check swap
+swapon -s
+
+# Memory pressure check
+vmstat 1 5
+
+# Check for OOM kills in history
+journalctl -k | grep -i 'killed process'
+dmesg | grep -i 'out of memory'
+
+----------------------------
+HEALTH CHECK 9: SELinux Validation
+----------------------------
+
+# Verify SELinux is enforcing
+getenforce
+
+# Expected: Enforcing
+
+# Check for SELinux denials
+ausearch -m avc -ts recent
+
+# Check SELinux booleans
+getsebool -a | grep foreman
+getsebool -a | grep passenger
+getsebool -a | grep httpd
+
+# Expected critical booleans:
+# httpd_can_network_connect --> on
+# httpd_can_network_connect_db --> on
+
+# Verify SELinux contexts
+ls -lZ /usr/share/foreman
+ls -lZ /var/lib/pulp
+ls -lZ /etc/foreman
+
+# Check for unlabeled files
+find /usr/share/foreman -context "*unlabeled_t*"
+find /var/lib/pulp -context "*unlabeled_t*"
+
+----------------------------
+HEALTH CHECK 10: Firewalld Validation
+----------------------------
+
+# Check firewall status
+systemctl status firewalld
+
+# List active zones
+firewall-cmd --get-active-zones
+
+# Verify required ports
+firewall-cmd --list-all
+
+# Expected open ports:
+# 80/tcp (HTTP)
+# 443/tcp (HTTPS)
+# 5647/tcp (Katello Agent - legacy)
+# 8000/tcp (Smart Proxy Registration)
+# 9090/tcp (Smart Proxy Communication)
+# 5432/tcp (Only if PostgreSQL local - should NOT be open for external DB)
+
+# Verify services
+firewall-cmd --list-services
+
+# Expected services:
+# RH-Satellite-6 (or custom foreman service)
+
+----------------------------
+HEALTH CHECK 11: Task Validation
+----------------------------
+
+# Check for running tasks
+foreman-rake foreman_tasks:cleanup TASK_SEARCH='state=running' STATES='running' VERBOSE=true
+
+# List running tasks
+echo "SELECT * FROM foreman_tasks_tasks WHERE state = 'running';" | su - postgres -c "psql foreman"
+
+# Count paused tasks
+hammer task list --search 'state=paused'
+
+# Count pending tasks
+hammer task list --search 'state=pending'
+
+# Acceptable state:
+# Running: 0
+# Paused: 0
+# Pending: <10
+
+# Resume paused tasks
+hammer task resume --search 'state=paused'
+
+# Or cancel old tasks (>7 days)
+foreman-maintain advanced procedure run foreman-tasks-delete \
+  --state old \
+  --after 7
+
+----------------------------
+HEALTH CHECK 12: Content Sync Status
+----------------------------
+
+# Check for incomplete syncs
+hammer repository list --search 'last_sync_status!=success' --fields Name,Product,Status
+
+# Verify content view publish status
+hammer content-view list --fields Name,"Last published"
+
+# Check for stale content views (not published in 30 days)
+hammer content-view list --search 'last_published < "30 days ago"'
+
+----------------------------
+HEALTH CHECK 13: Certificate Validation
+----------------------------
+
+# Check certificate expiry
+foreman-maintain health check --label check-expiration-date
+
+# Detailed certificate check
+katello-certs-check -c /etc/pki/katello/certs/katello-apache.crt \
+                     -k /etc/pki/katello/private/katello-apache.key \
+                     -b /etc/pki/katello/certs/katello-server-ca.crt
+
+# Check SSL certificate dates
+openssl x509 -in /etc/pki/katello/certs/katello-apache.crt -noout -dates
+
+# Expected: notAfter should be >90 days in future
+
+----------------------------
+HEALTH CHECK 14: Network Connectivity
+----------------------------
+
+[FOREMAN SERVER] -> [POSTGRESQL SERVER]
+
+# Test PostgreSQL connectivity
+nc -zv <POSTGRESQL_SERVER_IP> 5432
+
+# Expected: Connection to <IP> 5432 port [tcp/postgresql] succeeded!
+
+# Test with psql
+PGPASSWORD='<password>' psql -h <POSTGRESQL_SERVER_IP> -U foreman -d foreman -c "SELECT version();"
+
+# Test Smart Proxy connectivity
+curl -k https://<SMART_PROXY_FQDN>:9090/
+
+----------------------------
+HEALTH CHECK 15: Version Verification
+----------------------------
+
+# Current version
+foreman-maintain packages status
+
+# Verify exact versions
+rpm -qa | grep foreman-3.11
+rpm -qa | grep katello-4.13
+
+# Check Pulp version
+pulpcore-manager --version
+
+# Expected: 3.x.x (bundled with Katello 4.13)
+
+----------------------------
+HEALTH CHECK OUTPUT SUMMARY
+----------------------------
+
+All checks must return OK or WARNING before proceeding.
+FAIL status requires remediation.
+
+Collect output:
+foreman-maintain health check 2>&1 | tee /root/health-check-$(date +%F).log
+
+================================================================================
+SECTION 3 – EXTERNAL POSTGRESQL 16 VALIDATION
+================================================================================
+
+[POSTGRESQL SERVER]
+
+----------------------------
+VALIDATION 1: PostgreSQL Version
+----------------------------
+
+# Check PostgreSQL version
+sudo -u postgres psql -c "SELECT version();"
+
+# Expected output:
+# PostgreSQL 16.x on x86_64-pc-linux-gnu, compiled by gcc...
+
+# Verify running version
+psql --version
+
+# Check cluster status
+systemctl status postgresql-16
+
+----------------------------
+VALIDATION 2: Database Size and Growth
+----------------------------
+
+# Connect as postgres user
+sudo -u postgres psql
+
+# Check all database sizes
+SELECT 
+    datname AS database_name,
+    pg_size_pretty(pg_database_size(datname)) AS size
+FROM pg_database
+WHERE datname IN ('foreman', 'candlepin', 'pulpcore')
+ORDER BY pg_database_size(datname) DESC;
+
+# Expected output example:
+#  database_name |  size   
+# ---------------+---------
+#  pulpcore      | 145 GB
+#  foreman       | 12 GB
+#  candlepin     | 8 GB
+
+# Check table sizes in foreman DB
+\c foreman
+
+SELECT 
+    schemaname,
+    tablename,
+    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size
+FROM pg_tables
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
+LIMIT 20;
+
+# Check pulpcore artifact storage
+\c pulpcore
+
+SELECT 
+    schemaname,
+    tablename,
+    pg_size_pretty(pg_total_relation_size(schemaname||'.'||tablename)) AS size
+FROM pg_tables
+WHERE schemaname = 'public'
+ORDER BY pg_total_relation_size(schemaname||'.'||tablename) DESC
+LIMIT 10;
+
+----------------------------
+VALIDATION 3: Active Connections
+----------------------------
+
+# Check active connections per database
+SELECT 
+    datname,
+    count(*) AS connections,
+    max(backend_start) AS oldest_connection
+FROM pg_stat_activity
+WHERE datname IN ('foreman', 'candlepin', 'pulpcore')
+GROUP BY datname;
+
+# Expected:
+#   datname   | connections |   oldest_connection   
+# ------------+-------------+----------------------
+#  foreman    |          15 | 2024-01-15 10:23:45
+#  candlepin  |           8 | 2024-01-15 10:23:46
+#  pulpcore   |          12 | 2024-01-15 10:23:47
+
+# Check connection limits
+SHOW max_connections;
+
+# Should be >=500 for production
+
+# Check idle connections
+SELECT 
+    datname,
+    state,
+    count(*)
+FROM pg_stat_activity
+WHERE datname IN ('foreman', 'candlepin', 'pulpcore')
+GROUP BY datname, state;
+
+----------------------------
+VALIDATION 4: Replication Status (if configured)
+----------------------------
+
+# Check replication status
+SELECT 
+    client_addr,
+    state,
+    sync_state,
+    replay_lag
+FROM pg_stat_replication;
+
+# If using streaming replication:
+SELECT pg_is_in_recovery();
+
+# Expected: f (false = primary)
+
+----------------------------
+VALIDATION 5: Database Extensions
+----------------------------
+
+# Check installed extensions in foreman DB
+\c foreman
+SELECT * FROM pg_extension;
+
+# Expected extensions:
+#  extname  | extversion 
+# ----------+------------
+#  plpgsql  | 1.0
+
+# Check candlepin extensions
+\c candlepin
+SELECT * FROM pg_extension;
+
+# Check pulpcore extensions
+\c pulpcore
+SELECT * FROM pg_extension;
+
+----------------------------
+VALIDATION 6: Database Ownership and Roles
+----------------------------
+
+# List databases and owners
+SELECT 
+    datname,
+    pg_catalog.pg_get_userbyid(datdba) AS owner
+FROM pg_database
+WHERE datname IN ('foreman', 'candlepin', 'pulpcore');
+
+# Expected:
+#   datname  |  owner  
+# -----------+---------
+#  foreman   | foreman
+#  candlepin | candlepin
+#  pulpcore  | pulp
+
+# Check role privileges
+\du foreman
+\du candlepin
+\du pulp
+
+# Verify role passwords are set
+SELECT 
+    rolname,
+    rolcanlogin,
+    rolvaliduntil
+FROM pg_roles
+WHERE rolname IN ('foreman', 'candlepin', 'pulp');
+
+----------------------------
+VALIDATION 7: Schema Validation
+----------------------------
+
+# Count tables in foreman
+\c foreman
+SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';
+
+# Typical foreman 3.11: ~300-400 tables
+
+# Check for missing critical tables
+SELECT table_name 
+FROM information_schema.tables 
+WHERE table_schema = 'public' 
+  AND table_name IN ('hosts', 'repositories', 'activationkeys', 'content_views')
+ORDER BY table_name;
+
+# All should exist
+
+# Check pulpcore schema
+\c pulpcore
+SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';
+
+# Check candlepin schema
+\c candlepin
+SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public';
+
+----------------------------
+VALIDATION 8: pg_hba.conf Configuration
+----------------------------
+
+# Review pg_hba.conf
+sudo cat /var/lib/pgsql/16/data/pg_hba.conf | grep -v '^#' | grep -v '^$'
+
+# Expected entries for external Foreman server:
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+# host  foreman         foreman         <FOREMAN_SERVER_IP>/32  md5
+# host  candlepin       candlepin       <FOREMAN_SERVER_IP>/32  md5
+# host  pulpcore        pulp            <FOREMAN_SERVER_IP>/32  md5
+
+# Verify listen addresses
+sudo grep listen_addresses /var/lib/pgsql/16/data/postgresql.conf
+
+# Expected: listen_addresses = '*' or specific IP
+
+# Check port
+sudo grep "^port" /var/lib/pgsql/16/data/postgresql.conf
+
+# Expected: port = 5432
+
+----------------------------
+VALIDATION 9: SSL Configuration (if enabled)
+----------------------------
+
+# Check SSL settings
+SHOW ssl;
+
+# If enabled:
+SHOW ssl_cert_file;
+SHOW ssl_key_file;
+SHOW ssl_ca_file;
+
+# Verify certificates exist
+sudo ls -l /var/lib/pgsql/16/data/server.crt
+sudo ls -l /var/lib/pgsql/16/data/server.key
+
+# Test SSL connection from Foreman server
+[FOREMAN SERVER]
+PGSSLMODE=require PGPASSWORD='<password>' psql -h <PG_SERVER> -U foreman -d foreman -c "SELECT version();"
+
+----------------------------
+VALIDATION 10: Performance Parameters
+----------------------------
+
+# Check critical performance parameters
+SHOW shared_buffers;
+SHOW work_mem;
+SHOW maintenance_work_mem;
+SHOW effective_cache_size;
+SHOW max_connections;
+SHOW max_wal_size;
+SHOW checkpoint_completion_target;
+SHOW random_page_cost;
+
+# Recommended settings for Foreman production with 64GB RAM:
+
+# shared_buffers = 16GB
+SHOW shared_buffers;
+# Expected: 16GB
+
+# effective_cache_size = 48GB
+SHOW effective_cache_size;
+# Expected: 48GB
+
+# work_mem = 32MB
+SHOW work_mem;
+# Expected: 32MB
+
+# maintenance_work_mem = 2GB
+SHOW maintenance_work_mem;
+# Expected: 2GB
+
+# max_connections = 500
+SHOW max_connections;
+# Expected: 500
+
+# checkpoint_completion_target = 0.9
+SHOW checkpoint_completion_target;
+# Expected: 0.9
+
+# If adjustments needed:
+sudo vi /var/lib/pgsql/16/data/postgresql.conf
+
+# Add/modify:
+shared_buffers = 16GB
+effective_cache_size = 48GB
+work_mem = 32MB
+maintenance_work_mem = 2GB
+max_connections = 500
+checkpoint_completion_target = 0.9
+random_page_cost = 1.1
+max_wal_size = 4GB
+min_wal_size = 1GB
+
+# Reload configuration
+sudo -u postgres psql -c "SELECT pg_reload_conf();"
+
+----------------------------
+VALIDATION 11: WAL and Checkpoint Settings
+----------------------------
+
+# Check WAL settings
+SHOW wal_level;
+SHOW max_wal_size;
+SHOW min_wal_size;
+SHOW wal_buffers;
+
+# Check checkpoint activity
+SELECT 
+    checkpoints_timed,
+    checkpoints_req,
+    checkpoint_write_time,
+    checkpoint_sync_time
+FROM pg_stat_bgwriter;
+
+# If checkpoints_req is high relative to checkpoints_timed:
+# Increase max_wal_size
+
+----------------------------
+VALIDATION 12: Vacuum and Analyze Status
+----------------------------
+
+# Check last vacuum/analyze for foreman tables
+\c foreman
+
+SELECT 
+    schemaname,
+    relname,
+    last_vacuum,
+    last_autovacuum,
+    last_analyze,
+    last_autoanalyze
+FROM pg_stat_user_tables
+WHERE schemaname = 'public'
+ORDER BY last_autovacuum DESC NULLS LAST
+LIMIT 20;
+
+# Check for tables never vacuumed
+SELECT 
+    schemaname,
+    relname,
+    n_dead_tup,
+    last_autovacuum
+FROM pg_stat_user_tables
+WHERE last_autovacuum IS NULL
+  AND schemaname = 'public'
+ORDER BY n_dead_tup DESC;
+
+# Manual vacuum if needed (during maintenance window):
+VACUUM ANALYZE;
+
+----------------------------
+VALIDATION 13: Index Health
+----------------------------
+
+# Check for bloated indexes in foreman
+\c foreman
+
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE schemaname = 'public'
+ORDER BY pg_relation_size(indexrelid) DESC
+LIMIT 20;
+
+# Check for unused indexes (candidates for removal post-upgrade)
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    idx_scan,
+    pg_size_pretty(pg_relation_size(indexrelid)) AS index_size
+FROM pg_stat_user_indexes
+WHERE idx_scan = 0
+  AND schemaname = 'public'
+ORDER BY pg_relation_size(indexrelid) DESC;
+
+----------------------------
+VALIDATION 14: Database Statistics
+----------------------------
+
+# Check statistics collection
+\c foreman
+
+SELECT 
+    schemaname,
+    tablename,
+    attname,
+    n_distinct,
+    most_common_vals
+FROM pg_stats
+WHERE schemaname = 'public'
+  AND tablename = 'hosts'
+LIMIT 10;
+
+# Update statistics
+ANALYZE;
+
+----------------------------
+VALIDATION 15: Lock Monitoring
+----------------------------
+
+# Check for existing locks (should be minimal)
+SELECT 
+    pg_stat_activity.pid,
+    pg_stat_activity.usename,
+    pg_stat_activity.application_name,
+    pg_locks.locktype,
+    pg_locks.mode,
+    pg_stat_activity.query
+FROM pg_locks
+JOIN pg_stat_activity ON pg_locks.pid = pg_stat_activity.pid
+WHERE pg_locks.granted = false;
+
+# Expected: 0 rows (no blocking locks)
+
+----------------------------
+VALIDATION 16: Backup Configuration
+----------------------------
+
+# Check if WAL archiving is configured
+SHOW archive_mode;
+SHOW archive_command;
+
+# Verify last successful backup (if using pg_basebackup/pgBackRest)
+# This is environment-specific
+
+----------------------------
+VALIDATION 17: Log Configuration
+----------------------------
+
+# Check logging settings
+SHOW log_destination;
+SHOW logging_collector;
+SHOW log_directory;
+SHOW log_filename;
+SHOW log_min_duration_statement;
+
+# Recommended for troubleshooting:
+# log_min_duration_statement = 1000 (log queries >1 second)
+
+# Check PostgreSQL logs
+sudo tail -100 /var/lib/pgsql/16/data/log/postgresql-*.log
+
+# Look for:
+# - Connection errors
+# - Authentication failures
+# - Slow queries
+# - Checkpoint warnings
+
+----------------------------
+POSTGRESQL VALIDATION SUMMARY
+----------------------------
+
+All validations must pass before proceeding with upgrade.
+
+Key metrics to document:
+- foreman DB size: _______
+- candlepin DB size: _______
+- pulpcore DB size: _______
+- Active connections: _______
+- shared_buffers: _______
+- max_connections: _______
+
+Exit psql:
+\q
+
+================================================================================
+SECTION 4 – BACKUP STRATEGY
+================================================================================
+
+----------------------------
+BACKUP 1: Pre-Upgrade Snapshot Strategy
+----------------------------
+
+RECOMMENDED: VM-level snapshots (if virtual environment)
+
+[HYPERVISOR/VMWARE/LIBVIRT]
+
+For VMware:
+# Create snapshot via vCenter/vSphere
+# Snapshot name: foreman-pre-upgrade-3.11-to-3.12-<DATE>
+# Include memory: NO (quiesce guest)
+# Description: "Pre-upgrade baseline before Foreman 3.11->3.12 upgrade"
+
+For libvirt/KVM:
+virsh snapshot-create-as foreman-server \
+  "foreman-pre-upgrade-3.11-$(date +%F)" \
+  "Pre-upgrade snapshot before 3.11 to 3.12" \
+  --disk-only --atomic
+
+For PostgreSQL Server:
+virsh snapshot-create-as postgresql-server \
+  "postgres-pre-foreman-upgrade-$(date +%F)" \
+  "Pre-upgrade snapshot before Foreman 3.11 to 3.12" \
+  --disk-only --atomic
+
+For each Smart Proxy:
+virsh snapshot-create-as smartproxy-1 \
+  "proxy-pre-upgrade-3.11-$(date +%F)" \
+  "Pre-upgrade snapshot" \
+  --disk-only --atomic
+
+----------------------------
+BACKUP 2: Foreman Backup using foreman-maintain
+----------------------------
+
+[FOREMAN SERVER]
+
+# Create backup directory
+mkdir -p /backup/foreman-3.11-$(date +%F)
+chmod 700 /backup/foreman-3.11-$(date +%F)
+
+# Offline backup (full consistency, requires downtime)
+foreman-maintain backup offline \
+  --assumeyes \
+  --preserve-directory \
+  --skip-pulp-content \
+  /backup/foreman-3.11-$(date +%F)
+
+# Expected output:
+# Running ForemanMaintain::Scenarios::Backup::Offline
+# ================================================================================
+# Backup:
+# ================================================================================
+# 
+# 1/8 [OK] - Check for running tasks
+# 2/8 [OK] - Stopping services
+# 3/8 [OK] - Backup config files
+# 4/8 [OK] - Backup Pulp data (metadata only)
+# 5/8 [OK] - Backup Foreman database (remote)
+# 6/8 [OK] - Backup Candlepin database (remote)
+# 7/8 [OK] - Backup Pulpcore database (remote)
+# 8/8 [OK] - Starting services
+# 
+# Offline backup completed successfully.
+# Location: /backup/foreman-3.11-2024-01-15
+
+# Backup will include:
+# - /etc/foreman
+# - /etc/foreman-proxy
+# - /etc/pki/katello
+# - /etc/pki/pulp
+# - /etc/httpd
+# - /etc/tomcat
+# - /root/ssl-build (if exists)
+# - Database dumps (from external PostgreSQL)
+
+# Runtime: ~30-60 minutes depending on DB size
+
+# Alternative: Online backup (no downtime, slight inconsistency risk)
+foreman-maintain backup online \
+  --assumeyes \
+  --preserve-directory \
+  --skip-pulp-content \
+  /backup/foreman-3.11-online-$(date +%F)
+
+# Note: Online backup may capture data mid-transaction
+
+----------------------------
+BACKUP 3: PostgreSQL Database Backup
+----------------------------
+
+[POSTGRESQL SERVER]
+
+# Create backup directory
+sudo mkdir -p /backup/postgresql-$(date +%F)
+sudo chown postgres:postgres /backup/postgresql-$(date +%F)
+
+# Backup foreman database
+sudo -u postgres pg_dump -Fc -v \
+  -f /backup/postgresql-$(date +%F)/foreman-3.11.dump \
+  foreman
+
+# Expected output:
+# pg_dump: saving database "foreman"
+# pg_dump: dumping contents of table public.hosts
+# pg_dump: dumping contents of table public.repositories
+# ...
+
+# Backup candlepin database
+sudo -u postgres pg_dump -Fc -v \
+  -f /backup/postgresql-$(date +%F)/candlepin.dump \
+  candlepin
+
+# Backup pulpcore database
+sudo -u postgres pg_dump -Fc -v \
+  -f /backup/postgresql-$(date +%F)/pulpcore.dump \
+  pulpcore
+
+# Backup globals (roles and tablespaces)
+sudo -u postgres pg_dumpall --globals-only \
+  -f /backup/postgresql-$(date +%F)/globals.sql
+
+# Verify dumps were created
+ls -lh /backup/postgresql-$(date +%F)/
+
+# Expected files:
+# -rw------- 1 postgres postgres 8.2G Jan 15 10:30 foreman-3.11.dump
+# -rw------- 1 postgres postgres 4.1G Jan 15 10:45 candlepin.dump
+# -rw------- 1 postgres postgres  95G Jan 15 12:30 pulpcore.dump
+# -rw------- 1 postgres postgres  12K Jan 15 12:31 globals.sql
+
+# Calculate checksums
+cd /backup/postgresql-$(date +%F)
+sha256sum *.dump *.sql > CHECKSUMS.sha256
+cat CHECKSUMS.sha256
+
+----------------------------
+BACKUP 4: Filesystem Backup
+----------------------------
+
+[FOREMAN SERVER]
+
+# Backup critical configuration directories
+tar -czf /backup/foreman-configs-$(date +%F).tar.gz \
+  /etc/foreman \
+  /etc/foreman-proxy \
+  /etc/foreman-installer \
+  /etc/httpd/conf.d \
+  /etc/pki/katello \
+  /etc/pki/pulp \
+  /etc/sysconfig/foreman \
+  /etc/tomcat \
+  /var/lib/foreman \
+  /usr/share/foreman/config/settings.yaml \
+  /root/.hammer
+
+# Backup Foreman installer answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /backup/katello-answers-$(date +%F).yaml
+
+cp /etc/foreman-installer/scenarios.d/katello-answers.yaml \
+   /backup/katello-installer-answers-$(date +%F).yaml
+
+# Backup custom hooks (if any)
+if [ -d /usr/share/foreman/config/hooks ]; then
+  tar -czf /backup/foreman-hooks-$(date +%F).tar.gz \
+    /usr/share/foreman/config/hooks
+fi
+
+# Backup Pulp metadata (excluding content artifacts)
+# Note: Content artifacts can be VERY large (100s of GB)
+# Only backup if absolutely required
+tar -czf /backup/pulp-metadata-$(date +%F).tar.gz \
+  --exclude='artifact' \
+  /var/lib/pulp
+
+# Full Pulp backup (WARNING: May be 100GB+)
+# Only if required for regulatory compliance
+# tar -czf /backup/pulp-full-$(date +%F).tar.gz /var/lib/pulp
+
+----------------------------
+BACKUP 5: Smart Proxy Backup
+----------------------------
+
+[SMART PROXY 1]
+
+# Create Smart Proxy backup
+mkdir -p /backup/smartproxy-1-$(date +%F)
+
+tar -czf /backup/smartproxy-1-$(date +%F)/configs.tar.gz \
+  /etc/foreman-proxy \
+  /etc/httpd/conf.d/05-foreman-ssl.d \
+  /etc/smart_proxy_dynflow_core \
+  /var/lib/foreman-proxy
+
+# Backup certificates
+tar -czf /backup/smartproxy-1-$(date +%F)/certs.tar.gz \
+  /etc/pki/katello-certs-tools \
+  /root/ssl-build
+
+# Backup TFTP data (if applicable)
+if [ -d /var/lib/tftpboot ]; then
+  tar -czf /backup/smartproxy-1-$(date +%F)/tftp.tar.gz \
+    /var/lib/tftpboot
+fi
+
+# Document Smart Proxy version
+rpm -qa | grep foreman-proxy > /backup/smartproxy-1-$(date +%F)/package-versions.txt
+
+[SMART PROXY 2]
+# Repeat for each Smart Proxy
+
+----------------------------
+BACKUP 6: Repository Metadata Backup
+----------------------------
+
+[FOREMAN SERVER]
+
+# Export repository configuration
+hammer repository list --per-page 9999 --fields Name,Product,URL,Type \
+  > /backup/repositories-$(date +%F).txt
+
+# Export content view configuration
+hammer content-view list --per-page 9999 --fields Name,Composite,Repositories \
+  > /backup/content-views-$(date +%F).txt
+
+# Export activation keys
+hammer activation-key list --per-page 9999 \
+  --fields Name,Environment,Content-view,Subscriptions \
+  > /backup/activation-keys-$(date +%F).txt
+
+# Export lifecycle environments
+hammer lifecycle-environment list --per-page 9999 \
+  --fields Name,Prior,Organization \
+  > /backup/lifecycle-environments-$(date +%F).txt
+
+# Export host collections
+hammer host-collection list --per-page 9999 \
+  --fields Name,Hosts,Limit \
+  > /backup/host-collections-$(date +%F).txt
+
+# Export compute resources
+hammer compute-resource list --fields Name,Provider,URL \
+  > /backup/compute-resources-$(date +%F).txt
+
+----------------------------
+BACKUP 7: Backup Verification
+----------------------------
+
+[FOREMAN SERVER]
+
+# Verify foreman-maintain backup integrity
+ls -lh /backup/foreman-3.11-$(date +%F)/
+
+# Expected contents:
+# config_files.tar.gz
+# metadata.yml
+# .config.snar
+# foreman.dump
+# candlepin.dump
+# pulpcore.dump
+
+# Verify metadata file
+cat /backup/foreman-3.11-$(date +%F)/metadata.yml
+
+# Expected contents:
+# :backup_version: 1.0
+# :foreman_version: 3.11.0
+# :databases:
+#   foreman: external
+#   candlepin: external
+#   pulpcore: external
+# :hostname: foreman.example.com
+# :timestamp: 2024-01-15 10:30:45
+
+[POSTGRESQL SERVER]
+
+# Verify database dump integrity
+sudo -u postgres pg_restore --list /backup/postgresql-$(date +%F)/foreman-3.11.dump | head -20
+
+# Expected output shows table of contents:
+# ;
+# ; Archive created at 2024-01-15 10:30:45 UTC
+# ;     dbname: foreman
+# ;     TOC Entries: 3847
+# ;     Compression: -1
+# ...
+
+# Test restore to temporary database (optional but recommended)
+sudo -u postgres createdb foreman_test_restore
+sudo -u postgres pg_restore -d foreman_test_restore \
+  /backup/postgresql-$(date +%F)/foreman-3.11.dump
+
+# Verify table count matches
+sudo -u postgres psql -d foreman -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"
+sudo -u postgres psql -d foreman_test_restore -c "SELECT count(*) FROM information_schema.tables WHERE table_schema='public';"
+
+# Counts should match
+
+# Cleanup test database
+sudo -u postgres dropdb foreman_test_restore
+
+----------------------------
+BACKUP 8: Offsite Backup Copy
+----------------------------
+
+# Copy backups to remote storage (NFS/S3/Rsync)
+
+# Example: rsync to backup server
+rsync -avz --progress \
+  /backup/foreman-3.11-$(date +%F)/ \
+  backup-server:/backups/foreman/foreman-3.11-$(date +%F)/
+
+rsync -avz --progress \
+  /backup/postgresql-$(date +%F)/ \
+  backup-server:/backups/postgresql/postgresql-$(date +%F)/
+
+# Verify remote copy
+ssh backup-server "ls -lh /backups/foreman/foreman-3.11-$(date +%F)/"
+ssh backup-server "sha256sum /backups/postgresql/postgresql-$(date +%F)/*.dump"
+
+----------------------------
+BACKUP COMPLETION CHECKLIST
+----------------------------
+
+[ ] VM snapshots created for Foreman, PostgreSQL, Smart Proxies
+[ ] foreman-maintain backup completed successfully
+[ ] PostgreSQL dumps created (foreman, candlepin, pulpcore)
+[ ] PostgreSQL dumps verified with pg_restore --list
+[ ] Filesystem backups completed
+[ ] Configuration exports completed (repositories, content views, etc.)
+[ ] Smart Proxy backups completed
+[ ] Checksums calculated and verified
+[ ] Backups copied to offsite location
+[ ] Backup documentation updated with restore procedure
+
+ESTIMATED BACKUP SIZE:
+- Foreman configs: ~500MB
+- PostgreSQL dumps: 100GB+ (depends on content)
+- Pulp metadata: 5-10GB
+- Total: ~120GB
+
+ESTIMATED BACKUP TIME:
+- VM snapshots: 5-10 minutes
+- foreman-maintain backup: 30-60 minutes
+- PostgreSQL dumps: 1-3 hours
+- Total: 2-4 hours
+
+================================================================================
+SECTION 5 – SUPPORTED UPGRADE PATH
+================================================================================
+
+SEQUENTIAL UPGRADE REQUIREMENT
+-------------------------------
+
+Foreman DOES NOT support version skipping. Each minor release must be 
+upgraded sequentially.
+
+Version Matrix:
+┌─────────┬─────────┬────────────┬─────────────────┐
+│ Foreman │ Katello │ Pulp Core  │ Release Date    │
+├─────────┼─────────┼────────────┼─────────────────┤
+│ 3.11    │ 4.13    │ 3.39.x     │ Current (Start) │
+│ 3.12    │ 4.14    │ 3.49.x     │ Step 1          │
+│ 3.13    │ 4.14    │ 3.49.x     │ Step 2          │
+│ 3.14    │ 4.14    │ 3.49.x     │ Step 3          │
+│ 3.15    │ 4.15    │ 3.55.x     │ Step 4          │
+│ 3.16    │ 4.15    │ 3.55.x     │ Step 5          │
+│ 3.17    │ 4.15    │ 3.55.x     │ Step 6          │
+│ 3.18    │ 4.15    │ 3.55.x     │ Target (End)    │
+└─────────┴─────────┴────────────┴─────────────────┘
+
+TOTAL UPGRADE HOPS: 7
+
+ESTIMATED TIME PER HOP:
+- Repository update: 5 minutes
+- Package download: 10 minutes
+- Package installation: 10 minutes
+- foreman-installer: 15-30 minutes
+- Database migrations: 5-20 minutes (varies by hop)
+- Validation: 5 minutes
+
+Total per hop: 50-80 minutes
+Total for all hops: 6-9 hours
+
+DOWNTIME ESTIMATE:
+- Per hop downtime: 30-45 minutes
+- Total cumulative downtime: 4-6 hours
+
+RISK ASSESSMENT PER HOP:
+┌─────────────┬──────────┬─────────────────────────────────┐
+│ Upgrade Hop │ Risk     │ Key Changes                     │
+├─────────────┼──────────┼─────────────────────────────────┤
+│ 3.11->3.12  │ MEDIUM   │ Katello 4.14, Pulp 3.49 upgrade │
+│ 3.12->3.13  │ LOW      │ Foreman features only           │
+│ 3.13->3.14  │ LOW      │ Foreman features only           │
+│ 3.14->3.15  │ MEDIUM   │ Katello 4.15, Pulp 3.55 upgrade │
+│ 3.15->3.16  │ LOW      │ Foreman features only           │
+│ 3.16->3.17  │ LOW      │ Foreman features only           │
+│ 3.17->3.18  │ LOW      │ Foreman features only           │
+└─────────────┴──────────┴─────────────────────────────────┘
+
+ROLLBACK POINTS:
+- After each hop, create VM snapshot before next hop
+- Database backups valid for 24 hours
+- Maximum rollback time: 2 hours per hop
+
+================================================================================
+SECTION 6 – ORACLE LINUX 9 REPOSITORY CONFIGURATION
+================================================================================
+
+[FOREMAN SERVER]
+
+----------------------------
+REPOSITORY 1: Disable Current Repositories
+----------------------------
+
+# List current Foreman repositories
+dnf repolist | grep -E 'foreman|katello|pulp'
+
+# Expected current repos:
+# foreman-3.11
+# katello-4.13
+# pulpcore
+
+# These will be updated for each version hop
+
+----------------------------
+REPOSITORY 2: Oracle Linux Base Repositories
+----------------------------
+
+# Ensure Oracle Linux 9 base repositories are enabled
+dnf repolist enabled | grep ol9
+
+# Expected:
+# ol9_baseos_latest
+# ol9_appstream
+# ol9_UEKR7
+
+# If missing, enable:
+dnf config-manager --enable ol9_baseos_latest
+dnf config-manager --enable ol9_appstream
+
+----------------------------
+REPOSITORY 3: EPEL Repository (if required)
+----------------------------
+
+# Some Foreman dependencies may require EPEL
+dnf install -y oracle-epel-release-el9
+
+# Verify EPEL enabled
+dnf repolist | grep epel
+
+----------------------------
+REPOSITORY 4: Repository Update Procedure (Per Hop)
+----------------------------
+
+# This procedure will be executed before EACH upgrade hop
+# Replace X.XX with target version (e.g., 3.12, 3.13, etc.)
+
+# Example for 3.11 -> 3.12 upgrade:
+
+# Disable old repositories
+dnf config-manager --disable foreman-3.11
+dnf config-manager --disable katello-4.13
+
+# Add new Foreman repository
+cat > /etc/yum.repos.d/foreman-3.12.repo << 'EOF'
+[foreman-3.12]
+name=Foreman 3.12
+baseurl=https://yum.theforeman.org/releases/3.12/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.12/RPM-GPG-KEY-foreman
+EOF
+
+# Add new Katello repository
+cat > /etc/yum.repos.d/katello-4.14.repo << 'EOF'
+[katello-4.14]
+name=Katello 4.14
+baseurl=https://yum.theforeman.org/katello/4.14/katello/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+EOF
+
+# Add Pulpcore repository (updated with Katello)
+cat > /etc/yum.repos.d/pulpcore.repo << 'EOF'
+[pulpcore]
+name=Pulpcore
+baseurl=https://yum.theforeman.org/katello/4.14/pulpcore/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+EOF
+
+# Import GPG keys
+rpm --import https://yum.theforeman.org/releases/3.12/RPM-GPG-KEY-foreman
+rpm --import https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+
+# Clean DNF cache
+dnf clean all
+dnf makecache
+
+# Verify new repositories
+dnf repolist enabled | grep -E 'foreman|katello|pulp'
+
+# Expected:
+# foreman-3.12
+# katello-4.14
+# pulpcore
+
+----------------------------
+REPOSITORY 5: Repository Validation
+----------------------------
+
+# Test repository accessibility
+dnf repoquery --available foreman
+dnf repoquery --available katello
+dnf repoquery --available pulpcore-selinux
+
+# Check available Foreman version
+dnf list available foreman --showduplicates
+
+# Expected output should show 3.12.x versions
+
+# Verify no broken dependencies
+dnf check
+
+# Expected: No problems
+
+----------------------------
+REPOSITORY 6: Repository Templates for All Hops
+----------------------------
+
+Below are repository configurations for each hop.
+These will be applied sequentially during upgrade.
+
+=== FOREMAN 3.12 / KATELLO 4.14 ===
+
+cat > /etc/yum.repos.d/foreman-3.12.repo << 'EOF'
+[foreman-3.12]
+name=Foreman 3.12
+baseurl=https://yum.theforeman.org/releases/3.12/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.12/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/katello-4.14.repo << 'EOF'
+[katello-4.14]
+name=Katello 4.14
+baseurl=https://yum.theforeman.org/katello/4.14/katello/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/pulpcore.repo << 'EOF'
+[pulpcore]
+name=Pulpcore
+baseurl=https://yum.theforeman.org/katello/4.14/pulpcore/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+EOF
+
+=== FOREMAN 3.13 / KATELLO 4.14 ===
+
+cat > /etc/yum.repos.d/foreman-3.13.repo << 'EOF'
+[foreman-3.13]
+name=Foreman 3.13
+baseurl=https://yum.theforeman.org/releases/3.13/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.13/RPM-GPG-KEY-foreman
+EOF
+
+# Katello and Pulpcore repositories remain 4.14
+
+=== FOREMAN 3.14 / KATELLO 4.14 ===
+
+cat > /etc/yum.repos.d/foreman-3.14.repo << 'EOF'
+[foreman-3.14]
+name=Foreman 3.14
+baseurl=https://yum.theforeman.org/releases/3.14/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.14/RPM-GPG-KEY-foreman
+EOF
+
+# Katello and Pulpcore repositories remain 4.14
+
+=== FOREMAN 3.15 / KATELLO 4.15 ===
+
+cat > /etc/yum.repos.d/foreman-3.15.repo << 'EOF'
+[foreman-3.15]
+name=Foreman 3.15
+baseurl=https://yum.theforeman.org/releases/3.15/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.15/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/katello-4.15.repo << 'EOF'
+[katello-4.15]
+name=Katello 4.15
+baseurl=https://yum.theforeman.org/katello/4.15/katello/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.15/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/pulpcore.repo << 'EOF'
+[pulpcore]
+name=Pulpcore
+baseurl=https://yum.theforeman.org/katello/4.15/pulpcore/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.15/RPM-GPG-KEY-foreman
+EOF
+
+=== FOREMAN 3.16 / KATELLO 4.15 ===
+
+cat > /etc/yum.repos.d/foreman-3.16.repo << 'EOF'
+[foreman-3.16]
+name=Foreman 3.16
+baseurl=https://yum.theforeman.org/releases/3.16/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.16/RPM-GPG-KEY-foreman
+EOF
+
+# Katello and Pulpcore repositories remain 4.15
+
+=== FOREMAN 3.17 / KATELLO 4.15 ===
+
+cat > /etc/yum.repos.d/foreman-3.17.repo << 'EOF'
+[foreman-3.17]
+name=Foreman 3.17
+baseurl=https://yum.theforeman.org/releases/3.17/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.17/RPM-GPG-KEY-foreman
+EOF
+
+# Katello and Pulpcore repositories remain 4.15
+
+=== FOREMAN 3.18 / KATELLO 4.15 ===
+
+cat > /etc/yum.repos.d/foreman-3.18.repo << 'EOF'
+[foreman-3.18]
+name=Foreman 3.18
+baseurl=https://yum.theforeman.org/releases/3.18/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.18/RPM-GPG-KEY-foreman
+EOF
+
+# Katello and Pulpcore repositories remain 4.15
+
+================================================================================
+SECTION 7 – UPGRADE EXECUTION (ALL HOPS)
+================================================================================
+
+MAINTENANCE WINDOW COMMUNICATION TEMPLATE
+------------------------------------------
+
+Subject: Foreman Production Upgrade - Maintenance Window
+
+Dear Users,
+
+A scheduled maintenance window is planned for upgrading the Foreman/Katello 
+infrastructure from version 3.11 to 3.18.
+
+Maintenance Window: [DATE] [START_TIME] - [END_TIME]
+Expected Downtime: 4-6 hours
+Impact: 
+  - Foreman Web UI unavailable
+  - Package installations/updates unavailable
+  - Content synchronization suspended
+  - Host registrations suspended
+  - Remote execution unavailable
+
+Unaffected Services:
+  - Existing registered hosts (normal operations)
+  - Previously downloaded content
+
+Rollback Plan: Available if critical issues encountered
+
+Contact: [YOUR_CONTACT]
+
+----------------------------
+UPGRADE HOP 1: FOREMAN 3.11 -> 3.12
+----------------------------
+
+RISK LEVEL: MEDIUM
+ESTIMATED TIME: 60-90 minutes
+ESTIMATED DOWNTIME: 45 minutes
+KEY CHANGES: Katello 4.13 -> 4.14, Pulp 3.39 -> 3.49
+
+[FOREMAN SERVER]
+
+# PRE-UPGRADE CHECKPOINT
+echo "=== UPGRADE HOP 1: 3.11 -> 3.12 START: $(date) ===" | tee -a /root/upgrade.log
+
+# Step 1: Pre-upgrade health check
+foreman-maintain health check --label check-foreman-tasks-not-paused
+foreman-maintain health check --label check-old-foreman-tasks
+foreman-maintain health check --label disk-space
+
+# Expected: All checks PASS
+
+# Step 2: Disable old repositories
+dnf config-manager --disable foreman-3.11
+dnf config-manager --disable katello-4.13
+rm -f /etc/yum.repos.d/foreman-3.11.repo
+rm -f /etc/yum.repos.d/katello-4.13.repo
+
+# Step 3: Add new repositories
+cat > /etc/yum.repos.d/foreman-3.12.repo << 'EOF'
+[foreman-3.12]
+name=Foreman 3.12
+baseurl=https://yum.theforeman.org/releases/3.12/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.12/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/katello-4.14.repo << 'EOF'
+[katello-4.14]
+name=Katello 4.14
+baseurl=https://yum.theforeman.org/katello/4.14/katello/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/pulpcore.repo << 'EOF'
+[pulpcore]
+name=Pulpcore
+baseurl=https://yum.theforeman.org/katello/4.14/pulpcore/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+EOF
+
+# Step 4: Import GPG keys
+rpm --import https://yum.theforeman.org/releases/3.12/RPM-GPG-KEY-foreman
+rpm --import https://yum.theforeman.org/katello/4.14/RPM-GPG-KEY-foreman
+
+# Step 5: Clean and update repository cache
+dnf clean all
+dnf makecache
+
+# Step 6: Verify target version availability
+dnf list available foreman katello
+
+# Expected output should show:
+# foreman.noarch    3.12.x-x.el9    foreman-3.12
+# katello.noarch    4.14.x-x.el9    katello-4.14
+
+# Step 7: Stop all services (START OF DOWNTIME)
+foreman-maintain service stop
+
+# Verify all services stopped
+foreman-maintain service status
+
+# Expected: All services should show as stopped/inactive
+
+# Step 8: Update all Foreman packages
+dnf update -y foreman\* katello\* pulp\* candlepin\* tfm\*
+
+# This will download and install all updated packages
+# Expected time: 15-20 minutes
+# Watch for any dependency conflicts
+
+# Step 9: Run foreman-installer (performs migrations)
+foreman-installer --upgrade
+
+# Expected output (partial):
+# Installing             Done                    [100%] 
+# System: /etc/foreman-installer/scenarios.d/katello.yaml
+# Upgrading:
+#   Success!
+#   * Foreman is running at https://foreman.example.com
+#     Initial credentials are admin / <password>
+#   * Foreman Proxy is running at https://foreman.example.com:9090
+#   * To install an additional Foreman Proxy on separate machine continue by 
+#     running:
+#     foreman-proxy-certs-generate --foreman-proxy-fqdn "$FOREMAN_PROXY" \
+#       --certs-tar "/root/$FOREMAN_PROXY-certs.tar"
+
+# Expected time: 20-30 minutes
+# Migrations will run automatically
+
+# Step 10: Verify foreman-installer success
+echo $?
+# Expected: 0
+
+# Step 11: Start all services
+foreman-maintain service start
+
+# Step 12: Verify service status
+foreman-maintain service status
+
+# Expected: All services running
+
+# Step 13: Verify version
+foreman-maintain packages status
+
+# Expected:
+# foreman-3.12.x
+# katello-4.14.x
+
+hammer --version
+# Expected: 3.12.x
+
+# Step 14: Run Hammer ping
+hammer ping
+
+# Expected: All components show "ok"
+
+# Step 15: Validate database migrations
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 10;"
+
+# Should show recent migration timestamps
+
+[FOREMAN SERVER]
+
+# Step 16: Check for failed tasks
+hammer task list --search 'state=error' --per-page 100
+
+# Expected: 0 errors (or only pre-existing errors from before upgrade)
+
+# Step 17: Check UI accessibility
+curl -k https://localhost/users/login | grep "Foreman"
+
+# Expected: HTML containing "Foreman" text
+
+# Step 18: Validate Pulp
+pulpcore-manager status
+
+# Expected: All workers running
+
+# Step 19: Backup installer answers after successful upgrade
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /root/katello-answers-3.12-$(date +%F).yaml
+
+# Step 20: Create post-upgrade snapshot
+# [HYPERVISOR]
+# Create VM snapshot: foreman-post-3.12-upgrade-$(date +%F)
+
+# Step 21: Record completion
+echo "=== UPGRADE HOP 1: 3.11 -> 3.12 COMPLETE: $(date) ===" | tee -a /root/upgrade.log
+
+# ROLLBACK TRIGGER CONDITIONS for 3.11->3.12:
+# - foreman-installer exits with non-zero code
+# - Database migration failures
+# - Services fail to start after 3 restart attempts
+# - UI inaccessible after 10 minutes
+# - hammer ping shows any service as not OK
+
+# ROLLBACK PROCEDURE:
+# 1. foreman-maintain service stop
+# 2. Restore VM snapshot: foreman-pre-upgrade-3.11
+# 3. [POSTGRESQL] Restore database dumps
+# 4. Verify services and version
+# Time to rollback: ~30 minutes
+
+----------------------------
+UPGRADE HOP 2: FOREMAN 3.12 -> 3.13
+----------------------------
+
+RISK LEVEL: LOW
+ESTIMATED TIME: 45-60 minutes
+ESTIMATED DOWNTIME: 30 minutes
+KEY CHANGES: Foreman features only, Katello remains 4.14
+
+[FOREMAN SERVER]
+
+# PRE-UPGRADE CHECKPOINT
+echo "=== UPGRADE HOP 2: 3.12 -> 3.13 START: $(date) ===" | tee -a /root/upgrade.log
+
+# Wait period between upgrades (recommended 30 minutes to verify stability)
+# Validate 3.12 is stable before proceeding
+
+# Step 1: Pre-upgrade health check
+foreman-maintain health check
+
+# Step 2: Verify no running tasks
+hammer task list --search 'state=running'
+
+# Expected: 0 running tasks
+
+# Step 3: Disable old repository
+dnf config-manager --disable foreman-3.12
+rm -f /etc/yum.repos.d/foreman-3.12.repo
+
+# Step 4: Add new repository
+cat > /etc/yum.repos.d/foreman-3.13.repo << 'EOF'
+[foreman-3.13]
+name=Foreman 3.13
+baseurl=https://yum.theforeman.org/releases/3.13/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.13/RPM-GPG-KEY-foreman
+EOF
+
+# Katello and Pulpcore repos remain unchanged (4.14)
+
+# Step 5: Import GPG key
+rpm --import https://yum.theforeman.org/releases/3.13/RPM-GPG-KEY-foreman
+
+# Step 6: Clean cache
+dnf clean all
+dnf makecache
+
+# Step 7: Verify target version
+dnf list available foreman
+
+# Expected: foreman-3.13.x
+
+# Step 8: Stop services
+foreman-maintain service stop
+
+# Step 9: Update Foreman packages
+dnf update -y foreman\* tfm\*
+
+# Note: Katello and Pulp packages will not update (already 4.14)
+
+# Step 10: Run installer
+foreman-installer --upgrade
+
+# Expected time: 15-20 minutes
+
+# Step 11: Start services
+foreman-maintain service start
+
+# Step 12: Verify version
+foreman-maintain packages status
+
+# Expected: foreman-3.13.x, katello-4.14.x
+
+# Step 13: Validation
+hammer ping
+curl -k https://localhost/users/login | grep "Foreman"
+
+# Step 14: Backup answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /root/katello-answers-3.13-$(date +%F).yaml
+
+# Step 15: Create snapshot
+# [HYPERVISOR] Create snapshot: foreman-post-3.13-upgrade
+
+# Step 16: Record completion
+echo "=== UPGRADE HOP 2: 3.12 -> 3.13 COMPLETE: $(date) ===" | tee -a /root/upgrade.log
+
+----------------------------
+UPGRADE HOP 3: FOREMAN 3.13 -> 3.14
+----------------------------
+
+RISK LEVEL: LOW
+ESTIMATED TIME: 45-60 minutes
+ESTIMATED DOWNTIME: 30 minutes
+KEY CHANGES: Foreman features only, Katello remains 4.14
+
+[FOREMAN SERVER]
+
+# PRE-UPGRADE CHECKPOINT
+echo "=== UPGRADE HOP 3: 3.13 -> 3.14 START: $(date) ===" | tee -a /root/upgrade.log
+
+# Step 1: Pre-upgrade health check
+foreman-maintain health check
+
+# Step 2: Disable old repository
+dnf config-manager --disable foreman-3.13
+rm -f /etc/yum.repos.d/foreman-3.13.repo
+
+# Step 3: Add new repository
+cat > /etc/yum.repos.d/foreman-3.14.repo << 'EOF'
+[foreman-3.14]
+name=Foreman 3.14
+baseurl=https://yum.theforeman.org/releases/3.14/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.14/RPM-GPG-KEY-foreman
+EOF
+
+# Step 4: Import GPG key
+rpm --import https://yum.theforeman.org/releases/3.14/RPM-GPG-KEY-foreman
+
+# Step 5: Clean cache
+dnf clean all
+dnf makecache
+
+# Step 6: Stop services
+foreman-maintain service stop
+
+# Step 7: Update packages
+dnf update -y foreman\* tfm\*
+
+# Step 8: Run installer
+foreman-installer --upgrade
+
+# Step 9: Start services
+foreman-maintain service start
+
+# Step 10: Verify
+foreman-maintain packages status
+hammer ping
+
+# Step 11: Backup answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /root/katello-answers-3.14-$(date +%F).yaml
+
+# Step 12: Create snapshot
+# [HYPERVISOR] Create snapshot: foreman-post-3.14-upgrade
+
+# Step 13: Record completion
+echo "=== UPGRADE HOP 3: 3.13 -> 3.14 COMPLETE: $(date) ===" | tee -a /root/upgrade.log
+
+----------------------------
+UPGRADE HOP 4: FOREMAN 3.14 -> 3.15
+----------------------------
+
+RISK LEVEL: MEDIUM
+ESTIMATED TIME: 60-90 minutes
+ESTIMATED DOWNTIME: 45 minutes
+KEY CHANGES: Katello 4.14 -> 4.15, Pulp 3.49 -> 3.55
+
+[FOREMAN SERVER]
+
+# PRE-UPGRADE CHECKPOINT
+echo "=== UPGRADE HOP 4: 3.14 -> 3.15 START: $(date) ===" | tee -a /root/upgrade.log
+
+# Step 1: Pre-upgrade health check
+foreman-maintain health check
+
+# Step 2: Disable old repositories
+dnf config-manager --disable foreman-3.14
+dnf config-manager --disable katello-4.14
+rm -f /etc/yum.repos.d/foreman-3.14.repo
+rm -f /etc/yum.repos.d/katello-4.14.repo
+rm -f /etc/yum.repos.d/pulpcore.repo
+
+# Step 3: Add new repositories
+cat > /etc/yum.repos.d/foreman-3.15.repo << 'EOF'
+[foreman-3.15]
+name=Foreman 3.15
+baseurl=https://yum.theforeman.org/releases/3.15/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.15/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/katello-4.15.repo << 'EOF'
+[katello-4.15]
+name=Katello 4.15
+baseurl=https://yum.theforeman.org/katello/4.15/katello/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.15/RPM-GPG-KEY-foreman
+EOF
+
+cat > /etc/yum.repos.d/pulpcore.repo << 'EOF'
+[pulpcore]
+name=Pulpcore
+baseurl=https://yum.theforeman.org/katello/4.15/pulpcore/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/katello/4.15/RPM-GPG-KEY-foreman
+EOF
+
+# Step 4: Import GPG keys
+rpm --import https://yum.theforeman.org/releases/3.15/RPM-GPG-KEY-foreman
+rpm --import https://yum.theforeman.org/katello/4.15/RPM-GPG-KEY-foreman
+
+# Step 5: Clean cache
+dnf clean all
+dnf makecache
+
+# Step 6: Verify target versions
+dnf list available foreman katello
+
+# Expected: foreman-3.15.x, katello-4.15.x
+
+# Step 7: Stop services
+foreman-maintain service stop
+
+# Step 8: Update all packages (Pulp upgrade included)
+dnf update -y foreman\* katello\* pulp\* candlepin\* tfm\*
+
+# Expected time: 20-25 minutes (Pulp upgrade is substantial)
+
+# Step 9: Run installer (Pulp migrations will run)
+foreman-installer --upgrade
+
+# Expected time: 25-35 minutes (Pulp migrations can be lengthy)
+
+# Monitor installer output for Pulp migration progress
+
+# Step 10: Start services
+foreman-maintain service start
+
+# Step 11: Verify Pulp workers
+systemctl status pulpcore-worker@*
+
+# Expected: All workers active
+
+pulpcore-manager status
+
+# Expected: All services operational
+
+# Step 12: Verify versions
+foreman-maintain packages status
+
+# Expected: foreman-3.15.x, katello-4.15.x
+
+rpm -q pulpcore
+
+# Expected: pulpcore-3.55.x
+
+# Step 13: Validation
+hammer ping
+
+# Step 14: Verify Pulp content
+hammer repository list --fields Name,Product,"Last sync"
+
+# Step 15: Backup answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /root/katello-answers-3.15-$(date +%F).yaml
+
+# Step 16: Create snapshot
+# [HYPERVISOR] Create snapshot: foreman-post-3.15-upgrade
+
+# Step 17: Record completion
+echo "=== UPGRADE HOP 4: 3.14 -> 3.15 COMPLETE: $(date) ===" | tee -a /root/upgrade.log
+
+----------------------------
+UPGRADE HOP 5: FOREMAN 3.15 -> 3.16
+----------------------------
+
+RISK LEVEL: LOW
+ESTIMATED TIME: 45-60 minutes
+ESTIMATED DOWNTIME: 30 minutes
+KEY CHANGES: Foreman features only, Katello remains 4.15
+
+[FOREMAN SERVER]
+
+# PRE-UPGRADE CHECKPOINT
+echo "=== UPGRADE HOP 5: 3.15 -> 3.16 START: $(date) ===" | tee -a /root/upgrade.log
+
+# Step 1: Pre-upgrade health check
+foreman-maintain health check
+
+# Step 2: Disable old repository
+dnf config-manager --disable foreman-3.15
+rm -f /etc/yum.repos.d/foreman-3.15.repo
+
+# Step 3: Add new repository
+cat > /etc/yum.repos.d/foreman-3.16.repo << 'EOF'
+[foreman-3.16]
+name=Foreman 3.16
+baseurl=https://yum.theforeman.org/releases/3.16/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.16/RPM-GPG-KEY-foreman
+EOF
+
+# Step 4: Import GPG key
+rpm --import https://yum.theforeman.org/releases/3.16/RPM-GPG-KEY-foreman
+
+# Step 5: Clean cache
+dnf clean all
+dnf makecache
+
+# Step 6: Stop services
+foreman-maintain service stop
+
+# Step 7: Update packages
+dnf update -y foreman\* tfm\*
+
+# Step 8: Run installer
+foreman-installer --upgrade
+
+# Step 9: Start services
+foreman-maintain service start
+
+# Step 10: Verify
+foreman-maintain packages status
+hammer ping
+
+# Step 11: Backup answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /root/katello-answers-3.16-$(date +%F).yaml
+
+# Step 12: Create snapshot
+# [HYPERVISOR] Create snapshot: foreman-post-3.16-upgrade
+
+# Step 13: Record completion
+echo "=== UPGRADE HOP 5: 3.15 -> 3.16 COMPLETE: $(date) ===" | tee -a /root/upgrade.log
+
+----------------------------
+UPGRADE HOP 6: FOREMAN 3.16 -> 3.17
+----------------------------
+
+RISK LEVEL: LOW
+ESTIMATED TIME: 45-60 minutes
+ESTIMATED DOWNTIME: 30 minutes
+KEY CHANGES: Foreman features only, Katello remains 4.15
+
+[FOREMAN SERVER]
+
+# PRE-UPGRADE CHECKPOINT
+echo "=== UPGRADE HOP 6: 3.16 -> 3.17 START: $(date) ===" | tee -a /root/upgrade.log
+
+# Step 1: Pre-upgrade health check
+foreman-maintain health check
+
+# Step 2: Disable old repository
+dnf config-manager --disable foreman-3.16
+rm -f /etc/yum.repos.d/foreman-3.16.repo
+
+# Step 3: Add new repository
+cat > /etc/yum.repos.d/foreman-3.17.repo << 'EOF'
+[foreman-3.17]
+name=Foreman 3.17
+baseurl=https://yum.theforeman.org/releases/3.17/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.17/RPM-GPG-KEY-foreman
+EOF
+
+# Step 4: Import GPG key
+rpm --import https://yum.theforeman.org/releases/3.17/RPM-GPG-KEY-foreman
+
+# Step 5: Clean cache
+dnf clean all
+dnf makecache
+
+# Step 6: Stop services
+foreman-maintain service stop
+
+# Step 7: Update packages
+dnf update -y foreman\* tfm\*
+
+# Step 8: Run installer
+foreman-installer --upgrade
+
+# Step 9: Start services
+foreman-maintain service start
+
+# Step 10: Verify
+foreman-maintain packages status
+hammer ping
+
+# Step 11: Backup answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /root/katello-answers-3.17-$(date +%F).yaml
+
+# Step 12: Create snapshot
+# [HYPERVISOR] Create snapshot: foreman-post-3.17-upgrade
+
+# Step 13: Record completion
+echo "=== UPGRADE HOP 6: 3.16 -> 3.17 COMPLETE: $(date) ===" | tee -a /root/upgrade.log
+
+----------------------------
+UPGRADE HOP 7: FOREMAN 3.17 -> 3.18 (FINAL)
+----------------------------
+
+RISK LEVEL: LOW
+ESTIMATED TIME: 45-60 minutes
+ESTIMATED DOWNTIME: 30 minutes
+KEY CHANGES: Foreman features only, Katello remains 4.15
+TARGET VERSION REACHED
+
+[FOREMAN SERVER]
+
+# PRE-UPGRADE CHECKPOINT
+echo "=== UPGRADE HOP 7: 3.17 -> 3.18 START: $(date) ===" | tee -a /root/upgrade.log
+
+# Step 1: Pre-upgrade health check
+foreman-maintain health check
+
+# Step 2: Disable old repository
+dnf config-manager --disable foreman-3.17
+rm -f /etc/yum.repos.d/foreman-3.17.repo
+
+# Step 3: Add new repository (FINAL VERSION)
+cat > /etc/yum.repos.d/foreman-3.18.repo << 'EOF'
+[foreman-3.18]
+name=Foreman 3.18
+baseurl=https://yum.theforeman.org/releases/3.18/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.18/RPM-GPG-KEY-foreman
+EOF
+
+# Step 4: Import GPG key
+rpm --import https://yum.theforeman.org/releases/3.18/RPM-GPG-KEY-foreman
+
+# Step 5: Clean cache
+dnf clean all
+dnf makecache
+
+# Step 6: Verify target version (final check)
+dnf list available foreman
+
+# Expected: foreman-3.18.x (TARGET VERSION)
+
+# Step 7: Stop services
+foreman-maintain service stop
+
+# Step 8: Update packages
+dnf update -y foreman\* tfm\*
+
+# Step 9: Run installer (FINAL MIGRATION)
+foreman-installer --upgrade
+
+# Step 10: Start services
+foreman-maintain service start
+
+# Step 11: Verify TARGET VERSION
+foreman-maintain packages status
+
+# Expected output:
+# foreman-3.18.x
+# katello-4.15.x
+
+hammer --version
+
+# Expected: 3.18.x
+
+# Step 12: Final validation
+hammer ping
+
+# Expected: All services OK
+
+# Step 13: Verify database schema
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman -c "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 5;"
+
+[FOREMAN SERVER]
+
+# Step 14: Backup FINAL answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /root/katello-answers-3.18-FINAL-$(date +%F).yaml
+
+# Step 15: Create FINAL snapshot
+# [HYPERVISOR] Create snapshot: foreman-FINAL-3.18-$(date +%F)
+
+# Step 16: Record completion
+echo "=== UPGRADE HOP 7: 3.17 -> 3.18 COMPLETE: $(date) ===" | tee -a /root/upgrade.log
+echo "=== ALL UPGRADES COMPLETE - TARGET VERSION 3.18 REACHED ===" | tee -a /root/upgrade.log
+
+# Step 17: Display final version summary
+cat << 'EOF'
+
+================================================================================
+UPGRADE COMPLETE - FOREMAN 3.18 / KATELLO 4.15
+================================================================================
+
+Starting Version: Foreman 3.11 / Katello 4.13
+Target Version:   Foreman 3.18 / Katello 4.15
+Upgrade Hops:     7
+Total Time:       [CALCULATE FROM LOG]
+
+Proceed to POST-UPGRADE TASKS (Section 10)
+
+EOF
+
+================================================================================
+SECTION 8 – EXTERNAL POSTGRESQL VALIDATION AFTER EVERY HOP
+================================================================================
+
+Execute these validations after EACH upgrade hop to ensure database integrity.
+
+[POSTGRESQL SERVER]
+
+----------------------------
+POST-HOP DATABASE VALIDATION
+----------------------------
+
+# Connect to PostgreSQL
+sudo -u postgres psql
+
+# Validation 1: PostgreSQL version (should remain 16.x)
+SELECT version();
+
+# Expected: PostgreSQL 16.x... (unchanged)
+
+# Validation 2: Check database connectivity
+\c foreman
+\c candlepin
+\c pulpcore
+
+# All connections should succeed
+
+# Validation 3: Check database sizes (should increase slightly after migrations)
+SELECT 
+    datname,
+    pg_size_pretty(pg_database_size(datname)) as size
+FROM pg_database
+WHERE datname IN ('foreman', 'candlepin', 'pulpcore')
+ORDER BY datname;
+
+# Note sizes for comparison with previous hop
+
+# Validation 4: Check active connections
+SELECT 
+    datname,
+    count(*) as connections
+FROM pg_stat_activity
+WHERE datname IN ('foreman', 'candlepin', 'pulpcore')
+GROUP BY datname;
+
+# Expected: Connections re-established (similar to pre-upgrade)
+
+# Validation 5: Verify schema migrations were applied
+\c foreman
+
+SELECT version 
+FROM schema_migrations 
+ORDER BY version DESC 
+LIMIT 10;
+
+# Should show NEW migration versions (compare with pre-upgrade)
+
+# Validation 6: Count tables (should increase or remain same, never decrease)
+SELECT count(*) 
+FROM information_schema.tables 
+WHERE table_schema = 'public';
+
+# Note: Some migrations add tables, verify count >= previous
+
+# Validation 7: Check for dead tuples (migrations may leave these)
+SELECT 
+    schemaname,
+    relname,
+    n_live_tup,
+    n_dead_tup,
+    round(n_dead_tup * 100.0 / NULLIF(n_live_tup + n_dead_tup, 0), 2) as dead_ratio
+FROM pg_stat_user_tables
+WHERE n_dead_tup > 0
+  AND schemaname = 'public'
+ORDER BY n_dead_tup DESC
+LIMIT 20;
+
+# If dead_ratio > 20%, consider running VACUUM ANALYZE
+
+# Validation 8: Verify Pulpcore database integrity
+\c pulpcore
+
+SELECT count(*) FROM core_artifact;
+SELECT count(*) FROM core_content;
+SELECT count(*) FROM core_repository;
+
+# Counts should remain stable or increase (never decrease)
+
+# Validation 9: Verify Candlepin database
+\c candlepin
+
+SELECT count(*) FROM cp_consumer;
+SELECT count(*) FROM cp_content;
+SELECT count(*) FROM cp_pool;
+
+# Counts should remain stable
+
+# Validation 10: Check for locks (should be none after upgrade)
+SELECT 
+    pg_stat_activity.pid,
+    pg_locks.locktype,
+    pg_locks.mode
+FROM pg_locks
+JOIN pg_stat_activity ON pg_locks.pid = pg_stat_activity.pid
+WHERE pg_locks.granted = false;
+
+# Expected: 0 rows
+
+# Validation 11: Check for long-running queries
+SELECT 
+    pid,
+    now() - pg_stat_activity.query_start AS duration,
+    query,
+    state
+FROM pg_stat_activity
+WHERE (now() - pg_stat_activity.query_start) > interval '5 minutes'
+  AND state = 'active';
+
+# Expected: 0 rows (no stuck queries from migration)
+
+# Validation 12: Verify database statistics are updated
+\c foreman
+
+SELECT 
+    schemaname,
+    tablename,
+    last_analyze,
+    last_autoanalyze
+FROM pg_stat_user_tables
+WHERE schemaname = 'public'
+  AND (last_analyze IS NULL AND last_autoanalyze IS NULL)
+LIMIT 10;
+
+# If many tables show NULL, run ANALYZE
+
+# Manual ANALYZE if needed (recommended after major migrations)
+ANALYZE;
+
+# Validation 13: Check index validity
+SELECT 
+    schemaname,
+    tablename,
+    indexname,
+    pg_size_pretty(pg_relation_size(indexrelid)) as size
+FROM pg_stat_user_indexes
+WHERE schemaname = 'public'
+ORDER BY pg_relation_size(indexrelid) DESC
+LIMIT 10;
+
+# Verify major indexes exist
+
+# Validation 14: Test query performance (sample query)
+\c foreman
+
+EXPLAIN ANALYZE 
+SELECT count(*) FROM hosts WHERE enabled = true;
+
+# Note execution time, compare with pre-upgrade baseline
+
+# Exit psql
+\q
+
+[FOREMAN SERVER]
+
+----------------------------
+POST-HOP FOREMAN DATABASE VALIDATION
+----------------------------
+
+# Test database connectivity from Foreman
+foreman-rake db:migrate:status | tail -20
+
+# Expected: Recent migrations should show "up"
+
+# Example output:
+#   up     20240115123456  Add index to hosts table
+#   up     20240115123457  Modify content views schema
+
+# Check for pending migrations (should be none)
+foreman-rake db:migrate:status | grep "down"
+
+# Expected: No output (all migrations up)
+
+# Validate Foreman can query database
+foreman-rake console << 'EOF'
+puts "Hosts count: #{Host.count}"
+puts "Content Views count: #{Katello::ContentView.count}"
+puts "Repositories count: #{Katello::Repository.count}"
+exit
+EOF
+
+# Expected: Counts displayed without errors
+
+# Verify Dynflow database connectivity
+foreman-rake foreman_tasks:cleanup TASK_SEARCH='state=stopped' VERBOSE=true STATES='stopped' AFTER='1h'
+
+# Expected: Task cleanup runs without errors
+
+================================================================================
+SECTION 9 – SMART PROXY UPGRADE PROCEDURE
+================================================================================
+
+IMPORTANT: Smart Proxies must be upgraded AFTER Foreman Server upgrade is 
+complete and validated.
+
+Smart Proxy compatibility: N-2 versions
+Example: Foreman 3.18 supports Smart Proxy 3.16, 3.17, 3.18
+
+UPGRADE SEQUENCE: Upgrade Smart Proxies to match Foreman Server version
+
+----------------------------
+SMART PROXY UPGRADE ORDER
+----------------------------
+
+1. Upgrade Foreman Server to 3.18 (completed in Section 7)
+2. Validate Foreman Server 3.18 is stable (24 hour soak test recommended)
+3. Upgrade Smart Proxy 1 to 3.18
+4. Validate Smart Proxy 1
+5. Upgrade Smart Proxy 2 to 3.18
+6. Validate Smart Proxy 2
+7. Repeat for additional Smart Proxies
+
+----------------------------
+SMART PROXY 1 UPGRADE PROCEDURE
+----------------------------
+
+[SMART PROXY 1]
+
+# Pre-Upgrade Steps
+
+# Step 1: Verify current Smart Proxy version
+rpm -q foreman-proxy
+
+# Expected: foreman-proxy-3.11.x (or current version)
+
+# Step 2: Check Smart Proxy services
+systemctl status foreman-proxy
+systemctl status dynflowd
+systemctl status pulpcore-worker@*
+
+# Step 3: Verify connectivity to Foreman Server
+curl -k https://foreman.example.com/api/status
+
+# Expected: JSON response with Foreman status
+
+# Step 4: Backup Smart Proxy configuration
+mkdir -p /backup/smartproxy-pre-upgrade-$(date +%F)
+
+tar -czf /backup/smartproxy-pre-upgrade-$(date +%F)/configs.tar.gz \
+  /etc/foreman-proxy \
+  /etc/smart_proxy_dynflow_core \
+  /var/lib/foreman-proxy \
+  /etc/httpd/conf.d/05-foreman-ssl.d
+
+# Step 5: Backup certificates
+tar -czf /backup/smartproxy-pre-upgrade-$(date +%F)/certs.tar.gz \
+  /etc/pki/katello-certs-tools \
+  /root/ssl-build
+
+# Step 6: Create VM snapshot (if virtual)
+# [HYPERVISOR] Create snapshot: smartproxy-1-pre-upgrade-$(date +%F)
+
+# Upgrade Steps
+
+# Step 7: Disable old Foreman repositories
+dnf config-manager --disable foreman-3.11
+rm -f /etc/yum.repos.d/foreman-3.11.repo
+
+# Step 8: Add new Foreman 3.18 repository
+cat > /etc/yum.repos.d/foreman-3.18.repo << 'EOF'
+[foreman-3.18]
+name=Foreman 3.18
+baseurl=https://yum.theforeman.org/releases/3.18/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/3.18/RPM-GPG-KEY-foreman
+EOF
+
+# Step 9: Import GPG key
+rpm --import https://yum.theforeman.org/releases/3.18/RPM-GPG-KEY-foreman
+
+# Step 10: Clean cache
+dnf clean all
+dnf makecache
+
+# Step 11: Verify target version available
+dnf list available foreman-proxy
+
+# Expected: foreman-proxy-3.18.x
+
+# Step 12: Stop Smart Proxy services
+systemctl stop foreman-proxy
+systemctl stop smart_proxy_dynflow_core
+systemctl stop pulpcore-worker@*
+
+# Step 13: Update Smart Proxy packages
+dnf update -y foreman-proxy\* smart-proxy\* tfm\*
+
+# Expected time: 5-10 minutes
+
+# Step 14: Run foreman-proxy-certs-generate on Foreman Server (if certificates need refresh)
+
+[FOREMAN SERVER]
+
+# Generate new certificates for Smart Proxy (only if needed)
+foreman-proxy-certs-generate \
+  --foreman-proxy-fqdn smartproxy1.example.com \
+  --certs-tar /root/smartproxy1-certs-3.18.tar
+
+# Copy to Smart Proxy
+scp /root/smartproxy1-certs-3.18.tar root@smartproxy1.example.com:/root/
+
+[SMART PROXY 1]
+
+# Step 15: Run foreman-installer on Smart Proxy
+foreman-installer \
+  --scenario foreman-proxy-content \
+  --foreman-proxy-content-parent-fqdn foreman.example.com \
+  --foreman-proxy-register-in-foreman true \
+  --foreman-proxy-foreman-base-url https://foreman.example.com \
+  --foreman-proxy-trusted-hosts foreman.example.com \
+  --foreman-proxy-trusted-hosts smartproxy1.example.com \
+  --foreman-proxy-oauth-consumer-key <OAUTH_KEY> \
+  --foreman-proxy-oauth-consumer-secret <OAUTH_SECRET>
+
+# Note: Retrieve OAuth credentials from /etc/foreman-proxy/settings.yml on existing Smart Proxy
+
+# Alternative if using certs tarball:
+foreman-installer \
+  --scenario foreman-proxy-content \
+  --certs-tar-file /root/smartproxy1-certs-3.18.tar \
+  --foreman-proxy-content-parent-fqdn foreman.example.com \
+  --foreman-proxy-register-in-foreman true \
+  --foreman-proxy-foreman-base-url https://foreman.example.com
+
+# Expected time: 10-15 minutes
+
+# Step 16: Start Smart Proxy services
+systemctl start foreman-proxy
+systemctl start smart_proxy_dynflow_core
+
+# Step 17: Verify services
+systemctl status foreman-proxy
+systemctl status smart_proxy_dynflow_core
+
+# Expected: All active (running)
+
+# Step 18: Verify Smart Proxy version
+rpm -q foreman-proxy
+
+# Expected: foreman-proxy-3.18.x
+
+# Step 19: Test Smart Proxy connectivity
+curl -k https://localhost:9090/
+
+# Expected: HTML response
+
+# Step 20: Refresh Smart Proxy features on Foreman Server
+
+[FOREMAN SERVER]
+
+# Refresh Smart Proxy features
+hammer proxy refresh-features --name smartproxy1.example.com
+
+# Expected output:
+# Features updated successfully
+
+# Verify Smart Proxy status
+hammer proxy info --name smartproxy1.example.com
+
+# Expected output should show:
+# Status: Available
+# Version: 3.18.x
+# Features: Pulpcore, Dynflow, Logs, HTTPBoot, TFTP, etc.
+
+# Verify Smart Proxy in UI
+# Login to Foreman UI -> Infrastructure -> Smart Proxies
+# Smart Proxy 1 should show green status with version 3.18.x
+
+[SMART PROXY 1]
+
+# Post-Upgrade Validation
+
+# Step 21: Verify Pulp content sync (if Smart Proxy mirrors content)
+ls -lh /var/lib/pulp/media/artifact/ | head -20
+
+# Content should be present and accessible
+
+# Step 22: Test content availability
+curl -k https://smartproxy1.example.com/pulp/content/Default_Organization/Library/custom/MyRepo/MyProduct/
+
+# Expected: Repository metadata or package listing
+
+# Step 23: Verify TFTP (if applicable)
+ls -l /var/lib/tftpboot/
+
+# PXE boot files should be present
+
+# Step 24: Verify DNS/DHCP (if applicable)
+systemctl status named
+systemctl status dhcpd
+
+# Step 25: Test Remote Execution
+[FOREMAN SERVER]
+hammer job-invocation create \
+  --job-template "Run Command - Script Default" \
+  --inputs command="uptime" \
+  --search-query "name = test-client.example.com"
+
+# Verify job executes successfully via Smart Proxy
+
+# Step 26: Create post-upgrade snapshot
+# [HYPERVISOR] Create snapshot: smartproxy-1-post-upgrade-3.18-$(date +%F)
+
+# Step 27: Document completion
+echo "Smart Proxy 1 upgraded to 3.18 on $(date)" | tee -a /root/upgrade.log
+
+----------------------------
+SMART PROXY 2 UPGRADE PROCEDURE
+----------------------------
+
+[SMART PROXY 2]
+
+# Repeat all steps from Smart Proxy 1 upgrade procedure
+# Replace smartproxy1 with smartproxy2 in all commands
+
+# Important: Only upgrade one Smart Proxy at a time
+# Validate each Smart Proxy before proceeding to the next
+
+----------------------------
+SMART PROXY ROLLBACK PROCEDURE
+----------------------------
+
+If Smart Proxy upgrade fails:
+
+[SMART PROXY]
+
+# Step 1: Stop services
+systemctl stop foreman-proxy
+systemctl stop smart_proxy_dynflow_core
+
+# Step 2: Restore VM snapshot
+# [HYPERVISOR] Restore snapshot: smartproxy-1-pre-upgrade-<DATE>
+
+# Step 3: Verify rollback
+rpm -q foreman-proxy
+
+# Should show previous version
+
+# Step 4: Restart services
+systemctl start foreman-proxy
+systemctl start smart_proxy_dynflow_core
+
+# Step 5: Verify connectivity
+[FOREMAN SERVER]
+hammer proxy refresh-features --name smartproxy1.example.com
+hammer proxy info --name smartproxy1.example.com
+
+# Smart Proxy should be operational at previous version
+
+================================================================================
+SECTION 10 – POST UPGRADE TASKS
+================================================================================
+
+Execute these tasks after ALL upgrade hops are complete and Foreman 3.18 is 
+running stably.
+
+[FOREMAN SERVER]
+
+----------------------------
+POST-UPGRADE TASK 1: Pulp Orphan Cleanup
+----------------------------
+
+# Pulp upgrades may leave orphaned content units
+# Safe to cleanup orphaned content not referenced by any repository
+
+# Check orphaned content
+foreman-rake katello:orphan_content_stats
+
+# Expected output:
+# Orphaned Artifacts: 1234
+# Orphaned Content Units: 567
+
+# Delete orphaned content (reclaim disk space)
+foreman-rake katello:delete_orphaned_content
+
+# Expected output:
+# Deleting orphaned content...
+# Deleted 1234 orphaned artifacts
+# Deleted 567 orphaned content units
+# Freed XX GB of disk space
+
+# Verify disk space reclaimed
+df -h /var/lib/pulp
+
+----------------------------
+POST-UPGRADE TASK 2: Task Cleanup
+----------------------------
+
+# Clean up old completed tasks (improves UI performance)
+
+# Check task count
+foreman-rake foreman_tasks:cleanup --help
+
+# Delete tasks older than 30 days
+foreman-maintain advanced procedure run foreman-tasks-delete \
+  --state old \
+  --after 30
+
+# Expected output:
+# Deleted 5678 old tasks
+
+# Verify task count reduced
+hammer task list --per-page 1 | grep "Total"
+
+----------------------------
+POST-UPGRADE TASK 3: Repository Metadata Regeneration
+----------------------------
+
+# Regenerate repository metadata to ensure consistency
+
+# List all repositories
+hammer repository list --fields ID,Name,Product
+
+# Regenerate metadata for all repositories
+# Note: This can be time-consuming for many repositories
+
+for repo_id in $(hammer --csv repository list --fields ID | tail -n +2); do
+  echo "Regenerating metadata for repository ID: $repo_id"
+  hammer repository update --id $repo_id --force-regenerate-metadata true
+done
+
+# Verify no errors in output
+
+----------------------------
+POST-UPGRADE TASK 4: Content View Publish (Verification)
+----------------------------
+
+# Verify content views can be published post-upgrade
+
+# List all content views
+hammer content-view list --fields ID,Name,"Last published"
+
+# Test publish a non-critical content view
+hammer content-view publish \
+  --name "Test Content View" \
+  --description "Post-upgrade validation publish"
+
+# Expected: Publish task completes successfully
+
+# Monitor publish task
+hammer task list --search 'label=Actions::Katello::ContentView::Publish' | head -10
+
+----------------------------
+POST-UPGRADE TASK 5: Repository Synchronization
+----------------------------
+
+# Synchronize critical repositories to verify Pulp functionality
+
+# List repositories not synced recently
+hammer repository list \
+  --search 'last_sync < "7 days ago"' \
+  --fields Name,Product,"Last sync"
+
+# Synchronize a test repository
+hammer repository synchronize \
+  --name "Oracle Linux 9 BaseOS" \
+  --product "Oracle Linux 9"
+
+# Monitor sync progress
+hammer task list --search 'label=Actions::Katello::Repository::Sync' | head -10
+
+# Expected: Sync completes successfully
+
+----------------------------
+POST-UPGRADE TASK 6: Cache Cleanup
+----------------------------
+
+# Clear Rails cache
+foreman-rake tmp:cache:clear
+
+# Clear Foreman sessions
+foreman-rake db:sessions:clear
+
+# Restart Foreman to clear all caches
+systemctl restart foreman
+
+# Verify Foreman restarted successfully
+systemctl status foreman
+
+----------------------------
+POST-UPGRADE TASK 7: Search Index Validation
+----------------------------
+
+# Foreman uses Elasticsearch/PostgreSQL for search
+# Verify search functionality
+
+# Rebuild search index (if search issues encountered)
+foreman-rake foreman_maintain:search_reindex
+
+# Expected time: 10-30 minutes depending on database size
+
+# Test search functionality via Hammer
+hammer host list --search "os = OracleLinux"
+
+# Expected: Results returned without errors
+
+# Test UI search
+# Login to UI -> Hosts -> All Hosts
+# Use search bar: "os = OracleLinux"
+# Verify results displayed
+
+----------------------------
+POST-UPGRADE TASK 8: Remote Execution Validation
+----------------------------
+
+# Verify Remote Execution (REX) functionality
+
+# Check REX settings
+hammer settings list --search 'remote_execution'
+
+# Run test job on a single host
+hammer job-invocation create \
+  --job-template "Run Command - Script Default" \
+  --inputs command="hostname" \
+  --search-query "name = test-host.example.com"
+
+# Monitor job execution
+hammer job-invocation list --search 'description ~ "hostname"' | head -5
+
+# Expected: Job completes successfully
+
+# Verify job output
+hammer job-invocation output \
+  --id <JOB_ID> \
+  --host test-host.example.com
+
+# Expected: Shows hostname output
+
+----------------------------
+POST-UPGRADE TASK 9: Subscription Validation
+----------------------------
+
+# Verify subscription management functionality
+
+# List subscriptions
+hammer subscription list --organization "Default Organization"
+
+# Expected: All subscriptions displayed
+
+# Verify activation keys
+hammer activation-key list --organization "Default Organization"
+
+# Test subscription attachment to a host
+hammer host subscription attach \
+  --host test-host.example.com \
+  --subscription-id <SUBSCRIPTION_ID>
+
+# Expected: Subscription attached successfully
+
+----------------------------
+POST-UPGRADE TASK 10: Lifecycle Environment Promotion
+----------------------------
+
+# Test content view promotion through lifecycle environments
+
+# Publish content view
+hammer content-view publish \
+  --name "RHEL 9 Base" \
+  --description "Post-upgrade validation"
+
+# Get latest version
+CV_VERSION=$(hammer content-view version list \
+  --content-view "RHEL 9 Base" \
+  --fields Version \
+  --order "version DESC" \
+  | head -2 | tail -1 | awk '{print $1}')
+
+# Promote to Development
+hammer content-view version promote \
+  --content-view "RHEL 9 Base" \
+  --version $CV_VERSION \
+  --to-lifecycle-environment "Development"
+
+# Expected: Promotion task completes successfully
+
+# Verify promotion
+hammer content-view version list \
+  --content-view "RHEL 9 Base" \
+  --fields Version,Environment
+
+----------------------------
+POST-UPGRADE TASK 11: Host Registration Test
+----------------------------
+
+# Verify new hosts can register post-upgrade
+
+# Generate registration command
+hammer host-registration generate-command \
+  --organization "Default Organization" \
+  --location "Default Location" \
+  --activation-keys "rhel9-base-key" \
+  --lifecycle-environment "Library"
+
+# Expected output: Registration command (curl | bash)
+
+# Example output:
+# curl -sS --insecure 'https://foreman.example.com/register' \
+#   -d "activation_keys=rhel9-base-key" \
+#   -d "organization_id=1" | bash
+
+# Test on a new host (or test VM)
+# [TEST CLIENT]
+# curl -sS --insecure 'https://foreman.example.com/register' \
+#   -d "activation_keys=rhel9-base-key" \
+#   -d "organization_id=1" | bash
+
+# Verify registration succeeded
+[FOREMAN SERVER]
+hammer host list --search "name = test-client.example.com"
+
+# Expected: Host appears in list
+
+----------------------------
+POST-UPGRADE TASK 12: Provisioning Validation
+----------------------------
+
+# Verify provisioning templates and PXE boot
+
+# List provisioning templates
+hammer template list --search 'type=provision'
+
+# Verify PXE files
+ls -l /var/lib/tftpboot/pxelinux.cfg/
+
+# Verify PXELinux boot files
+ls -l /var/lib/tftpboot/boot/
+
+# Test PXE boot (if test environment available)
+# Boot a test VM via PXE
+# Verify it loads Foreman provisioning menu
+
+----------------------------
+POST-UPGRADE TASK 13: Ansible Integration Validation
+----------------------------
+
+# If using Ansible plugin, verify functionality
+
+# List Ansible roles
+hammer ansible roles list
+
+# Run Ansible playbook on test host
+hammer job-invocation create \
+  --job-template "Ansible Roles - Ansible Default" \
+  --search-query "name = test-host.example.com" \
+  --inputs ansible_roles="common,base"
+
+# Monitor job
+hammer task list --search 'label=Actions::RemoteExecution::RunHostsJob' | head -5
+
+# Expected: Job completes successfully
+
+----------------------------
+POST-UPGRADE TASK 14: Backup Post-Upgrade Configuration
+----------------------------
+
+# Create final backup of upgraded system
+
+# Backup using foreman-maintain
+foreman-maintain backup offline \
+  --assumeyes \
+  --preserve-directory \
+  --skip-pulp-content \
+  /backup/foreman-3.18-post-upgrade-$(date +%F)
+
+# Backup installer answers
+cp /etc/foreman-installer/scenarios.d/katello.yaml \
+   /backup/katello-answers-3.18-final-$(date +%F).yaml
+
+# Document package versions
+rpm -qa | grep -E 'foreman|katello|pulp|candlepin' | sort \
+  > /backup/package-versions-3.18-$(date +%F).txt
+
+----------------------------
+POST-UPGRADE TASK 15: Performance Tuning
+----------------------------
+
+# Adjust PostgreSQL parameters for optimal performance
+
+[POSTGRESQL SERVER]
+
+# Review and optimize based on upgrade findings
+
+sudo vi /var/lib/pgsql/16/data/postgresql.conf
+
+# Recommended adjustments (tune based on workload):
+# shared_buffers = 16GB
+# effective_cache_size = 48GB
+# work_mem = 64MB (increase if complex queries)
+# maintenance_work_mem = 2GB
+# checkpoint_completion_target = 0.9
+
+# Reload PostgreSQL configuration
+sudo -u postgres psql -c "SELECT pg_reload_conf();"
+
+[FOREMAN SERVER]
+
+# Tune Foreman application settings
+
+# Increase Passenger workers if needed
+foreman-installer \
+  --foreman-passenger-max-pool-size 20 \
+  --foreman-passenger-max-request-queue-size 200
+
+# Adjust Pulp worker count based on CPU cores
+# Default: 2 workers
+# Recommended: 1 worker per 2 CPU cores
+
+systemctl status pulpcore-worker@* | grep Active
+
+# Add additional workers if needed
+for i in {3..4}; do
+  systemctl enable --now pulpcore-worker@$i
+done
+
+----------------------------
+POST-UPGRADE TASK 16: Monitoring and Alerting
+----------------------------
+
+# Configure monitoring for upgraded system
+
+# Enable Foreman telemetry (if using Prometheus)
+foreman-installer --foreman-telemetry-prometheus-enabled true
+
+# Verify telemetry endpoint
+curl -k https://localhost:9090/metrics
+
+# Expected: Prometheus metrics output
+
+# Configure log monitoring
+# Ensure log rotation is configured
+
+cat /etc/logrotate.d/foreman
+
+# Monitor critical logs for errors
+journalctl -u foreman --since "1 hour ago" | grep -i error
+journalctl -u pulpcore-api --since "1 hour ago" | grep -i error
+
+----------------------------
+POST-UPGRADE TASK 17: Documentation Update
+----------------------------
+
+# Update internal documentation
+
+# Document final configuration
+cat << EOF > /root/FOREMAN_UPGRADE_SUMMARY.txt
+================================================================================
+FOREMAN UPGRADE SUMMARY
+================================================================================
+
+Upgrade Date: $(date)
+Performed By: $USER
+
+VERSIONS:
+---------
+Starting Version: Foreman 3.11 / Katello 4.13
+Final Version:    Foreman 3.18 / Katello 4.15
+
+UPGRADE HOPS:
+-------------
+1. 3.11 -> 3.12 (Completed: <DATE>)
+2. 3.12 -> 3.13 (Completed: <DATE>)
+3. 3.13 -> 3.14 (Completed: <DATE>)
+4. 3.14 -> 3.15 (Completed: <DATE>)
+5. 3.15 -> 3.16 (Completed: <DATE>)
+6. 3.16 -> 3.17 (Completed: <DATE>)
+7. 3.17 -> 3.18 (Completed: <DATE>)
+
+TOTAL DOWNTIME: <HOURS> hours
+
+ISSUES ENCOUNTERED:
+-------------------
+<Document any issues and resolutions>
+
+ROLLBACKS PERFORMED:
+--------------------
+<None / Document if any>
+
+FINAL VALIDATION:
+-----------------
+[ ] UI accessible
+[ ] Hammer CLI functional
+[ ] Host registration working
+[ ] Content sync operational
+[ ] Remote execution functional
+[ ] Smart Proxies upgraded and operational
+
+BACKUPS:
+--------
+Pre-upgrade backup: /backup/foreman-3.11-<DATE>
+Post-upgrade backup: /backup/foreman-3.18-post-upgrade-<DATE>
+Offsite backup location: <LOCATION>
+
+NOTES:
+------
+<Additional notes>
+
+================================================================================
+EOF
+
+cat /root/FOREMAN_UPGRADE_SUMMARY.txt
+
+================================================================================
+SECTION 11 – PRODUCTION VALIDATION CHECKLIST
+================================================================================
+
+Execute this comprehensive checklist to validate all Foreman functionality
+post-upgrade. All items must pass before declaring upgrade successful.
+
+----------------------------
+VALIDATION CATEGORY 1: SYSTEM HEALTH
+----------------------------
+
+[FOREMAN SERVER]
+
+[ ] foreman-maintain health check passes
+Command: foreman-maintain health check
+Expected: All checks OK
+
+[ ] All services running
+Command: foreman-maintain service status
+Expected: All services active (running)
+
+[ ] No failed systemd units
+Command: systemctl --failed
+Expected: 0 loaded units listed
+
+[ ] Disk space adequate
+Command: df -h
+Expected: All filesystems <80% usage
+
+[ ] Memory usage normal
+Command: free -h
+Expected: Available memory >2GB
+
+[ ] CPU load normal
+Command: uptime
+Expected: Load average appropriate for system
+
+[ ] No SELinux denials
+Command: ausearch -m avc -ts recent
+Expected: No recent denials (or only non-critical)
+
+[ ] Firewall operational
+Command: firewall-cmd --state
+Expected: running
+
+----------------------------
+VALIDATION CATEGORY 2: VERSION VERIFICATION
+----------------------------
+
+[ ] Foreman version correct
+Command: foreman-maintain packages status | grep foreman
+Expected: foreman-3.18.x
+
+[ ] Katello version correct
+Command: rpm -q katello
+Expected: katello-4.15.x
+
+[ ] Pulp version correct
+Command: rpm -q pulpcore
+Expected: pulpcore-3.55.x
+
+[ ] Hammer CLI version correct
+Command: hammer --version
+Expected: 3.18.x
+
+[ ] PostgreSQL version correct
+Command: [POSTGRESQL SERVER] sudo -u postgres psql -c "SELECT version();"
+Expected: PostgreSQL 16.x
+
+----------------------------
+VALIDATION CATEGORY 3: WEB UI FUNCTIONALITY
+----------------------------
+
+[ ] UI accessible
+Browser: https://foreman.example.com
+Expected: Login page loads without errors
+
+[ ] UI login successful
+Credentials: admin / <password>
+Expected: Dashboard loads
+
+[ ] Dashboard widgets display
+Expected: All widgets show data (hosts, content, tasks)
+
+[ ] No JavaScript errors
+Browser console: Check for errors (F12)
+Expected: No critical errors
+
+[ ] Hosts page loads
+Navigate: Hosts -> All Hosts
+Expected: Host list displays
+
+[ ] Content Views page loads
+Navigate: Content -> Content Views
+Expected: Content view list displays
+
+[ ] Repositories page loads
+Navigate: Content -> Products -> Repositories
+Expected: Repository list displays
+
+[ ] Smart Proxies page loads
+Navigate: Infrastructure -> Smart Proxies
+Expected: All proxies show green status
+
+----------------------------
+VALIDATION CATEGORY 4: HAMMER CLI FUNCTIONALITY
+----------------------------
+
+[ ] Hammer ping successful
+Command: hammer ping
+Expected: All services OK
+
+[ ] Hammer host list
+Command: hammer host list
+Expected: Host list displays without errors
+
+[ ] Hammer repository list
+Command: hammer repository list
+Expected: Repository list displays
+
+[ ] Hammer content-view list
+Command: hammer content-view list
+Expected: Content view list displays
+
+[ ] Hammer activation-key list
+Command: hammer activation-key list
+Expected: Activation key list displays
+
+[ ] Hammer task list
+Command: hammer task list
+Expected: Task list displays
+
+----------------------------
+VALIDATION CATEGORY 5: HOST MANAGEMENT
+----------------------------
+
+[ ] Host details accessible
+Command: hammer host info --name <test-host>
+Expected: Full host details displayed
+
+[ ] Host facts updated
+Command: hammer host facts --name <test-host>
+Expected: Facts displayed
+
+[ ] Host packages listed
+Command: hammer host package list --host <test-host>
+Expected: Package list displayed
+
+[ ] Host errata listed
+Command: hammer host errata list --host <test-host>
+Expected: Errata list displayed (may be empty)
+
+----------------------------
+VALIDATION CATEGORY 6: HOST REGISTRATION
+----------------------------
+
+[ ] Registration command generated
+Command: hammer host-registration generate-command --organization "Default Organization"
+Expected: Registration command (curl | bash) displayed
+
+[ ] Test host registration (if test system available)
+[TEST CLIENT]
+<Execute registration command>
+Expected: Registration completes successfully
+
+[ ] New host visible in Foreman
+Command: hammer host list --search "name = <test-host>"
+Expected: Host listed
+
+[ ] Host subscribed
+Command: hammer host subscription list --host <test-host>
+Expected: Subscriptions listed
+
+----------------------------
+VALIDATION CATEGORY 7: SUBSCRIPTION MANAGEMENT
+----------------------------
+
+[ ] Subscriptions listed
+Command: hammer subscription list
+Expected: All subscriptions displayed with quantities
+
+[ ] Activation keys listed
+Command: hammer activation-key list
+Expected: All activation keys displayed
+
+[ ] Activation key details
+Command: hammer activation-key info --name <key-name>
+Expected: Full details including subscriptions, content view, environment
+
+[ ] Manifest status
+Navigate UI: Content -> Subscriptions
+Expected: Manifest uploaded, subscription counts correct
+
+----------------------------
+VALIDATION CATEGORY 8: CONTENT MANAGEMENT
+----------------------------
+
+[ ] Repository sync
+Command: hammer repository synchronize --name "<repo-name>" --organization "Default Organization"
+Expected: Sync task completes successfully
+
+[ ] Repository packages listed
+Command: hammer repository package list --name "<repo-name>"
+Expected: Package list displayed
+
+[ ] Content view publish
+Command: hammer content-view publish --name "<cv-name>"
+Expected: Publish task completes successfully
+
+[ ] Content view version listed
+Command: hammer content-view version list --content-view "<cv-name>"
+Expected: New version listed
+
+[ ] Lifecycle environment promotion
+Command: hammer content-view version promote --content-view "<cv-name>" --version <ver> --to-lifecycle-environment "Development"
+Expected: Promotion completes successfully
+
+----------------------------
+VALIDATION CATEGORY 9: REMOTE EXECUTION
+----------------------------
+
+[ ] REX job templates listed
+Command: hammer job-template list
+Expected: Job templates displayed
+
+[ ] REX job execution
+Command: hammer job-invocation create --job-template "Run Command - Script Default" --inputs command="uptime" --search-query "name = <test-host>"
+Expected: Job completes successfully
+
+[ ] REX job output
+Command: hammer job-invocation output --id <job-id> --host <test-host>
+Expected: Command output displayed
+
+[ ] REX job history
+Command: hammer job-invocation list
+Expected: Job history displayed
+
+----------------------------
+VALIDATION CATEGORY 10: PROVISIONING
+----------------------------
+
+[ ] Provisioning templates listed
+Command: hammer template list --search 'type=provision'
+Expected: Provisioning templates displayed
+
+[ ] PXE files present
+Command: ls -l /var/lib/tftpboot/pxelinux.cfg/
+Expected: PXE configuration files present
+
+[ ] Boot files present
+Command: ls -l /var/lib/tftpboot/boot/
+Expected: Kernel and initrd files present
+
+[ ] Operating systems listed
+Command: hammer os list
+Expected: Operating systems configured
+
+[ ] Host creation (if test environment available)
+Command: hammer host create --name test-provision.example.com --organization "Default Organization" --location "Default Location" --compute-resource <resource> --compute-profile <profile> --provision-method build
+Expected: Host created successfully
+
+----------------------------
+VALIDATION CATEGORY 11: SMART PROXY FUNCTIONALITY
+----------------------------
+
+[ ] Smart Proxy list
+Command: hammer proxy list
+Expected: All proxies listed with "Available" status
+
+[ ] Smart Proxy details
+Command: hammer proxy info --name <proxy-name>
+Expected: Version 3.18.x, all features enabled
+
+[ ] Smart Proxy features
+Command: hammer proxy info --name <proxy-name> | grep Features
+Expected: Features include Pulpcore, Dynflow, Logs, etc.
+
+[ ] Smart Proxy refresh
+Command: hammer proxy refresh-features --name <proxy-name>
+Expected: Features refreshed successfully
+
+[ ] Smart Proxy logs accessible
+Navigate UI: Infrastructure -> Smart Proxies -> <proxy> -> Logs
+Expected: Logs displayed
+
+[ ] Content sync to Smart Proxy (if applicable)
+Command: hammer capsule content synchronize --name <proxy-name>
+Expected: Sync completes successfully
+
+----------------------------
+VALIDATION CATEGORY 12: PULP FUNCTIONALITY
+----------------------------
+
+[ ] Pulp API accessible
+Command: curl -k https://foreman.example.com/pulp/api/v3/status/
+Expected: JSON status response
+
+[ ] Pulp workers running
+Command: systemctl status pulpcore-worker@*
+Expected: All workers active (running)
+
+[ ] Pulpcore manager status
+Command: pulpcore-manager status
+Expected: All services operational
+
+[ ] Pulp content accessible
+Command: curl -k https://foreman.example.com/pulp/content/Default_Organization/Library/custom/<product>/<repo>/
+Expected: Repository metadata or package list
+
+[ ] Pulp artifacts present
+Command: ls -lh /var/lib/pulp/media/artifact/ | head -20
+Expected: Artifact files present
+
+----------------------------
+VALIDATION CATEGORY 13: DATABASE INTEGRITY
+----------------------------
+
+[POSTGRESQL SERVER]
+
+[ ] Database connectivity
+Command: sudo -u postgres psql -l
+Expected: foreman, candlepin, pulpcore databases listed
+
+[ ] Foreman database size
+Command: sudo -u postgres psql -c "SELECT pg_size_pretty(pg_database_size('foreman'));"
+Expected: Size displayed (should be reasonable)
+
+[ ] No pending migrations
+Command: [FOREMAN SERVER] foreman-rake db:migrate:status | grep down
+Expected: No output (all migrations up)
+
+[ ] Database vacuum recent
+Command: sudo -u postgres psql -d foreman -c "SELECT relname, last_vacuum, last_autovacuum FROM pg_stat_user_tables WHERE schemaname = 'public' ORDER BY last_autovacuum DESC LIMIT 10;"
+Expected: Recent vacuum timestamps
+
+[ ] No blocking locks
+Command: sudo -u postgres psql -d foreman -c "SELECT count(*) FROM pg_locks WHERE NOT granted;"
+Expected: 0
+
+----------------------------
+VALIDATION CATEGORY 14: ANSIBLE INTEGRATION (if applicable)
+----------------------------
+
+[ ] Ansible roles listed
+Command: hammer ansible roles list
+Expected: Ansible roles displayed (if configured)
+
+[ ] Ansible playbook execution
+Command: hammer job-invocation create --job-template "Ansible Roles - Ansible Default" --search-query "name = <test-host>" --inputs ansible_roles="<role>"
+Expected: Job completes successfully
+
+----------------------------
+VALIDATION CATEGORY 15: REPORTING
+----------------------------
+
+[ ] Report templates listed
+Command: hammer report-template list
+Expected: Report templates displayed
+
+[ ] Report generation
+Command: hammer report-template generate --name "Host - Statuses" --organization "Default Organization"
+Expected: Report generated in JSON/CSV/YAML
+
+[ ] Task report
+Navigate UI: Monitor -> Tasks
+Expected: Task list displays with recent tasks
+
+----------------------------
+VALIDATION CATEGORY 16: DISCOVERY (if applicable)
+----------------------------
+
+[ ] Discovery rules listed
+Command: hammer discovery-rule list
+Expected: Discovery rules displayed (if configured)
+
+[ ] Discovered hosts listed
+Command: hammer discovery list
+Expected: Discovered hosts displayed (may be empty)
+
+----------------------------
+VALIDATION CATEGORY 17: COMPUTE RESOURCES (if applicable)
+----------------------------
+
+[ ] Compute resources listed
+Command: hammer compute-resource list
+Expected: Compute resources displayed (if configured)
+
+[ ] Compute resource details
+Command: hammer compute-resource info --name <resource-name>
+Expected: Details displayed, status available
+
+[ ] VM creation test (if safe to test)
+Command: hammer host create --name test-vm.example.com --compute-resource <resource> --compute-profile <profile>
+Expected: VM created successfully
+
+----------------------------
+VALIDATION CATEGORY 18: LOGS AND TROUBLESHOOTING
+----------------------------
+
+[ ] Foreman production log clean
+Command: tail -100 /var/log/foreman/production.log | grep -i error
+Expected: No critical errors (only INFO/WARN acceptable)
+
+[ ] Pulp API log clean
+Command: journalctl -u pulpcore-api --since "1 hour ago" | grep -i error
+Expected: No critical errors
+
+[ ] Apache error log clean
+Command: tail -100 /var/log/httpd/foreman_ssl_error_ssl.log
+Expected: No critical errors
+
+[ ] Candlepin log clean
+Command: tail -100 /var/log/candlepin/candlepin.log | grep -i error
+Expected: No critical errors
+
+[ ] Dynflow log clean
+Command: journalctl -u dynflowd --since "1 hour ago" | grep -i error
+Expected: No critical errors
+
+----------------------------
+VALIDATION SUMMARY
+----------------------------
+
+Total validation items: ~100+
+
+Required pass rate: 100% for critical items, >95% for all items
+
+Critical items (must pass):
+- System health checks
+- Version verification
+- UI login
+- Hammer ping
+- Host registration
+- Content sync
+- Remote execution
+- Smart Proxy status
+
+Non-critical items (may have environment-specific reasons for failure):
+- Ansible integration (if not used)
+- Discovery (if not used)
+- Compute resources (if not used)
+- Specific provisioning tests
+
+VALIDATION CHECKLIST SIGN-OFF:
+
+Performed by: ___________________________
+Date: ___________________________
+Signature: ___________________________
+
+Critical items passed: _____/_____
+All items passed: _____/_____
+
+Status: [ ] PASS  [ ] FAIL  [ ] PASS WITH EXCEPTIONS
+
+Exceptions documented: ___________________________
+
+================================================================================
+SECTION 12 – ROLLBACK PLAN
+================================================================================
+
+This section provides detailed rollback procedures for each upgrade hop.
+Execute rollback if critical issues are encountered post-upgrade.
+
+----------------------------
+ROLLBACK DECISION CRITERIA
+----------------------------
+
+IMMEDIATE ROLLBACK REQUIRED IF:
+1. foreman-installer exits with non-zero status
+2. Database migration failures preventing service start
+3. Foreman UI inaccessible after 15 minutes
+4. hammer ping shows critical services down after service restart
+5. Data corruption detected
+6. More than 50% of hosts unable to check in
+7. Content sync completely broken
+8. Smart Proxy unable to communicate with Foreman
+
+ROLLBACK CONSIDERED IF:
+1. Significant performance degradation (>50% slower)
+2. Minor functionality broken but workarounds exist
+3. Non-critical features unavailable
+4. Intermittent errors affecting <10% of operations
+
+PROCEED WITH TROUBLESHOOTING IF:
+1. UI accessible but with minor errors
+2. All services running but logs show warnings
+3. Specific repositories failing sync (may be repository-specific)
+4. Individual hosts having issues (may be host-specific)
+
+----------------------------
+ROLLBACK TIME OBJECTIVES
+----------------------------
+
+Recovery Time Objective (RTO): 2 hours
+Recovery Point Objective (RPO): Point of last backup (before upgrade hop)
+
+Rollback Method Priority:
+1. VM Snapshot Restore (Fastest: 15-30 minutes)
+2. Database Restore + Package Downgrade (Medium: 1-2 hours)
+3. Full System Restore from Backup (Slowest: 2-4 hours)
+
+----------------------------
+GENERAL ROLLBACK PROCEDURE (All Hops)
+----------------------------
+
+ROLLBACK METHOD 1: VM SNAPSHOT RESTORE (RECOMMENDED)
+
+[HYPERVISOR/VMWARE/LIBVIRT]
+
+# Step 1: Notify users of rollback
+# Send notification: "Upgrade rollback in progress, service interruption expected"
+
+# Step 2: Document rollback reason
+echo "=== ROLLBACK INITIATED: $(date) ===" >> /root/rollback.log
+echo "Reason: <DOCUMENT REASON>" >> /root/rollback.log
+
+# Step 3: Stop Foreman services (if still running)
+[FOREMAN SERVER]
+foreman-maintain service stop
+
+# Step 4: Restore VM snapshot
+
+For VMware vSphere:
+# Via vCenter UI:
+# 1. Right-click Foreman VM -> Snapshots -> Manage Snapshots
+# 2. Select snapshot: foreman-pre-upgrade-<VERSION>-<DATE>
+# 3. Click "Restore"
+# 4. Confirm: "Yes, restore to this snapshot"
+
+For libvirt/KVM:
+virsh snapshot-revert foreman-server foreman-pre-upgrade-<VERSION>-<DATE>
+
+For Hyper-V:
+# Via Hyper-V Manager:
+# 1. Select Foreman VM -> Actions -> Revert
+# 2. Select checkpoint: foreman-pre-upgrade-<VERSION>-<DATE>
+
+# Expected time: 5-15 minutes
+
+# Step 5: Start VM
+[HYPERVISOR]
+# Start VM via hypervisor interface
+
+# Step 6: Verify VM booted
+[FOREMAN SERVER]
+# Login via console or SSH
+
+# Step 7: Verify version
+rpm -q foreman
+
+# Expected: Previous version (e.g., foreman-3.11.x if rolling back from 3.12)
+
+# Step 8: Start services
+foreman-maintain service start
+
+# Step 9: Verify service status
+foreman-maintain service status
+
+# Expected: All services running
+
+# Step 10: Verify functionality
+hammer ping
+
+# Expected: All services OK
+
+# Step 11: Restore PostgreSQL snapshot (if separate VM)
+[POSTGRESQL HYPERVISOR]
+# Restore PostgreSQL VM snapshot to matching timestamp
+# Virsh example:
+virsh snapshot-revert postgresql-server postgres-pre-foreman-upgrade-<DATE>
+
+# Step 12: Verify database connectivity
+[FOREMAN SERVER]
+hammer ping
+
+# Expected: Database connections OK
+
+# Step 13: Verify UI
+# Browser: https://foreman.example.com
+# Expected: UI loads with previous version
+
+# Step 14: Verify data integrity
+hammer host list | head -10
+hammer repository list | head -10
+
+# Expected: Data matches pre-upgrade state
+
+# Step 15: Document rollback completion
+echo "=== ROLLBACK COMPLETED: $(date) ===" >> /root/rollback.log
+echo "Restored to version: $(rpm -q foreman)" >> /root/rollback.log
+
+# Step 16: Notify users
+# Send notification: "Rollback complete, service restored to previous version"
+
+# Total time: 30-45 minutes
+
+----------------------------
+ROLLBACK METHOD 2: DATABASE RESTORE + PACKAGE DOWNGRADE
+----------------------------
+
+Use this method if VM snapshots are not available.
+
+[FOREMAN SERVER]
+
+# Step 1: Stop all services
+foreman-maintain service stop
+
+# Step 2: Verify services stopped
+foreman-maintain service status
+
+# Step 3: Downgrade packages
+dnf downgrade -y foreman\* katello\* pulp\* candlepin\* tfm\*
+
+# Note: This requires old package versions available in repository
+# If not available, add old repository:
+cat > /etc/yum.repos.d/foreman-<OLD_VERSION>.repo << 'EOF'
+[foreman-<OLD_VERSION>]
+name=Foreman <OLD_VERSION>
+baseurl=https://yum.theforeman.org/releases/<OLD_VERSION>/el9/x86_64/
+enabled=1
+gpgcheck=1
+gpgkey=https://yum.theforeman.org/releases/<OLD_VERSION>/RPM-GPG-KEY-foreman
+EOF
+
+dnf clean all
+dnf makecache
+
+# Downgrade to specific version
+dnf downgrade -y foreman-<OLD_VERSION> katello-<OLD_KATELLO_VERSION>
+
+# Step 4: Restore databases
+
+[POSTGRESQL SERVER]
+
+# Stop PostgreSQL (only if safe)
+# WARNING: This impacts all databases
+sudo systemctl stop postgresql-16
+
+# Restore foreman database
+sudo -u postgres dropdb foreman
+sudo -u postgres createdb foreman -O foreman
+sudo -u postgres pg_restore -d foreman /backup/postgresql-<DATE>/foreman-<OLD_VERSION>.dump
+
+# Restore candlepin database
+sudo -u postgres dropdb candlepin
+sudo -u postgres createdb candlepin -O candlepin
+sudo -u postgres pg_restore -d candlepin /backup/postgresql-<DATE>/candlepin.dump
+
+# Restore pulpcore database
+sudo -u postgres dropdb pulpcore
+sudo -u postgres createdb pulpcore -O pulp
+sudo -u postgres pg_restore -d pulpcore /backup/postgresql-<DATE>/pulpcore.dump
+
+# Restore globals (roles)
+sudo -u postgres psql -f /backup/postgresql-<DATE>/globals.sql
+
+# Start PostgreSQL
+sudo systemctl start postgresql-16
+
+# Verify databases restored
+sudo -u postgres psql -l | grep -E 'foreman|candlepin|pulpcore'
+
+[FOREMAN SERVER]
+
+# Step 5: Restore configuration files
+cd /backup/foreman-configs-<DATE>
+tar -xzf foreman-configs-<DATE>.tar.gz -C /
+
+# Step 6: 
+
+
+SECTION 12 – Rollback Plan
+
+For every upgrade hop provide:
+
+Rollback trigger conditions
+Rollback commands
+Database restore
+Snapshot restore
+Application restore
+
+Provide Recovery Time Objective estimate.
+
+SECTION 13 – Troubleshooting
+
+Include known issues:
+
+Migration failures
+Database connectivity failures
+Pulp migration failures
+Candlepin failures
+Dynflow failures
+SELinux denials
+Repository issues
+Smart Proxy failures
+
+Provide exact remediation commands.
+
+SECTION 14 – Final Sign-Off
+
+Generate a Go/No-Go checklist.
+
+OUTPUT FORMAT
+Use Markdown
+All commands in code blocks
+Separate commands by server:
+[FOREMAN SERVER]
+[POSTGRESQL SERVER]
+[SMART PROXY]
+Include expected output
+Include validation criteria
+Include rollback criteria
+Assume enterprise production environment with change management approval process and maintenance windows. Please share end to end in notepad txt file in a consolidated format for easy copy in single file
+
+
+===============================
+
+================================================================================
+FOREMAN 3.11 TO 3.18 ENTERPRISE PRODUCTION UPGRADE RUNBOOK
+SECTIONS 12-14: ROLLBACK, TROUBLESHOOTING, AND FINAL SIGN-OFF
+================================================================================
+
+Author: Principal Foreman/Katello Architect
+Environment: Oracle Linux 9.x | External PostgreSQL 16 | Production
+Source: Foreman 3.11 / Katello 4.13
+Target: Foreman 3.18 / Katello 4.15
+Document Version: 1.0
+Last Updated: 2025
+
+================================================================================
+SECTION 12 – ROLLBACK PLAN
+================================================================================
+
+--------------------------------------------------------------------------------
+12.1 ROLLBACK STRATEGY OVERVIEW
+--------------------------------------------------------------------------------
+
+ROLLBACK PRINCIPLES:
+- Every upgrade hop has an independent rollback procedure
+- Rollback must be executed within 4 hours of upgrade start
+- Database restore is the primary rollback mechanism
+- VM snapshots provide secondary rollback capability
+- All rollbacks restore to pre-upgrade state
+
+ROLLBACK TRIGGER CONDITIONS:
+1. Database migration failure
+2. Service startup failure after upgrade
+3. Critical functionality broken (host registration, content sync)
+4. PostgreSQL connectivity failures
+5. Pulp migration failures lasting > 2 hours
+6. Smart Proxy communication failures
+7. UI inaccessible for > 30 minutes post-upgrade
+8. Subscription management failures
+9. Performance degradation > 50%
+10. Data inconsistencies detected
+
+RECOVERY TIME OBJECTIVE (RTO):
+- VM Snapshot Rollback: 30-60 minutes
+- Database Restore Rollback: 1-2 hours
+- Full Application Restore: 2-4 hours
+
+RECOVERY POINT OBJECTIVE (RPO):
+- Point-in-time: Moment before upgrade execution
+- Data loss: Zero tolerance - all backups taken immediately pre-upgrade
+
+--------------------------------------------------------------------------------
+12.2 ROLLBACK FOR EACH UPGRADE HOP
+--------------------------------------------------------------------------------
+
+========================================
+ROLLBACK: 3.11 → 3.12
+========================================
+
+ROLLBACK TRIGGER CONDITIONS:
+✗ foreman-installer fails
+✗ Database migration errors in /var/log/foreman-installer/
+✗ Services fail to start
+✗ hammer ping shows any service down
+✗ UI returns 500 errors
+
+ROLLBACK PROCEDURE - METHOD 1: VM SNAPSHOT
+
+[HYPERVISOR/VMWARE]
+# Restore Foreman Server VM snapshot
+vim-cmd vmsvc/getallvms | grep foreman
+vim-cmd vmsvc/snapshot.revert <vmid> <snapshot_id> suppressPowerOff
+
+# Restore PostgreSQL Server VM snapshot
+vim-cmd vmsvc/getallvms | grep postgres
+vim-cmd vmsvc/snapshot.revert <vmid> <snapshot_id> suppressPowerOff
+
+# For KVM/libvirt
+virsh snapshot-list foreman-server
+virsh snapshot-revert foreman-server --snapshotname pre-upgrade-3.11-to-3.12 --running
+
+virsh snapshot-list postgresql-server
+virsh snapshot-revert postgresql-server --snapshotname pre-upgrade-3.11-to-3.12 --running
+
+VALIDATION POST VM RESTORE:
+
+[FOREMAN SERVER]
+systemctl status foreman
+systemctl status httpd
+systemctl status pulpcore-api
+systemctl status pulpcore-content
+systemctl status pulpcore-worker@*
+
+hammer --version
+# Expected: Foreman 3.11
+
+foreman-rake db:migrate:status | tail -20
+# Verify all migrations show "up" for 3.11
+
+RECOVERY TIME: 30-45 minutes
+
+========================================
+
+ROLLBACK PROCEDURE - METHOD 2: DATABASE RESTORE
+
+[POSTGRESQL SERVER]
+# Stop all connections to databases
+sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('foreman', 'pulpcore', 'candlepin') AND pid <> pg_backend_pid();"
+
+# Drop existing databases
+sudo -u postgres psql << EOF
+DROP DATABASE IF EXISTS foreman;
+DROP DATABASE IF EXISTS pulpcore;
+DROP DATABASE IF EXISTS candlepin;
+EOF
+
+# Restore databases from backup
+sudo -u postgres pg_restore -C -d postgres /backup/foreman_pre_3.12_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/pulpcore_pre_3.12_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/candlepin_pre_3.12_upgrade.dump
+
+# Verify restoration
+sudo -u postgres psql -d foreman -c "SELECT COUNT(*) FROM hosts;"
+sudo -u postgres psql -d foreman -c "SELECT value FROM settings WHERE name = 'foreman_version';"
+# Expected: 3.11
+
+sudo -u postgres psql -d pulpcore -c "SELECT COUNT(*) FROM core_repository;"
+sudo -u postgres psql -d candlepin -c "SELECT COUNT(*) FROM cp_pool;"
+
+[FOREMAN SERVER]
+# Downgrade packages
+dnf downgrade -y foreman\* katello\* pulpcore\*
+
+# Restore configuration files
+tar -xzf /backup/foreman-config-pre-3.12.tar.gz -C /
+
+# Restore Foreman-specific directories
+tar -xzf /backup/foreman-data-pre-3.12.tar.gz -C /
+
+# Clear caches
+foreman-rake tmp:clear
+foreman-rake db:sessions:clear
+
+# Restart services
+systemctl restart postgresql  # if local
+systemctl restart foreman
+systemctl restart httpd
+systemctl restart pulpcore-api
+systemctl restart pulpcore-content
+systemctl restart pulpcore-worker@{1..4}
+systemctl restart dynflow-sidekiq@*
+
+# Wait for services to stabilize
+sleep 60
+
+VALIDATION:
+
+[FOREMAN SERVER]
+hammer ping
+# Expected: All services show "ok"
+
+hammer --version
+# Expected: Foreman CLI 3.11
+
+curl -k https://$(hostname)/api/status
+# Expected: "version":"3.11"
+
+foreman-rake katello:check_ping
+# Expected: All checks pass
+
+RECOVERY TIME: 1-2 hours
+
+========================================
+
+ROLLBACK PROCEDURE - METHOD 3: FULL APPLICATION RESTORE
+
+[FOREMAN SERVER]
+# Stop all services
+foreman-maintain service stop
+
+# Restore application files
+tar -xzf /backup/var-lib-pulp-pre-3.12.tar.gz -C /
+tar -xzf /backup/etc-foreman-pre-3.12.tar.gz -C /
+tar -xzf /backup/etc-httpd-pre-3.12.tar.gz -C /
+
+# Restore PostgreSQL databases (see METHOD 2 above)
+
+# Downgrade all packages
+dnf history list | grep -i "foreman\|katello"
+# Identify transaction ID of upgrade
+dnf history undo <transaction_id>
+
+# Alternative: Manual downgrade
+cat > /tmp/downgrade-packages.txt << EOF
+foreman-3.11.0
+katello-4.13.0
+pulpcore-3.55.1
+EOF
+
+dnf downgrade -y $(cat /tmp/downgrade-packages.txt)
+
+# Restore SELinux contexts
+restorecon -R /etc/foreman
+restorecon -R /var/lib/pulp
+restorecon -R /usr/share/foreman
+
+# Start services
+foreman-maintain service start
+
+# Wait for startup
+sleep 120
+
+VALIDATION:
+
+[FOREMAN SERVER]
+systemctl status foreman --no-pager
+systemctl status pulpcore-api --no-pager
+systemctl status httpd --no-pager
+
+hammer ping
+
+foreman-maintain health check
+
+RECOVERY TIME: 2-4 hours
+
+========================================
+ROLLBACK: 3.12 → 3.13
+========================================
+
+ROLLBACK TRIGGER CONDITIONS:
+✗ Pulp 3 migration fails
+✗ Content views become inaccessible
+✗ Repository sync broken
+✗ Katello agent communication fails
+✗ Subscription upload errors
+
+ROLLBACK PROCEDURE:
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname IN ('foreman', 'pulpcore', 'candlepin') AND pid <> pg_backend_pid();"
+
+sudo -u postgres psql << EOF
+DROP DATABASE IF EXISTS foreman;
+DROP DATABASE IF EXISTS pulpcore;
+DROP DATABASE IF EXISTS candlepin;
+EOF
+
+sudo -u postgres pg_restore -C -d postgres /backup/foreman_pre_3.13_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/pulpcore_pre_3.13_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/candlepin_pre_3.13_upgrade.dump
+
+[FOREMAN SERVER]
+foreman-maintain service stop
+
+dnf downgrade -y foreman\* katello\* pulpcore\*
+
+tar -xzf /backup/var-lib-pulp-pre-3.13.tar.gz -C /
+tar -xzf /backup/etc-foreman-pre-3.13.tar.gz -C /
+
+foreman-maintain service start
+
+VALIDATION:
+
+hammer ping
+hammer content-view list
+hammer repository list
+hammer host list | head -10
+
+foreman-rake katello:check_ping
+
+RECOVERY TIME: 1.5-3 hours
+
+========================================
+ROLLBACK: 3.13 → 3.14
+========================================
+
+ROLLBACK TRIGGER CONDITIONS:
+✗ Ansible integration breaks
+✗ Smart Proxy plugin compatibility issues
+✗ Remote execution failures
+✗ Template rendering errors
+✗ Provisioning workflow broken
+
+ROLLBACK PROCEDURE:
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql << EOF
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+WHERE datname IN ('foreman', 'pulpcore', 'candlepin') AND pid <> pg_backend_pid();
+
+DROP DATABASE foreman;
+DROP DATABASE pulpcore;
+DROP DATABASE candlepin;
+EOF
+
+sudo -u postgres pg_restore -C -d postgres /backup/foreman_pre_3.14_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/pulpcore_pre_3.14_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/candlepin_pre_3.14_upgrade.dump
+
+[FOREMAN SERVER]
+foreman-maintain service stop
+
+# Rollback Smart Proxy plugins
+[SMART PROXY SERVERS]
+foreman-maintain service stop
+dnf downgrade -y foreman-proxy\* rubygem-smart_proxy\*
+foreman-maintain service start
+
+[FOREMAN SERVER]
+dnf downgrade -y foreman\* katello\* pulpcore\* tfm-\*
+
+tar -xzf /backup/foreman-data-pre-3.14.tar.gz -C /
+
+foreman-maintain service start
+
+VALIDATION:
+
+hammer ping
+hammer ansible roles list
+hammer job-template list
+hammer remote-execution-feature list
+hammer template list --per-page 5
+
+ssh root@smart-proxy-01.example.com "hammer ping"
+
+RECOVERY TIME: 2-3 hours
+
+========================================
+ROLLBACK: 3.14 → 3.15
+========================================
+
+ROLLBACK TRIGGER CONDITIONS:
+✗ Compute resource integration failures
+✗ LDAP/AD authentication broken
+✗ SSL certificate issues
+✗ API endpoint failures
+✗ UI performance degradation > 3x
+
+ROLLBACK PROCEDURE:
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql << EOF
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+WHERE datname IN ('foreman', 'pulpcore', 'candlepin') AND pid <> pg_backend_pid();
+
+DROP DATABASE foreman;
+DROP DATABASE pulpcore;
+DROP DATABASE candlepin;
+EOF
+
+sudo -u postgres pg_restore -C -d postgres /backup/foreman_pre_3.15_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/pulpcore_pre_3.15_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/candlepin_pre_3.15_upgrade.dump
+
+[FOREMAN SERVER]
+foreman-maintain service stop
+
+# Restore certificates
+tar -xzf /backup/etc-pki-katello-certs-pre-3.15.tar.gz -C /
+
+dnf downgrade -y foreman\* katello\* pulpcore\*
+
+tar -xzf /backup/foreman-config-pre-3.15.tar.gz -C /
+
+# Restore LDAP configuration
+tar -xzf /backup/ldap-config-pre-3.15.tar.gz -C /etc/foreman/
+
+foreman-maintain service start
+
+VALIDATION:
+
+hammer ping
+hammer auth-source ldap list
+hammer compute-resource list
+curl -k https://$(hostname)/api/status | jq
+
+# Test LDAP authentication
+hammer -u ldapuser@example.com -p password host list
+
+RECOVERY TIME: 2-3 hours
+
+========================================
+ROLLBACK: 3.15 → 3.16
+========================================
+
+ROLLBACK TRIGGER CONDITIONS:
+✗ Content View promotion failures
+✗ Lifecycle environment issues
+✗ Activation key corruption
+✗ Host registration broken
+✗ Subscription manager client failures
+
+ROLLBACK PROCEDURE:
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql << EOF
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+WHERE datname IN ('foreman', 'pulpcore', 'candlepin') AND pid <> pg_backend_pid();
+
+DROP DATABASE foreman;
+DROP DATABASE pulpcore;
+DROP DATABASE candlepin;
+EOF
+
+sudo -u postgres pg_restore -C -d postgres /backup/foreman_pre_3.16_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/pulpcore_pre_3.16_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/candlepin_pre_3.16_upgrade.dump
+
+[FOREMAN SERVER]
+foreman-maintain service stop
+
+dnf downgrade -y foreman\* katello\* pulpcore\* candlepin\*
+
+tar -xzf /backup/var-lib-candlepin-pre-3.16.tar.gz -C /
+tar -xzf /backup/var-lib-pulp-pre-3.16.tar.gz -C /
+
+foreman-maintain service start
+
+VALIDATION:
+
+hammer ping
+hammer lifecycle-environment list
+hammer content-view list
+hammer activation-key list
+hammer host subscription list --host-id 1
+
+# Test host registration
+curl -sS https://$(hostname)/pub/bootstrap.py | python3
+
+RECOVERY TIME: 1.5-2.5 hours
+
+========================================
+ROLLBACK: 3.16 → 3.17
+========================================
+
+ROLLBACK TRIGGER CONDITIONS:
+✗ Errata management broken
+✗ Package applicability calculation failures
+✗ Pulp content cleanup issues
+✗ Repository sync timeouts
+✗ Container image management failures
+
+ROLLBACK PROCEDURE:
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql << EOF
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+WHERE datname IN ('foreman', 'pulpcore', 'candlepin') AND pid <> pg_backend_pid();
+
+DROP DATABASE foreman;
+DROP DATABASE pulpcore;
+DROP DATABASE candlepin;
+EOF
+
+sudo -u postgres pg_restore -C -d postgres /backup/foreman_pre_3.17_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/pulpcore_pre_3.17_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/candlepin_pre_3.17_upgrade.dump
+
+[FOREMAN SERVER]
+foreman-maintain service stop
+
+dnf downgrade -y foreman\* katello\* pulpcore\*
+
+# Restore Pulp content
+tar -xzf /backup/var-lib-pulp-pre-3.17.tar.gz -C /
+
+foreman-maintain service start
+
+VALIDATION:
+
+hammer ping
+hammer erratum list --organization-id 1 | head -20
+hammer package list --organization-id 1 | head -20
+hammer docker tag list | head -10
+
+foreman-rake katello:clean_backend_objects
+
+RECOVERY TIME: 2-3 hours
+
+========================================
+ROLLBACK: 3.17 → 3.18
+========================================
+
+ROLLBACK TRIGGER CONDITIONS:
+✗ Critical Foreman 3.18 bugs discovered
+✗ Performance issues unresolvable
+✗ Plugin incompatibilities
+✗ Data corruption detected
+✗ Security vulnerabilities introduced
+
+ROLLBACK PROCEDURE:
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql << EOF
+SELECT pg_terminate_backend(pid) FROM pg_stat_activity 
+WHERE datname IN ('foreman', 'pulpcore', 'candlepin') AND pid <> pg_backend_pid();
+
+DROP DATABASE foreman;
+DROP DATABASE pulpcore;
+DROP DATABASE candlepin;
+EOF
+
+sudo -u postgres pg_restore -C -d postgres /backup/foreman_pre_3.18_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/pulpcore_pre_3.18_upgrade.dump
+sudo -u postgres pg_restore -C -d postgres /backup/candlepin_pre_3.18_upgrade.dump
+
+[FOREMAN SERVER]
+foreman-maintain service stop
+
+dnf downgrade -y foreman\* katello\* pulpcore\* tfm-\*
+
+tar -xzf /backup/foreman-complete-pre-3.18.tar.gz -C /
+
+restorecon -R /etc/foreman
+restorecon -R /var/lib/pulp
+restorecon -R /var/lib/candlepin
+
+foreman-maintain service start
+
+# Wait for full service startup
+sleep 180
+
+VALIDATION:
+
+hammer ping
+foreman-maintain health check
+hammer --version
+# Expected: Foreman CLI 3.17.x
+
+curl -k https://$(hostname)/api/status | jq '.version'
+# Expected: 3.17.x
+
+hammer host list | head -20
+hammer content-view list
+hammer repository list --organization-id 1
+
+# Comprehensive validation
+foreman-rake katello:check_ping
+foreman-rake db:migrate:status | tail -50
+
+# Check Smart Proxies
+hammer capsule list
+hammer capsule content synchronization-status --id 1
+
+RECOVERY TIME: 2-4 hours
+
+--------------------------------------------------------------------------------
+12.3 EMERGENCY ROLLBACK DECISION TREE
+--------------------------------------------------------------------------------
+
+START ROLLBACK IF:
+
+CRITICAL - Immediate Rollback Required (< 15 minutes decision time):
+✗ Database corruption detected
+✗ Multiple services failing to start
+✗ Data loss identified
+✗ Security breach introduced by upgrade
+✗ Complete UI unavailability > 30 minutes
+✗ PostgreSQL connectivity completely lost
+✗ All Smart Proxies unreachable
+
+HIGH - Rollback Required (< 1 hour decision time):
+✗ Host registration broken and unfixable
+✗ Content synchronization completely broken
+✗ Subscription management non-functional
+✗ Critical provisioning workflows broken
+✗ Performance degradation > 80%
+✗ Pulp migration stuck > 4 hours
+
+MEDIUM - Rollback Recommended (< 4 hours decision time):
+✗ Non-critical features broken
+✗ Performance degradation 50-80%
+✗ Some Smart Proxies unreachable
+✗ Partial functionality loss
+✗ Workarounds not acceptable to business
+
+LOW - Continue with Troubleshooting:
+✗ Minor UI glitches
+✗ Performance degradation < 50%
+✗ Non-critical warnings in logs
+✗ Acceptable workarounds available
+
+ROLLBACK AUTHORIZATION PROCESS:
+
+1. Technical Lead identifies rollback condition
+2. Notify Change Manager immediately
+3. Notify application stakeholders
+4. Document specific failure condition
+5. Obtain rollback authorization from Change Advisory Board (CAB)
+6. Begin rollback procedure
+7. Log all rollback actions
+8. Post-rollback incident report required
+
+--------------------------------------------------------------------------------
+12.4 POST-ROLLBACK VALIDATION CHECKLIST
+--------------------------------------------------------------------------------
+
+DATABASE VALIDATION:
+□ PostgreSQL connections restored
+□ Database sizes match pre-upgrade
+□ Table counts match pre-upgrade
+□ No orphaned migrations
+□ Database performance normal
+
+APPLICATION VALIDATION:
+□ All services running (foreman, httpd, pulpcore, dynflow)
+□ hammer ping returns all OK
+□ UI accessible
+□ API returns correct version
+□ foreman-maintain health check passes
+
+FUNCTIONAL VALIDATION:
+□ User authentication working
+□ Host list accessible
+□ Content Views accessible
+□ Repository sync functional
+□ Lifecycle environment operations work
+□ Activation keys accessible
+□ Subscription management functional
+
+SMART PROXY VALIDATION:
+□ All Smart Proxies reachable
+□ hammer capsule list shows all proxies
+□ Proxy features functional
+□ Content sync to capsules works
+
+CONTENT VALIDATION:
+□ RPM repositories accessible
+□ Errata information available
+□ Docker/Container content accessible
+□ File repositories accessible
+□ Custom content available
+
+CLIENT VALIDATION:
+□ Existing hosts remain registered
+□ subscription-manager commands work on clients
+□ Package installation works on clients
+□ Errata applicability correct
+
+PERFORMANCE VALIDATION:
+□ UI response time < 3 seconds
+□ API response time < 2 seconds
+□ Database query time normal
+□ No resource exhaustion
+
+MONITORING VALIDATION:
+□ All metrics restored to baseline
+□ No critical alerts
+□ Log errors cleared
+□ Audit logs consistent
+
+================================================================================
+SECTION 13 – TROUBLESHOOTING
+================================================================================
+
+--------------------------------------------------------------------------------
+13.1 DATABASE MIGRATION FAILURES
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: Migration Fails with Timeout
+========================================
+
+SYMPTOMS:
+- foreman-installer hangs during db:migrate
+- Error: "PG::QueryCanceled: ERROR: canceling statement due to statement timeout"
+- Log: /var/log/foreman-installer/foreman.log shows migration timeout
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+tail -f /var/log/foreman-installer/foreman.log | grep -i "migrate\|error"
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman << EOF
+SELECT pid, now() - pg_stat_activity.query_start AS duration, query, state
+FROM pg_stat_activity
+WHERE state != 'idle' 
+ORDER BY duration DESC;
+EOF
+
+ROOT CAUSE:
+- Long-running migration on large tables
+- Insufficient PostgreSQL resources
+- Locks on database tables
+- statement_timeout too restrictive
+
+REMEDIATION:
+
+[POSTGRESQL SERVER]
+# Increase statement timeout
+sudo -u postgres psql -d foreman << EOF
+ALTER DATABASE foreman SET statement_timeout = '3600000';
+ALTER DATABASE pulpcore SET statement_timeout = '3600000';
+ALTER DATABASE candlepin SET statement_timeout = '3600000';
+EOF
+
+# Increase work_mem temporarily
+sudo vi /var/lib/pgsql/16/data/postgresql.conf
+# Set: work_mem = 256MB
+# Set: maintenance_work_mem = 1GB
+
+sudo systemctl reload postgresql-16
+
+# Check for blocking queries
+sudo -u postgres psql -d foreman << EOF
+SELECT blocked_locks.pid AS blocked_pid,
+       blocked_activity.usename AS blocked_user,
+       blocking_locks.pid AS blocking_pid,
+       blocking_activity.usename AS blocking_user,
+       blocked_activity.query AS blocked_statement,
+       blocking_activity.query AS blocking_statement
+FROM pg_catalog.pg_locks blocked_locks
+JOIN pg_catalog.pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_catalog.pg_locks blocking_locks ON blocking_locks.locktype = blocked_locks.locktype
+JOIN pg_catalog.pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.granted;
+EOF
+
+# Kill blocking queries if identified
+sudo -u postgres psql -c "SELECT pg_terminate_backend(<blocking_pid>);"
+
+[FOREMAN SERVER]
+# Retry installer
+foreman-installer --foreman-db-manage-rake false
+foreman-rake db:migrate
+foreman-installer
+
+VALIDATION:
+foreman-rake db:migrate:status | grep down
+# Expected: No "down" migrations
+
+PREVENTION:
+- Schedule upgrades during low-usage windows
+- Ensure PostgreSQL properly tuned before upgrade
+- Monitor long-running queries during migration
+
+========================================
+ISSUE: Migration Fails - Duplicate Key Violation
+========================================
+
+SYMPTOMS:
+- Error: "PG::UniqueViolation: ERROR: duplicate key value violates unique constraint"
+- Migration rollback occurs
+- Specific table/index mentioned in error
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+grep -i "duplicate key\|unique violation" /var/log/foreman-installer/foreman.log
+
+foreman-rake db:migrate:status | grep down
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman << EOF
+SELECT schemaname, tablename, indexname
+FROM pg_indexes
+WHERE schemaname NOT IN ('pg_catalog', 'information_schema')
+ORDER BY tablename;
+EOF
+
+ROOT CAUSE:
+- Data inconsistency before upgrade
+- Previous failed migration
+- Manual database modifications
+- Corrupted index
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Identify specific migration file
+ls -ltr /usr/share/foreman/db/migrate/ | tail -20
+
+# Check migration details
+cat /usr/share/foreman/db/migrate/<migration_file>.rb
+
+[POSTGRESQL SERVER]
+# Find duplicate records (example for hosts table)
+sudo -u postgres psql -d foreman << EOF
+SELECT name, COUNT(*)
+FROM hosts
+GROUP BY name
+HAVING COUNT(*) > 1;
+EOF
+
+# Manual cleanup may be required (CAUTION - data modification)
+# Document before proceeding
+sudo -u postgres psql -d foreman << EOF
+-- Create backup of affected table
+CREATE TABLE hosts_backup_$(date +%Y%m%d) AS SELECT * FROM hosts;
+
+-- Remove duplicates (keep oldest)
+DELETE FROM hosts a USING hosts b
+WHERE a.id > b.id AND a.name = b.name;
+EOF
+
+[FOREMAN SERVER]
+# Retry migration
+foreman-rake db:migrate
+
+VALIDATION:
+foreman-rake db:migrate:status
+hammer ping
+
+PREVENTION:
+- Run foreman-rake katello:upgrade_check before upgrade
+- Ensure data consistency
+- Review database constraints before upgrade
+
+========================================
+ISSUE: Migration Fails - Column Does Not Exist
+========================================
+
+SYMPTOMS:
+- Error: "PG::UndefinedColumn: ERROR: column does not exist"
+- Migration references missing column
+- Previous migration may have been skipped
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+grep -i "column.*does not exist" /var/log/foreman-installer/foreman.log
+
+foreman-rake db:migrate:status | grep -B5 -A5 down
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman << EOF
+SELECT table_name, column_name, data_type
+FROM information_schema.columns
+WHERE table_schema = 'public'
+AND table_name = '<affected_table>'
+ORDER BY ordinal_position;
+EOF
+
+ROOT CAUSE:
+- Skipped migration in previous upgrade
+- Manual database schema modification
+- Incomplete previous upgrade
+- Database restored from wrong backup
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Check migration version
+foreman-rake db:version
+
+# Check schema_migrations table
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman << EOF
+SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 20;
+EOF
+
+# Identify missing migrations
+foreman-rake db:migrate:status | grep down | head -1
+
+# Attempt to run specific migration
+foreman-rake db:migrate:up VERSION=<version_number>
+
+# If specific column needs manual creation (EXTREME CAUTION)
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman << EOF
+-- Only if absolutely necessary and approved by support
+ALTER TABLE <table_name> ADD COLUMN <column_name> <data_type>;
+EOF
+
+[FOREMAN SERVER]
+foreman-rake db:migrate
+
+VALIDATION:
+foreman-rake db:migrate:status
+foreman-maintain health check
+
+PREVENTION:
+- Never skip upgrade versions
+- Always follow supported upgrade path
+- Verify schema_migrations after each hop
+
+--------------------------------------------------------------------------------
+13.2 SERVICE STARTUP FAILURES
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: Foreman Service Fails to Start
+========================================
+
+SYMPTOMS:
+- systemctl status foreman shows "failed"
+- Error in /var/log/foreman/production.log
+- UI returns 502 Bad Gateway
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+systemctl status foreman -l --no-pager
+journalctl -u foreman -n 100 --no-pager
+
+tail -50 /var/log/foreman/production.log
+
+# Check for port conflicts
+ss -tulpn | grep 3000
+
+# Check for permission issues
+ls -lZ /usr/share/foreman
+ls -lZ /var/log/foreman
+
+ROOT CAUSE:
+- Permission issues
+- Port already in use
+- Database connectivity failure
+- Missing dependencies
+- SELinux denials
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Fix permissions
+chown -R foreman:foreman /usr/share/foreman
+chown -R foreman:foreman /var/log/foreman
+chown -R foreman:foreman /var/lib/foreman
+
+# Fix SELinux contexts
+restorecon -R /usr/share/foreman
+restorecon -R /var/log/foreman
+restorecon -R /var/lib/foreman
+
+# Check SELinux denials
+ausearch -m avc -ts recent | grep foreman
+
+# If SELinux denials found
+audit2allow -a -M foreman_custom
+semodule -i foreman_custom.pp
+
+# Test database connectivity
+sudo -u foreman foreman-rake db:ping
+
+# Check configuration
+sudo -u foreman foreman-rake config
+
+# Restart service
+systemctl restart foreman
+sleep 30
+systemctl status foreman
+
+VALIDATION:
+curl http://localhost:3000/api/status
+hammer ping
+
+========================================
+ISSUE: Pulpcore Services Fail to Start
+========================================
+
+SYMPTOMS:
+- pulpcore-api.service failed
+- pulpcore-worker services not running
+- Error: "ModuleNotFoundError" or "ImportError"
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+systemctl status pulpcore-api -l --no-pager
+systemctl status pulpcore-content -l --no-pager
+systemctl status pulpcore-worker@* -l --no-pager
+
+journalctl -u pulpcore-api -n 100
+
+# Check Pulpcore configuration
+cat /etc/pulp/settings.py | grep -v "^#"
+
+# Check Redis connectivity
+redis-cli ping
+
+# Check PostgreSQL connectivity
+PGPASSWORD=<password> psql -h <postgres_host> -U pulp -d pulpcore -c "SELECT 1;"
+
+ROOT CAUSE:
+- Python dependency issues
+- Redis connectivity failure
+- PostgreSQL connectivity failure
+- Incorrect settings.py configuration
+- File permission issues
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Reinstall Pulpcore dependencies
+dnf reinstall -y python3-pulpcore
+
+# Fix Redis connectivity
+systemctl restart redis
+systemctl enable redis
+
+# Verify Redis socket
+ls -l /var/run/redis/redis.sock
+
+# Update Redis permissions if needed
+usermod -a -G redis pulp
+
+# Fix Pulpcore settings
+vi /etc/pulp/settings.py
+# Verify:
+# DATABASES = {'default': {'ENGINE': 'django.db.backends.postgresql', ...}}
+# REDIS_URL = 'unix:///var/run/redis/redis.sock'
+
+# Fix permissions
+chown -R pulp:pulp /var/lib/pulp
+chown -R pulp:pulp /var/log/pulpcore
+
+restorecon -R /var/lib/pulp
+restorecon -R /etc/pulp
+
+# Restart services in order
+systemctl restart redis
+systemctl restart pulpcore-api
+systemctl restart pulpcore-content
+systemctl restart pulpcore-worker@{1..4}
+
+sleep 60
+
+VALIDATION:
+systemctl status pulpcore-api --no-pager
+systemctl status pulpcore-worker@* --no-pager
+
+curl http://localhost:24817/pulp/api/v3/status/ | jq
+
+hammer ping
+
+========================================
+ISSUE: Dynflow Services Fail to Start
+========================================
+
+SYMPTOMS:
+- dynflow-sidekiq services failed
+- Remote execution not working
+- Tasks stuck in "pending"
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+systemctl status dynflow-sidekiq@* -l --no-pager
+journalctl -u dynflow-sidekiq@orchestrator -n 100
+
+# Check Dynflow database
+foreman-rake dynflow:doctor
+
+# Check task queue
+foreman-rake foreman_tasks:cleanup TASK_SEARCH='state=stopped' AFTER='0d'
+
+ROOT CAUSE:
+- Redis connectivity failure
+- Database connectivity failure
+- Corrupted task queue
+- Memory exhaustion
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Clear task queue
+foreman-rake foreman_tasks:cleanup TASK_SEARCH='state=pending' AFTER='7d'
+
+# Restart Redis
+systemctl restart redis
+
+# Clear Dynflow locks
+foreman-rake console << EOF
+Dynflow::Coordinator.new(Rails.application.dynflow.world).delete_all_locks
+exit
+EOF
+
+# Restart Dynflow services
+systemctl restart dynflow-sidekiq@orchestrator
+systemctl restart dynflow-sidekiq@worker
+systemctl restart dynflow-sidekiq@worker-hosts-queue@*
+
+VALIDATION:
+systemctl status dynflow-sidekiq@* --no-pager
+foreman-rake dynflow:doctor
+hammer task list --search "state=running"
+
+--------------------------------------------------------------------------------
+13.3 PULP MIGRATION FAILURES
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: Pulp 2 to Pulp 3 Migration Hangs
+========================================
+
+SYMPTOMS:
+- pulpcore-content migration task running for hours
+- No progress in /var/log/pulpcore/pulpcore-worker-*.log
+- High disk I/O
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+# Check migration task status
+foreman-rake katello:pulp3_migration_status
+
+# Check Pulp worker logs
+tail -f /var/log/pulpcore/pulpcore-worker-*.log
+
+# Check disk I/O
+iostat -x 5 3
+
+# Check database activity
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d pulpcore << EOF
+SELECT pid, state, wait_event_type, wait_event, query
+FROM pg_stat_activity
+WHERE datname = 'pulpcore' AND state != 'idle'
+ORDER BY query_start;
+EOF
+
+ROOT CAUSE:
+- Large content library
+- Insufficient disk I/O
+- Network latency to PostgreSQL
+- Worker timeout
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Increase worker timeout
+vi /etc/pulp/settings.py
+# Add/modify:
+# WORKER_TTL = 600  # 10 minutes
+
+# Restart workers
+systemctl restart pulpcore-worker@*
+
+# Monitor migration progress
+watch -n 60 'foreman-rake katello:pulp3_migration_status'
+
+# If completely stuck, cancel and retry
+foreman-rake katello:pulp3_migration_cancel
+foreman-rake katello:pulp3_migration_reset
+
+# Retry migration in chunks (by repository)
+hammer repository list --organization-id 1 --fields "ID,Name" --per-page 1000 > /tmp/repos.txt
+
+# Migrate smaller batches
+foreman-rake katello:pulp3_migration REPOSITORIES=<repo_id_1>,<repo_id_2>
+
+VALIDATION:
+foreman-rake katello:pulp3_migration_status
+# Expected: "Migration complete"
+
+hammer repository list --fields "ID,Name,Content Type,Backend"
+# Expected: All repositories show "pulp3" backend
+
+========================================
+ISSUE: Content Checksum Mismatch
+========================================
+
+SYMPTOMS:
+- Error: "Checksum mismatch detected"
+- Migration fails on specific repository
+- Pulpcore worker logs show checksum errors
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+grep -i "checksum" /var/log/pulpcore/pulpcore-worker-*.log
+
+# Identify affected repository
+foreman-rake katello:pulp3_migration_status | grep -i error
+
+hammer repository info --id <repo_id>
+
+ROOT CAUSE:
+- Corrupted content in Pulp 2
+- Disk corruption
+- Incomplete sync
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Verify repository content
+hammer repository verify-checksum --id <repo_id>
+
+# If verification fails, re-sync repository
+hammer repository synchronize --id <repo_id>
+
+# Retry migration for specific repository
+foreman-rake katello:pulp3_migration REPOSITORIES=<repo_id>
+
+# If persistent, delete and re-create repository
+hammer repository delete --id <repo_id>
+hammer repository create --name "<repo_name>" --product-id <product_id> --content-type yum --url <repo_url>
+hammer repository synchronize --id <new_repo_id>
+
+VALIDATION:
+hammer repository info --id <repo_id>
+# Verify package count matches expected
+
+--------------------------------------------------------------------------------
+13.4 CANDLEPIN FAILURES
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: Candlepin Service Fails to Start
+========================================
+
+SYMPTOMS:
+- tomcat@candlepin.service failed
+- hammer ping shows Candlepin down
+- Error in /var/log/candlepin/candlepin.log
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+systemctl status tomcat@candlepin -l --no-pager
+journalctl -u tomcat@candlepin -n 100
+
+tail -100 /var/log/candlepin/candlepin.log
+tail -100 /var/log/candlepin/error.log
+
+# Check Candlepin database connectivity
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d candlepin -c "SELECT COUNT(*) FROM cp_pool;"
+
+ROOT CAUSE:
+- Database connectivity failure
+- Java OutOfMemoryError
+- Configuration file corruption
+- SSL certificate issues
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Increase Java heap size
+vi /etc/sysconfig/tomcat@candlepin
+# Modify: JAVA_OPTS="-Xms2048m -Xmx4096m"
+
+# Fix permissions
+chown -R tomcat:tomcat /var/log/candlepin
+chown -R tomcat:tomcat /var/cache/candlepin
+
+# Verify Candlepin configuration
+cat /etc/candlepin/candlepin.conf | grep -v "^#"
+
+# Check database connection string
+grep "jpa.config.hibernate.connection" /etc/candlepin/candlepin.conf
+
+# Restart service
+systemctl restart tomcat@candlepin
+sleep 60
+
+VALIDATION:
+systemctl status tomcat@candlepin --no-pager
+curl -k https://$(hostname):8443/candlepin/status | jq
+hammer ping
+
+========================================
+ISSUE: Subscription Management Failures
+========================================
+
+SYMPTOMS:
+- Error: "Unable to attach subscriptions"
+- hammer subscription list fails
+- Candlepin shows pool errors
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+hammer subscription list --organization-id 1
+
+tail -100 /var/log/candlepin/candlepin.log | grep -i "pool\|subscription"
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d candlepin << EOF
+SELECT id, productid, quantity, consumed
+FROM cp_pool
+WHERE consumed > quantity;
+EOF
+
+ROOT CAUSE:
+- Pool quantity inconsistency
+- Manifest corruption
+- Database constraint violations
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Refresh manifest
+hammer subscription refresh-manifest --organization-id 1
+
+# Delete and re-upload manifest if needed
+hammer subscription delete-manifest --organization-id 1
+hammer subscription upload --organization-id 1 --file /tmp/manifest.zip
+
+# Regenerate applicability
+foreman-rake katello:reindex_subscriptions
+
+VALIDATION:
+hammer subscription list --organization-id 1
+hammer activation-key subscriptions --id <key_id>
+
+--------------------------------------------------------------------------------
+13.5 SMART PROXY COMMUNICATION FAILURES
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: Smart Proxy Unreachable After Upgrade
+========================================
+
+SYMPTOMS:
+- hammer capsule list shows proxy down
+- Error: "Unable to communicate with Smart Proxy"
+- Proxy logs show authentication failures
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+hammer capsule list
+hammer capsule info --id <proxy_id>
+
+curl -k https://<proxy_fqdn>:9090/features
+
+[SMART PROXY]
+systemctl status foreman-proxy --no-pager
+tail -50 /var/log/foreman-proxy/proxy.log
+
+# Check certificate validity
+openssl x509 -in /etc/foreman-proxy/ssl_cert.pem -noout -dates
+
+ROOT CAUSE:
+- Certificate expiration
+- Certificate mismatch after upgrade
+- Firewall blocking communication
+- Foreman-proxy version mismatch
+
+REMEDIATION:
+
+[SMART PROXY]
+# Regenerate certificates
+foreman-proxy-certs-generate \
+  --foreman-proxy-fqdn $(hostname -f) \
+  --certs-tar "/root/$(hostname -s)-certs.tar"
+
+# Copy certs to proxy
+scp /root/$(hostname -s)-certs.tar root@<proxy_fqdn>:/root/
+
+[SMART PROXY]
+# Install certificates
+foreman-installer --scenario foreman-proxy-content \
+  --certs-tar-file "/root/$(hostname -s)-certs.tar" \
+  --foreman-proxy-content-parent-fqdn "foreman.example.com" \
+  --foreman-proxy-register-in-foreman "true" \
+  --foreman-proxy-foreman-base-url "https://foreman.example.com" \
+  --foreman-proxy-trusted-hosts "foreman.example.com" \
+  --foreman-proxy-trusted-hosts "$(hostname -f)" \
+  --foreman-proxy-oauth-consumer-key "<consumer_key>" \
+  --foreman-proxy-oauth-consumer-secret "<consumer_secret>"
+
+systemctl restart foreman-proxy
+
+VALIDATION:
+
+[FOREMAN SERVER]
+hammer capsule refresh-features --id <proxy_id>
+hammer capsule list
+hammer capsule content synchronization-status --id <proxy_id>
+
+========================================
+ISSUE: Content Sync to Smart Proxy Fails
+========================================
+
+SYMPTOMS:
+- hammer capsule content synchronize fails
+- Error: "Pulp task failed"
+- Repository metadata missing on proxy
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+hammer capsule content synchronization-status --id <proxy_id>
+
+foreman-rake foreman_tasks:cleanup TASK_SEARCH='label=Actions::Katello::CapsuleContent::Sync and state=stopped and result=error' AFTER='1d'
+
+[SMART PROXY]
+tail -100 /var/log/foreman-proxy/proxy.log
+tail -100 /var/log/pulpcore/pulpcore-content.log
+
+du -sh /var/lib/pulp
+
+ROOT CAUSE:
+- Insufficient disk space on proxy
+- Network connectivity issues
+- Pulpcore service issues on proxy
+- Authentication failures
+
+REMEDIATION:
+
+[SMART PROXY]
+# Check disk space
+df -h /var/lib/pulp
+
+# Clean up old content if needed
+foreman-maintain content remove-pulp2
+
+# Restart Pulpcore services
+systemctl restart pulpcore-api pulpcore-content pulpcore-worker@*
+
+[FOREMAN SERVER]
+# Retry sync
+hammer capsule content synchronize --id <proxy_id>
+
+# Monitor sync progress
+watch -n 30 'hammer capsule content synchronization-status --id <proxy_id>'
+
+VALIDATION:
+hammer capsule content info --id <proxy_id>
+# Verify repository counts match central server
+
+--------------------------------------------------------------------------------
+13.6 SELINUX DENIALS
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: SELinux Preventing Service Operations
+========================================
+
+SYMPTOMS:
+- Services fail to start
+- Permission denied errors despite correct ownership
+- ausearch shows AVC denials
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+getenforce
+# Expected: Enforcing
+
+ausearch -m avc -ts recent | grep -i "denied"
+
+# Check for Foreman-related denials
+ausearch -m avc -ts recent | grep foreman
+
+# Check for Pulp-related denials
+ausearch -m avc -ts recent | grep pulp
+
+# Generate human-readable report
+sealert -a /var/log/audit/audit.log | tail -100
+
+ROOT CAUSE:
+- New file contexts after upgrade
+- Custom modifications not labeled
+- Policy updates required
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Restore all SELinux contexts
+restorecon -R /etc/foreman
+restorecon -R /var/lib/foreman
+restorecon -R /var/log/foreman
+restorecon -R /usr/share/foreman
+restorecon -R /var/lib/pulp
+restorecon -R /etc/pulp
+restorecon -R /var/log/pulpcore
+
+# If denials persist, generate custom policy
+ausearch -m avc -ts recent | audit2allow -M foreman_custom_policy
+semodule -i foreman_custom_policy.pp
+
+# Verify policy installation
+semodule -l | grep foreman
+
+# Restart services
+foreman-maintain service restart
+
+VALIDATION:
+ausearch -m avc -ts recent | grep -i "denied"
+# Expected: No new denials
+
+getenforce
+# Expected: Enforcing
+
+foreman-maintain health check
+
+PREVENTION:
+- Always run restorecon after file restorations
+- Test upgrades in permissive mode first, then enforce
+- Document custom SELinux policies
+
+--------------------------------------------------------------------------------
+13.7 REPOSITORY SYNCHRONIZATION ISSUES
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: Repository Sync Fails with SSL Errors
+========================================
+
+SYMPTOMS:
+- hammer repository synchronize fails
+- Error: "SSL certificate problem"
+- Sync task shows SSL handshake failure
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+hammer repository info --id <repo_id>
+
+# Check repository URL
+hammer repository info --id <repo_id> | grep "URL"
+
+# Test URL manually
+curl -v <repository_url> 2>&1 | grep -i ssl
+
+# Check Pulpcore worker logs
+grep -i "ssl\|certificate" /var/log/pulpcore/pulpcore-worker-*.log
+
+ROOT CAUSE:
+- Expired CA certificates
+- Repository requires client certificates
+- SNI issues
+- TLS version incompatibility
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Update CA certificates
+dnf update -y ca-certificates
+
+# If repository requires specific CA
+curl -o /etc/pki/ca-trust/source/anchors/custom-ca.crt <ca_cert_url>
+update-ca-trust
+
+# For repositories requiring SSL verification skip (not recommended for production)
+hammer repository update --id <repo_id> --ssl-verify false
+
+# Verify SSL settings in Pulpcore
+cat /etc/pulp/settings.py | grep -i ssl
+
+# Restart Pulpcore
+systemctl restart pulpcore-api pulpcore-content pulpcore-worker@*
+
+# Retry sync
+hammer repository synchronize --id <repo_id>
+
+VALIDATION:
+hammer task progress --id <task_id>
+hammer repository info --id <repo_id> | grep "Last Sync"
+
+========================================
+ISSUE: Repository Sync Extremely Slow
+========================================
+
+SYMPTOMS:
+- Sync takes hours instead of minutes
+- Network utilization low during sync
+- Many small files being synced
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+# Check sync task progress
+hammer task progress --id <task_id>
+
+# Monitor network activity
+iftop -i <interface>
+
+# Check concurrent sync settings
+grep "CONTENT_DOWNLOAD_CONCURRENCY\|CONTENT_DOWNLOAD_MAX_RETRIES" /etc/pulp/settings.py
+
+# Check PostgreSQL connections
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d pulpcore -c "SELECT COUNT(*) FROM pg_stat_activity WHERE datname='pulpcore';"
+
+ROOT CAUSE:
+- Low concurrency settings
+- Network latency
+- PostgreSQL connection pool exhaustion
+- Insufficient worker count
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Increase download concurrency
+vi /etc/pulp/settings.py
+# Add/modify:
+# CONTENT_DOWNLOAD_CONCURRENCY = 10
+# CONTENT_DOWNLOAD_MAX_RETRIES = 3
+
+# Increase Pulpcore workers if resources available
+systemctl enable pulpcore-worker@{1..8}
+systemctl start pulpcore-worker@{5..8}
+
+[POSTGRESQL SERVER]
+# Increase max_connections if needed
+sudo vi /var/lib/pgsql/16/data/postgresql.conf
+# max_connections = 500
+
+sudo systemctl reload postgresql-16
+
+[FOREMAN SERVER]
+systemctl restart pulpcore-api pulpcore-content pulpcore-worker@*
+
+# Cancel and retry sync
+hammer task cancel --id <task_id>
+hammer repository synchronize --id <repo_id>
+
+VALIDATION:
+hammer task list --search "label=Actions::Katello::Repository::Sync and state=running"
+# Monitor improved sync speed
+
+--------------------------------------------------------------------------------
+13.8 PERFORMANCE DEGRADATION
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: UI Extremely Slow After Upgrade
+========================================
+
+SYMPTOMS:
+- Page load times > 10 seconds
+- Browser console shows slow API calls
+- High CPU usage on Foreman server
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+# Check application load
+top -b -n 1 | head -20
+
+# Check Apache status
+apachectl status
+
+# Check slow queries
+tail -100 /var/log/foreman/production.log | grep -i "completed in"
+
+# Check database query performance
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman << EOF
+SELECT query, calls, total_exec_time, mean_exec_time
+FROM pg_stat_statements
+ORDER BY mean_exec_time DESC
+LIMIT 20;
+EOF
+
+ROOT CAUSE:
+- Missing database indexes
+- Outdated statistics
+- Insufficient Apache workers
+- Memory exhaustion
+
+REMEDIATION:
+
+[POSTGRESQL SERVER]
+# Update database statistics
+sudo -u postgres psql -d foreman -c "ANALYZE;"
+sudo -u postgres psql -d pulpcore -c "ANALYZE;"
+sudo -u postgres psql -d candlepin -c "ANALYZE;"
+
+# Reindex if needed
+sudo -u postgres reindexdb -d foreman
+
+[FOREMAN SERVER]
+# Increase Apache workers
+vi /etc/httpd/conf.modules.d/05-foreman.conf
+# Modify PassengerMaxPoolSize to 12 (from 6)
+
+systemctl restart httpd
+
+# Clear application cache
+foreman-rake tmp:cache:clear
+
+# Restart services
+foreman-maintain service restart
+
+VALIDATION:
+# Test UI performance
+time curl -k -u admin:password https://$(hostname)/hosts
+
+# Should complete in < 3 seconds
+
+hammer ping
+foreman-maintain health check
+
+========================================
+ISSUE: Database Connection Pool Exhausted
+========================================
+
+SYMPTOMS:
+- Error: "could not obtain a connection from the pool"
+- 500 errors in UI
+- Services become unresponsive
+
+DIAGNOSIS:
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql << EOF
+SELECT datname, count(*) 
+FROM pg_stat_activity 
+GROUP BY datname 
+ORDER BY count DESC;
+EOF
+
+sudo -u postgres psql -c "SHOW max_connections;"
+
+[FOREMAN SERVER]
+grep "pool" /etc/foreman/database.yml
+grep "pool" /etc/pulp/settings.py
+
+ROOT CAUSE:
+- Insufficient connection pool size
+- Connection leaks
+- Too many workers
+
+REMEDIATION:
+
+[POSTGRESQL SERVER]
+# Increase max_connections
+sudo vi /var/lib/pgsql/16/data/postgresql.conf
+# max_connections = 500
+
+sudo systemctl reload postgresql-16
+
+[FOREMAN SERVER]
+# Increase pool size
+vi /etc/foreman/database.yml
+# production:
+#   pool: 100
+
+vi /etc/pulp/settings.py
+# DATABASES = {
+#     'default': {
+#         'CONN_MAX_AGE': 0,
+#         'CONN_HEALTH_CHECKS': True,
+#     }
+# }
+
+# Restart services
+foreman-maintain service restart
+
+# Kill idle connections
+[POSTGRESQL SERVER]
+sudo -u postgres psql << EOF
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname IN ('foreman','pulpcore','candlepin')
+  AND state = 'idle'
+  AND state_change < current_timestamp - INTERVAL '10 minutes';
+EOF
+
+VALIDATION:
+[POSTGRESQL SERVER]
+sudo -u postgres psql -c "SELECT COUNT(*) FROM pg_stat_activity;"
+
+hammer ping
+
+--------------------------------------------------------------------------------
+13.9 CONTENT VIEW AND LIFECYCLE ISSUES
+--------------------------------------------------------------------------------
+
+========================================
+ISSUE: Content View Publish Fails
+========================================
+
+SYMPTOMS:
+- hammer content-view publish fails
+- Error: "Task failed"
+- Pulpcore task errors
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+hammer content-view info --id <cv_id>
+
+hammer task list --search "label=Actions::Katello::ContentView::Publish and state=stopped and result=error"
+
+# Check task details
+hammer task info --id <task_id>
+
+# Check Pulpcore logs
+grep -A 20 -B 5 "ERROR" /var/log/pulpcore/pulpcore-worker-*.log | tail -100
+
+ROOT CAUSE:
+- Corrupted repository metadata
+- Insufficient disk space
+- Pulpcore worker failures
+- Dependency resolution errors
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Check disk space
+df -h /var/lib/pulp
+
+# Clean up orphaned content
+foreman-rake katello:delete_orphaned_content
+
+# Verify repositories in content view
+hammer content-view info --id <cv_id> | grep -A 50 "Yum Repositories"
+
+# Refresh repository metadata
+hammer repository list --content-view-id <cv_id> --fields "ID,Name"
+
+# Sync each repository
+for repo_id in $(hammer --csv repository list --content-view-id <cv_id> | tail -n +2 | cut -d',' -f1); do
+  hammer repository synchronize --id $repo_id --async
+done
+
+# Wait for syncs to complete
+watch -n 30 'hammer task list --search "label=Actions::Katello::Repository::Sync and state=running"'
+
+# Retry publish
+hammer content-view publish --id <cv_id> --description "Retry after troubleshooting"
+
+VALIDATION:
+hammer content-view version list --content-view-id <cv_id>
+# Verify new version created
+
+hammer content-view info --id <cv_id> | grep "Last Published"
+
+========================================
+ISSUE: Content View Promotion Fails
+========================================
+
+SYMPTOMS:
+- hammer content-view version promote fails
+- Error: "Cannot promote to environment"
+- Lifecycle path broken
+
+DIAGNOSIS:
+
+[FOREMAN SERVER]
+hammer content-view version info --id <cv_version_id>
+
+hammer lifecycle-environment paths --organization-id 1
+
+# Check promotion path
+hammer content-view info --id <cv_id> | grep -A 20 "Lifecycle Environments"
+
+ROOT CAUSE:
+- Missing intermediate lifecycle environments
+- Corrupted lifecycle path
+- Insufficient permissions
+
+REMEDIATION:
+
+[FOREMAN SERVER]
+# Verify lifecycle environment path
+hammer lifecycle-environment list --organization-id 1
+
+# Verify target environment exists
+hammer lifecycle-environment info --id <target_env_id>
+
+# Promote to each environment in sequence
+hammer content-view version promote \
+  --content-view-id <cv_id> \
+  --to-lifecycle-environment "Development" \
+  --from-lifecycle-environment "Library"
+
+hammer content-view version promote \
+  --content-view-id <cv_id> \
+  --to-lifecycle-environment "Testing" \
+  --from-lifecycle-environment "Development"
+
+VALIDATION:
+hammer content-view version info --id <cv_version_id>
+# Verify version present in target environment
+
+hammer content-view info --id <cv_id> | grep -A 30 "Lifecycle Environments"
+
+--------------------------------------------------------------------------------
+13.10 KNOWN UPGRADE ISSUES BY VERSION
+--------------------------------------------------------------------------------
+
+========================================
+FOREMAN 3.11 → 3.12 KNOWN ISSUES
+========================================
+
+ISSUE: Pulp 2 to Pulp 3 migration slow for large repos
+WORKAROUND: Migrate repositories in batches
+REFERENCE: https://bugzilla.redhat.com/show_bug.cgi?id=XXXXXX
+
+ISSUE: Some Smart Proxy features not auto-detected
+WORKAROUND: hammer capsule refresh-features --id <proxy_id>
+
+ISSUE: Custom SSL certificates may need regeneration
+WORKAROUND: Re-run foreman-proxy-certs-generate
+
+========================================
+FOREMAN 3.12 → 3.13 KNOWN ISSUES
+========================================
+
+ISSUE: Database migration timeout on hosts table
+WORKAROUND: Increase statement_timeout before upgrade
+
+ISSUE: Ansible collection sync may fail
+WORKAROUND: Re-enable and re-sync Ansible repositories
+
+ISSUE: Remote execution may show duplicate jobs
+WORKAROUND: foreman-rake foreman_remote_execution:cleanup_tasks
+
+========================================
+FOREMAN 3.13 → 3.14 KNOWN ISSUES
+========================================
+
+ISSUE: Template rendering may fail for PXE templates
+WORKAROUND: Re-associate templates with operating systems
+
+ISSUE: Discovery plugin may need reconfiguration
+WORKAROUND: hammer settings set --name discovery_auto --value true
+
+ISSUE: Compute resource libvirt connections may break
+WORKAROUND: Re-add compute resources after upgrade
+
+========================================
+FOREMAN 3.14 → 3.15 KNOWN ISSUES
+========================================
+
+ISSUE: LDAP authentication may require reconfiguration
+WORKAROUND: Verify and update LDAP auth source settings
+
+ISSUE: Smart Class Parameters may show incorrect values
+WORKAROUND: hammer sc-param list; manually verify
+
+ISSUE: REX SSH keys may need redistribution
+WORKAROUND: hammer settings set --name remote_execution_ssh_user --value root
+
+========================================
+FOREMAN 3.15 → 3.16 KNOWN ISSUES
+========================================
+
+ISSUE: Subscription pools may show negative quantities
+WORKAROUND: hammer subscription refresh-manifest
+
+ISSUE: Activation keys may lose subscriptions
+WORKAROUND: Re-attach subscriptions to activation keys
+
+ISSUE: Host collections may show incorrect host counts
+WORKAROUND: foreman-rake katello:reindex HOST_COLLECTION=true
+
+========================================
+FOREMAN 3.16 → 3.17 KNOWN ISSUES
+========================================
+
+ISSUE: Errata applicability calculation slow
+WORKAROUND: Increase Pulpcore workers, schedule during low-usage window
+
+ISSUE: Container image manifest lists may not sync correctly
+WORKAROUND: Re-sync affected container repositories
+
+ISSUE: Pulp orphan cleanup may timeout
+WORKAROUND: foreman-rake katello:delete_orphaned_content RAILS_ENV=production
+
+========================================
+FOREMAN 3.17 → 3.18 KNOWN ISSUES
+========================================
+
+ISSUE: New UI components may conflict with custom CSS
+WORKAROUND: Clear browser cache, review custom CSS
+
+ISSUE: API v2 deprecated endpoints may log warnings
+WORKAROUND: Update API clients to use v3 endpoints
+
+ISSUE: Dynflow performance may degrade with large task history
+WORKAROUND: foreman-rake foreman_tasks:cleanup TASK_SEARCH='state=stopped' AFTER='90d'
+
+================================================================================
+SECTION 14 – FINAL SIGN-OFF
+================================================================================
+
+--------------------------------------------------------------------------------
+14.1 GO/NO-GO DECISION CHECKLIST
+--------------------------------------------------------------------------------
+
+USE THIS CHECKLIST AT EACH UPGRADE HOP TO DETERMINE IF SAFE TO PROCEED
+
+========================================
+PRE-UPGRADE GO/NO-GO CHECKLIST
+========================================
+
+BACKUPS (ALL MUST BE "GO"):
+□ GO / NO-GO: PostgreSQL backup completed and verified
+□ GO / NO-GO: Foreman application backup completed
+□ GO / NO-GO: Pulp content backup completed
+□ GO / NO-GO: VM snapshots created for all servers
+□ GO / NO-GO: Backup restoration tested successfully
+□ GO / NO-GO: Backup checksums verified and documented
+□ GO / NO-GO: Offsite backup copy confirmed
+
+HEALTH CHECKS (ALL MUST BE "GO"):
+□ GO / NO-GO: foreman-maintain health check passes with no errors
+□ GO / NO-GO: hammer ping shows all services "ok"
+□ GO / NO-GO: No failed tasks in last 24 hours
+□ GO / NO-GO: All Smart Proxies reachable and synchronized
+□ GO / NO-GO: PostgreSQL connections < 80% of max_connections
+□ GO / NO-GO: Disk space > 30% free on all filesystems
+□ GO / NO-GO: Memory usage < 80%
+□ GO / NO-GO: No SELinux denials in last 24 hours
+
+SYSTEM STATUS (ALL MUST BE "GO"):
+□ GO / NO-GO: All services running (foreman, httpd, pulpcore, dynflow)
+□ GO / NO-GO: No active content synchronization tasks
+□ GO / NO-GO: No active provisioning operations
+□ GO / NO-GO: No active host registrations in progress
+□ GO / NO-GO: Change management approval obtained
+□ GO / NO-GO: Maintenance window scheduled and communicated
+□ GO / NO-GO: Rollback team identified and available
+
+DATABASE VALIDATION (ALL MUST BE "GO"):
+□ GO / NO-GO: PostgreSQL 16 version confirmed
+□ GO / NO-GO: Database size documented
+□ GO / NO-GO: No database corruption detected
+□ GO / NO-GO: All database migrations at current version "up"
+□ GO / NO-GO: PostgreSQL performance parameters tuned
+□ GO / NO-GO: No long-running queries (> 5 minutes)
+
+CONTENT STATUS (ALL MUST BE "GO"):
+□ GO / NO-GO: All critical repositories synchronized
+□ GO / NO-GO: Content Views published to latest versions
+□ GO / NO-GO: No corrupted packages detected
+□ GO / NO-GO: Activation keys validated
+□ GO / NO-GO: Subscription counts documented
+
+CRITERIA FOR "NO-GO" DECISION:
+- ANY backup verification fails
+- ANY critical service down
+- Disk space < 20% on any filesystem
+- Active provisioning operations cannot be paused
+- Change management approval not obtained
+- Database corruption detected
+- PostgreSQL replication lag > 5 minutes
+
+IF ANY ITEM IS "NO-GO":
+1. STOP upgrade process immediately
+2. Document specific NO-GO reason
+3. Create remediation plan
+4. Reschedule maintenance window
+5. Notify stakeholders
+
+========================================
+POST-UPGRADE VALIDATION CHECKLIST
+========================================
+
+COMPLETE AFTER EACH VERSION HOP BEFORE PROCEEDING TO NEXT HOP
+
+SERVICES (ALL MUST BE "PASS"):
+□ PASS / FAIL: systemctl status foreman shows "active (running)"
+□ PASS / FAIL: systemctl status httpd shows "active (running)"
+□ PASS / FAIL: systemctl status pulpcore-api shows "active (running)"
+□ PASS / FAIL: systemctl status pulpcore-content shows "active (running)"
+□ PASS / FAIL: systemctl status pulpcore-worker@* all running
+□ PASS / FAIL: systemctl status dynflow-sidekiq@* all running
+□ PASS / FAIL: systemctl status tomcat@candlepin shows "active (running)"
+
+VERSION VERIFICATION (ALL MUST BE "PASS"):
+□ PASS / FAIL: hammer --version shows expected version
+□ PASS / FAIL: foreman-rake db:version shows expected version
+□ PASS / FAIL: curl https://$(hostname)/api/status shows correct version
+□ PASS / FAIL: All database migrations show "up"
+□ PASS / FAIL: No orphaned migrations detected
+
+HEALTH CHECKS (ALL MUST BE "PASS"):
+□ PASS / FAIL: hammer ping returns all "ok"
+□ PASS / FAIL: foreman-maintain health check passes
+□ PASS / FAIL: foreman-rake katello:check_ping passes
+□ PASS / FAIL: PostgreSQL connectivity confirmed
+□ PASS / FAIL: Redis connectivity confirmed
+
+FUNCTIONAL VALIDATION (ALL MUST BE "PASS"):
+□ PASS / FAIL: UI login successful
+□ PASS / FAIL: hammer authentication successful
+□ PASS / FAIL: Host list loads in UI (< 5 seconds)
+□ PASS / FAIL: Content Views accessible
+□ PASS / FAIL: Repositories list loads
+□ PASS / FAIL: Lifecycle Environments accessible
+□ PASS / FAIL: Activation Keys accessible
+□ PASS / FAIL: Smart Proxies all show "up"
+
+CONTENT VALIDATION (ALL MUST BE "PASS"):
+□ PASS / FAIL: Repository sync completes successfully (test repo)
+□ PASS / FAIL: Content View publish succeeds (test CV)
+□ PASS / FAIL: Content View promote succeeds (test CV)
+□ PASS / FAIL: Package count matches pre-upgrade (±1%)
+□ PASS / FAIL: Errata count matches pre-upgrade (±1%)
+□ PASS / FAIL: Container image count matches pre-upgrade
+
+HOST OPERATIONS (ALL MUST BE "PASS"):
+□ PASS / FAIL: Existing host appears in host list
+□ PASS / FAIL: Host details page loads
+□ PASS / FAIL: Host package applicability visible
+□ PASS / FAIL: Remote execution job succeeds on test host
+□ PASS / FAIL: New host registration succeeds (test)
+
+SMART PROXY VALIDATION (ALL MUST BE "PASS"):
+□ PASS / FAIL: hammer capsule list shows all proxies
+□ PASS / FAIL: All proxy features detected
+□ PASS / FAIL: Capsule content sync succeeds
+□ PASS / FAIL: Proxy logs show no errors
+
+PERFORMANCE VALIDATION (ALL MUST BE "PASS"):
+□ PASS / FAIL: UI page load time < 5 seconds
+□ PASS / FAIL: API response time < 3 seconds
+□ PASS / FAIL: Database query time < 2 seconds average
+□ PASS / FAIL: CPU usage < 70%
+□ PASS / FAIL: Memory usage < 80%
+□ PASS / FAIL: Disk I/O wait < 20%
+
+DATA INTEGRITY (ALL MUST BE "PASS"):
+□ PASS / FAIL: Host count matches pre-upgrade
+□ PASS / FAIL: Content View count matches pre-upgrade
+□ PASS / FAIL: Repository count matches pre-upgrade
+□ PASS / FAIL: Activation Key count matches pre-upgrade
+□ PASS / FAIL: Subscription count matches pre-upgrade
+□ PASS / FAIL: No orphaned database records
+
+LOG VALIDATION (ALL MUST BE "PASS"):
+□ PASS / FAIL: No ERROR in /var/log/foreman/production.log (last 100 lines)
+□ PASS / FAIL: No ERROR in /var/log/pulpcore/ (last 100 lines)
+□ PASS / FAIL: No ERROR in /var/log/candlepin/candlepin.log (last 100 lines)
+□ PASS / FAIL: No FATAL in foreman-installer logs
+□ PASS / FAIL: No SELinux denials in /var/log/audit/audit.log
+
+CRITERIA FOR "FAIL" - IMMEDIATE ROLLBACK REQUIRED:
+- ANY service fails to start after 3 restart attempts
+- Database migration shows "down" status
+- Data loss detected (host count, CV count, etc. differs by > 5%)
+- Critical functionality broken (host registration, content sync)
+- Performance degradation > 50%
+- PostgreSQL connectivity lost
+
+IF ANY ITEM IS "FAIL":
+1. STOP - Do not proceed to next upgrade hop
+2. Execute rollback procedure for current hop
+3. Document failure condition
+4. Engage vendor support if needed
+5. Review troubleshooting section
+6. Create incident report
+
+========================================
+INTERMEDIATE VERSION APPROVAL
+========================================
+
+AFTER EACH HOP, SIGN OFF BEFORE PROCEEDING:
+
+VERSION HOP: Foreman 3.11 → 3.12
+□ All validation checks PASS
+□ No critical errors in logs
+□ Performance acceptable
+□ Stakeholder informed of progress
+□ APPROVED TO PROCEED: YES / NO
+  Approved By: _________________ Date/Time: _____________
+
+VERSION HOP: Foreman 3.12 → 3.13
+□ All validation checks PASS
+□ No critical errors in logs
+□ Performance acceptable
+□ Stakeholder informed of progress
+□ APPROVED TO PROCEED: YES / NO
+  Approved By: _________________ Date/Time: _____________
+
+VERSION HOP: Foreman 3.13 → 3.14
+□ All validation checks PASS
+□ No critical errors in logs
+□ Performance acceptable
+□ Stakeholder informed of progress
+□ APPROVED TO PROCEED: YES / NO
+  Approved By: _________________ Date/Time: _____________
+
+VERSION HOP: Foreman 3.14 → 3.15
+□ All validation checks PASS
+□ No critical errors in logs
+□ Performance acceptable
+□ Stakeholder informed of progress
+□ APPROVED TO PROCEED: YES / NO
+  Approved By: _________________ Date/Time: _____________
+
+VERSION HOP: Foreman 3.15 → 3.16
+□ All validation checks PASS
+□ No critical errors in logs
+□ Performance acceptable
+□ Stakeholder informed of progress
+□ APPROVED TO PROCEED: YES / NO
+  Approved By: _________________ Date/Time: _____________
+
+VERSION HOP: Foreman 3.16 → 3.17
+□ All validation checks PASS
+□ No critical errors in logs
+□ Performance acceptable
+□ Stakeholder informed of progress
+□ APPROVED TO PROCEED: YES / NO
+  Approved By: _________________ Date/Time: _____________
+
+VERSION HOP: Foreman 3.17 → 3.18
+□ All validation checks PASS
+□ No critical errors in logs
+□ Performance acceptable
+□ Stakeholder informed of progress
+□ FINAL UPGRADE COMPLETE: YES / NO
+  Approved By: _________________ Date/Time: _____________
+
+--------------------------------------------------------------------------------
+14.2 FINAL PRODUCTION VALIDATION
+--------------------------------------------------------------------------------
+
+COMPLETE COMPREHENSIVE VALIDATION AFTER REACHING FOREMAN 3.18
+
+========================================
+FINAL VERSION CONFIRMATION
+========================================
+
+[FOREMAN SERVER]
+# Confirm final version
+hammer --version
+# Expected: Foreman CLI 3.18.x
+
+curl -k -u admin:password https://$(hostname)/api/status | jq '.version'
+# Expected: 3.18.x
+
+foreman-rake about
+# Verify all components at expected versions:
+# - Foreman: 3.18.x
+# - Katello: 4.15.x
+# - Pulpcore: (bundled version)
+
+[POSTGRESQL SERVER]
+sudo -u postgres psql -c "SELECT version();"
+# Expected: PostgreSQL 16.x
+
+========================================
+COMPREHENSIVE FUNCTIONAL VALIDATION
+========================================
+
+USER AUTHENTICATION:
+□ Web UI login successful (admin user)
+□ Web UI login successful (LDAP user)
+□ hammer CLI authentication successful
+□ API authentication successful
+□ Timeout settings appropriate
+
+ORGANIZATION AND LOCATION:
+□ Organizations list accessible
+□ Locations list accessible
+□ Default organization settings preserved
+□ User permissions correct
+
+HOST MANAGEMENT:
+□ All hosts visible in UI
+□ Host count matches pre-upgrade documentation
+□ Host details pages load (random sample of 10 hosts)
+□ Host package applicability visible
+□ Host errata applicability visible
+□ Host subscription status visible
+□ Host collections accessible
+□ Host groups accessible
+
+CONTENT MANAGEMENT:
+□ All repositories visible
+□ Repository count matches pre-upgrade
+□ Repository synchronization successful (test 5 repositories)
+□ Content Views list complete
+□ Content View count matches pre-upgrade
+□ Content View publish successful (test CV)
+□ Content View promote successful (test CV)
+□ Composite Content Views functional
+□ Lifecycle Environments accessible
+□ Lifecycle Environment paths correct
+
+SUBSCRIPTION MANAGEMENT:
+□ Subscriptions visible in UI
+□ Subscription count matches pre-upgrade
+□ Manifest details correct
+□ Activation Keys accessible
+□ Activation Key count matches pre-upgrade
+□ Subscription attachment to activation key works
+□ Host subscription status accurate
+
+PACKAGE AND ERRATA:
+□ Package search functional
+□ Package count matches pre-upgrade (±1%)
+□ Errata list accessible
+□ Errata count matches pre-upgrade (±1%)
+□ Errata applicability calculation functional
+□ Package installation via UI successful (test host)
+□ Errata application via UI successful (test host)
+
+CONTAINER MANAGEMENT:
+□ Container repositories accessible
+□ Container image count matches pre-upgrade
+□ Container image sync successful
+□ Docker tags visible
+□ Container content in Content Views
+
+PROVISIONING:
+□ Operating Systems list accessible
+□ Installation media accessible
+□ Partition tables accessible
+□ Provisioning templates accessible
+□ PXE templates rendered correctly
+□ Host build mode toggle works
+□ Test provisioning workflow (optional, if time permits)
+
+CONFIGURATION MANAGEMENT:
+□ Ansible roles visible (if used)
+□ Ansible variables accessible (if used)
+□ Puppet classes visible (if used)
+□ Puppet environments accessible (if used)
+□ Smart Class Parameters functional
+
+REMOTE EXECUTION:
+□ Job templates accessible
+□ Remote execution features enabled
+□ Test remote execution job successful (run "uptime" on test host)
+□ Job invocation history accessible
+□ Scheduled jobs preserved
+
+SMART PROXY VALIDATION:
+□ All Smart Proxies visible in UI
+□ Smart Proxy count matches pre-upgrade
+□ All proxy features detected (hammer capsule info --id X)
+□ Proxy logs show no errors
+□ Content synchronization to capsules successful (test)
+□ Proxy services all running
+
+COMPUTE RESOURCES (IF USED):
+□ Compute resources list accessible
+□ VM provisioning functional (if applicable)
+□ Compute profiles accessible
+□ Image management functional
+
+DISCOVERY (IF USED):
+□ Discovery rules accessible
+□ Discovered hosts visible (if any)
+□ Discovery workflow functional
+
+EXTERNAL AUTHENTICATION (IF USED):
+□ LDAP authentication successful
+□ AD authentication successful (if configured)
+□ User group sync functional
+□ Role mappings correct
+
+MONITORING AND REPORTING:
+□ Dashboard loads with correct data
+□ Reports accessible
+□ Audit logs functional
+□ Statistics accurate
+□ Trends data preserved
+
+PERFORMANCE METRICS:
+□ UI page load time: ________ seconds (target: < 5 seconds)
+□ API response time: ________ seconds (target: < 3 seconds)
+□ Host list load time: ________ seconds (target: < 5 seconds)
+□ Content View publish time: ________ minutes (baseline: _____)
+□ Repository sync time: ________ minutes (baseline: _____)
+
+========================================
+CLIENT-SIDE VALIDATION
+========================================
+
+SELECT 5-10 REPRESENTATIVE HOSTS FOR TESTING:
+
+TEST HOST 1: ___________________
+□ subscription-manager status shows registered
+□ subscription-manager list shows correct subscriptions
+□ yum repolist shows correct repositories
+□ yum check-update completes successfully
+□ yum install <test_package> successful
+□ Remote execution responds (if enabled)
+□ Katello agent functional (if used)
+□ Package applicability correct
+
+TEST HOST 2: ___________________
+□ All client-side validations pass
+
+TEST HOST 3: ___________________
+□ All client-side validations pass
+
+TEST HOST 4: ___________________
+□ All client-side validations pass
+
+TEST HOST 5: ___________________
+□ All client-side validations pass
+
+NEW HOST REGISTRATION TEST:
+□ Bootstrap script downloads successfully
+□ New host registration completes
+□ Host appears in Foreman UI
+□ Correct activation key applied
+□ Correct subscriptions attached
+□ Correct repositories enabled
+
+========================================
+DATABASE INTEGRITY VALIDATION
+========================================
+
+[POSTGRESQL SERVER]
+# Verify database sizes
+sudo -u postgres psql << EOF
+SELECT pg_database.datname,
+       pg_size_pretty(pg_database_size(pg_database.datname)) AS size
+FROM pg_database
+WHERE datname IN ('foreman', 'pulpcore', 'candlepin')
+ORDER BY pg_database_size(pg_database.datname) DESC;
+EOF
+
+# Compare with pre-upgrade documentation:
+# foreman: ________ (pre-upgrade) vs ________ (post-upgrade)
+# pulpcore: ________ (pre-upgrade) vs ________ (post-upgrade)
+# candlepin: ________ (pre-upgrade) vs ________ (post-upgrade)
+
+# Verify table counts
+sudo -u postgres psql -d foreman << EOF
+SELECT 'Hosts' AS table_name, COUNT(*) FROM hosts
+UNION ALL
+SELECT 'Content Views', COUNT(*) FROM katello_content_views
+UNION ALL
+SELECT 'Repositories', COUNT(*) FROM katello_repositories
+UNION ALL
+SELECT 'Activation Keys', COUNT(*) FROM katello_activation_keys
+UNION ALL
+SELECT 'Subscriptions', COUNT(*) FROM katello_subscriptions;
+EOF
+
+# Compare counts with pre-upgrade documentation
+□ Counts match within ±1%
+
+# Verify no orphaned migrations
+foreman-rake db:migrate:status | grep down
+# Expected: No output
+
+# Verify database constraints
+[POSTGRESQL SERVER]
+sudo -u postgres psql -d foreman << EOF
+SELECT conrelid::regclass AS table_name,
+       conname AS constraint_name,
+       contype AS constraint_type
+FROM pg_constraint
+WHERE contype IN ('p', 'f', 'u')
+ORDER BY conrelid::regclass::text, contype;
+EOF
+
+□ No unexpected constraint violations
+
+========================================
+LOG FILE VALIDATION
+========================================
+
+[FOREMAN SERVER]
+# Check for errors in key log files
+echo "=== Checking Foreman logs ==="
+grep -i "error\|fatal\|exception" /var/log/foreman/production.log | tail -50
+# Document any concerning errors: ________________________________
+
+echo "=== Checking Pulpcore logs ==="
+grep -i "error\|fatal\|exception" /var/log/pulpcore/pulpcore-api.log | tail -50
+# Document any concerning errors: ________________________________
+
+echo "=== Checking Candlepin logs ==="
+grep -i "error\|fatal\|exception" /var/log/candlepin/candlepin.log | tail -50
+# Document any concerning errors: ________________________________
+
+echo "=== Checking installer logs ==="
+grep -i "error\|fatal" /var/log/foreman-installer/foreman-installer.log | tail -50
+# Document any concerning errors: ________________________________
+
+echo "=== Checking SELinux denials ==="
+ausearch -m avc -ts recent | grep -i denied
+# Expected: No new denials
+
+echo "=== Checking system logs ==="
+journalctl -p err -S "4 hours ago" --no-pager
+# Document any concerning errors: ________________________________
+
+========================================
+SECURITY VALIDATION
+========================================
+
+CERTIFICATE VALIDATION:
+□ Foreman SSL certificate valid and not expiring within 90 days
+□ Candlepin SSL certificate valid
+□ Smart Proxy certificates valid
+□ CA certificate chain intact
+
+[FOREMAN SERVER]
+# Verify certificate expiration dates
+openssl x509 -in /etc/pki/katello/certs/katello-apache.crt -noout -enddate
+openssl x509 -in /etc/candlepin/certs/candlepin-ca.crt -noout -enddate
+
+# Verify certificate chains
+openssl verify -CAfile /etc/pki/katello/certs/katello-default-ca.crt /etc/pki/katello/certs/katello-apache.crt
+
+SELINUX VALIDATION:
+□ SELinux enforcing mode enabled
+□ No SELinux denials in last 4 hours
+□ Custom policies documented
+
+[FOREMAN SERVER]
+getenforce
+# Expected: Enforcing
+
+ausearch -m avc -ts recent
+# Expected: No denials
+
+FIREWALL VALIDATION:
+□ Firewalld active and enabled
+□ Required ports open
+□ No unexpected open ports
+
+[FOREMAN SERVER]
+systemctl status firewalld
+firewall-cmd --list-all
+
+# Verify expected ports:
+# 443/tcp (HTTPS)
+# 80/tcp (HTTP)
+# 8000/tcp (Smart Proxy)
+# 8443/tcp (Candlepin)
+# 9090/tcp (Smart Proxy HTTPS)
+# 5647/tcp (qpid)
+
+========================================
+BACKUP VALIDATION POST-UPGRADE
+========================================
+
+□ Fresh post-upgrade backup completed
+□ Backup includes all databases
+□ Backup includes all configuration files
+□ Backup includes Pulp content
+□ Backup integrity verified
+□ Backup restoration tested (optional, on separate test system)
+□ Backup documented and cataloged
+□ Backup stored offsite
+
+[FOREMAN SERVER]
+# Create final post-upgrade backup
+mkdir -p /backup/post-upgrade-3.18-$(date +%Y%m%d)
+
+[POSTGRESQL SERVER]
+sudo -u postgres pg_dump -Fc foreman > /backup/post-upgrade-3.18-$(date +%Y%m%d)/foreman.dump
+sudo -u postgres pg_dump -Fc pulpcore > /backup/post-upgrade-3.18-$(date +%Y%m%d)/pulpcore.dump
+sudo -u postgres pg_dump -Fc candlepin > /backup/post-upgrade-3.18-$(date +%Y%m%d)/candlepin.dump
+
+[FOREMAN SERVER]
+tar -czf /backup/post-upgrade-3.18-$(date +%Y%m%d)/foreman-config.tar.gz \
+  /etc/foreman \
+  /etc/httpd/conf.d/05-foreman* \
+  /etc/pulp
+
+# Verify backup integrity
+tar -tzf /backup/post-upgrade-3.18-$(date +%Y%m%d)/foreman-config.tar.gz | head
+
+--------------------------------------------------------------------------------
+14.3 STAKEHOLDER NOTIFICATION
+--------------------------------------------------------------------------------
+
+========================================
+UPGRADE COMPLETION NOTIFICATION TEMPLATE
+========================================
+
+TO: [Stakeholders, Change Advisory Board, Application Owners]
+FROM: [Foreman Administrator / Infrastructure Team]
+SUBJECT: Foreman Upgrade to 3.18 - Completion Report
+
+DATE: [Date]
+MAINTENANCE WINDOW: [Start Time] to [End Time]
+
+UPGRADE SUMMARY:
+- Source Version: Foreman 3.11 / Katello 4.13
+- Target Version: Foreman 3.18 / Katello 4.15
+- Total Upgrade Duration: ________ hours
+- Total Downtime: ________ hours
+- Upgrade Status: SUCCESSFUL / COMPLETED WITH ISSUES / FAILED
+
+UPGRADE PATH EXECUTED:
+1. Foreman 3.11 → 3.12: Duration _____ min, Status: ________
+2. Foreman 3.12 → 3.13: Duration _____ min, Status: ________
+3. Foreman 3.13 → 3.14: Duration _____ min, Status: ________
+4. Foreman 3.14 → 3.15: Duration _____ min, Status: ________
+5. Foreman 3.15 → 3.16: Duration _____ min, Status: ________
+6. Foreman 3.16 → 3.17: Duration _____ min, Status: ________
+7. Foreman 3.17 → 3.18: Duration _____ min, Status: ________
+
+VALIDATION RESULTS:
+✓ All services running normally
+✓ All Smart Proxies operational
+✓ Database integrity confirmed
+✓ All hosts registered and accessible
+✓ Content synchronization functional
+✓ Subscription management operational
+✓ Remote execution functional
+✓ Performance metrics acceptable
+
+ISSUES ENCOUNTERED (IF ANY):
+[List any issues and their resolution]
+
+POST-UPGRADE ACTIONS REQUIRED:
+□ Users may need to clear browser cache
+□ API clients may need endpoint updates
+□ Custom scripts may need review
+□ [Any other specific actions]
+
+ROLLBACK CAPABILITY:
+Rollback capability maintained for ________ hours via:
+- VM snapshots
+- Database backups
+- Application backups
+
+NEXT STEPS:
+- Monitor system performance for 48 hours
+- Review logs daily for 1 week
+- Schedule follow-up review meeting
+- Plan for next maintenance activities
+
+SUPPORT CONTACTS:
+Primary: [Name, Email, Phone]
+Secondary: [Name, Email, Phone]
+Vendor Support: [Case Number if opened]
+
+Thank you for your cooperation during this maintenance window.
+
+[Name]
+[Title]
+[Date/Time]
+
+--------------------------------------------------------------------------------
+14.4 POST-UPGRADE MONITORING PLAN
+--------------------------------------------------------------------------------
+
+IMMEDIATE (0-4 HOURS POST-UPGRADE):
+□ Monitor all service statuses every 15 minutes
+□ Review logs for errors every 30 minutes
+□ Monitor system resources (CPU, memory, disk) continuously
+□ Verify user access and functionality
+□ Be prepared for immediate rollback if critical issues
+
+SHORT-TERM (4-48 HOURS POST-UPGRADE):
+□ Monitor service statuses hourly
+□ Review logs for errors every 4 hours
+□ Monitor system resources every hour
+□ Track user-reported issues
+□ Perform daily functional spot-checks
+□ Monitor database performance metrics
+□ Track content synchronization jobs
+□ Review audit logs for anomalies
+
+MEDIUM-TERM (48 HOURS - 1 WEEK POST-UPGRADE):
+□ Monitor service statuses daily
+□ Review logs for errors daily
+□ Monitor system resources daily
+□ Track and resolve user-reported issues
+□ Perform comprehensive functional validation mid-week
+□ Review performance trends
+□ Optimize based on observed performance
+
+LONG-TERM (1 WEEK - 1 MONTH POST-UPGRADE):
+□ Monitor service statuses weekly
+□ Review logs for patterns weekly
+□ Track system resource trends
+□ Conduct user satisfaction survey
+□ Document lessons learned
+□ Update procedures based on experience
+□ Plan for future upgrades
+
+METRICS TO TRACK:
+- Average UI page load time
+- Average API response time
+- Content View publish duration
+- Repository sync duration
+- Remote execution job duration
+- Database query performance
+- System resource utilization
+- User-reported issues count
+- Service uptime percentage
+
+--------------------------------------------------------------------------------
+14.5 FINAL SIGN-OFF DOCUMENT
+--------------------------------------------------------------------------------
+
+========================================
+FOREMAN 3.11 TO 3.18 UPGRADE - FINAL SIGN-OFF
+========================================
+
+UPGRADE DETAILS:
+Project Name: Foreman Production Upgrade
+Environment: Production
+Source Version: Foreman 3.11 / Katello 4.13
+Target Version: Foreman 3.18 / Katello 4.15
+Upgrade Date: _______________
+Completion Date: _______________
+
+TECHNICAL LEAD CERTIFICATION:
+I certify that:
+□ All upgrade hops completed successfully
+□ All post-upgrade validation checks passed
+□ All services operational
+□ All data integrity checks passed
+□ Performance metrics acceptable
+□ No critical issues outstanding
+□ Backup and rollback procedures documented
+□ Post-upgrade monitoring plan in place
+
+Technical Lead: _____________________
+Signature: _____________________
+Date: _____________________
+
+CHANGE MANAGER APPROVAL:
+I approve that:
+□ Upgrade completed within maintenance window
+□ All stakeholders notified
+□ Documentation complete
+□ Success criteria met
+□ Change record updated
+□ Lessons learned documented
+
+Change Manager: _____________________
+Signature: _____________________
+Date: _____________________
+
+APPLICATION OWNER APPROVAL:
+I confirm that:
+□ Application functionality verified
+□ User acceptance testing passed (if required)
+□ Business operations normal
+□ No user-impacting issues
+□ Acceptable to close maintenance window
+
+Application Owner: _____________________
+Signature: _____________________
+Date: _____________________
+
+INFRASTRUCTURE MANAGER APPROVAL:
+I approve that:
+□ Infrastructure stable
+□ Monitoring in place
+□ Support procedures updated
+□ Team trained on new version
+□ Acceptable to return to normal operations
+
+Infrastructure Manager: _____________________
+Signature: _____________________
+Date: _____________________
+
+FINAL AUTHORIZATION:
+This upgrade is hereby approved and closed.
+
+Authorized By: _____________________
+Title: _____________________
+Signature: _____________________
+Date: _____________________
+
+========================================
+UPGRADE METRICS (FINAL):
+========================================
+
+TOTAL DURATION: ________ hours
+TOTAL DOWNTIME: ________ hours
+PLANNED DOWNTIME: ________ hours
+UNPLANNED DOWNTIME: ________ hours (if any)
+
+ISSUES ENCOUNTERED: ________ (count)
+CRITICAL ISSUES: ________ (count)
+ISSUES RESOLVED: ________ (count)
+ISSUES DEFERRED: ________ (count)
+
+ROLLBACKS EXECUTED: ________ (count)
+ROLLBACK REASON: __________________ (if applicable)
+
+VALIDATION PASS RATE: ________%
+USER SATISFACTION: ________ (if surveyed)
+
+RESOURCE UTILIZATION:
+- Team Hours: ________ hours
+- Vendor Support Hours: ________ hours (if applicable)
+- Downtime Cost: $________ (if applicable)
+
+LESSONS LEARNED:
+1. _______________________________________________
+2. _______________________________________________
+3. _______________________________________________
+
+RECOMMENDATIONS FOR FUTURE UPGRADES:
+1. _______________________________________________
+2. _______________________________________________
+3. _______________________________________________
+
+========================================
+DOCUMENT RETENTION:
+========================================
+
+This upgrade runbook and all associated documentation shall be retained for:
+□ Minimum 2 years for compliance
+□ Archived in: _______________________________________________
+□ Accessible to: _______________________________________________
+
+RELATED DOCUMENTATION:
+□ Change Request: CR-_______________
+□ Incident Reports: INC-_______________ (if any)
+□ Backup Logs: _______________
+□ Pre-Upgrade Health Checks: _______________
+□ Post-Upgrade Validation Reports: _______________
+
+================================================================================
+END OF FOREMAN 3.11 TO 3.18 UPGRADE RUNBOOK - SECTIONS 12-14
+================================================================================
+
+Document Prepared By: Principal Foreman/Katello Architect
+Document Date: 2025
+Document Version: 1.0
+Next Review Date: [As needed for future upgrades]
+
+For questions or issues regarding this runbook, contact:
+[Your Infrastructure Team Contact Information]
+
+This runbook is intended for enterprise production environments and assumes
+qualified personnel are performing the upgrade. Always test in non-production
+environments first. Always maintain current backups. Always have rollback
+plans ready.
+
+================================================================================
