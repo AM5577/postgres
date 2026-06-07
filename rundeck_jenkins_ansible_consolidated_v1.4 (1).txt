@@ -1617,10 +1617,84 @@ APPENDIX E — LESSONS LEARNED (v1.3 + v1.4 LIVE DEPLOYMENT — JUNE 2026)
     FIX     : Overwrite entire file with cat > (not cat >>) to avoid duplicates
 
 
-================================================================================
-END OF DOCUMENT
-================================================================================
-  Rundeck 3.3.18 + Jenkins 2.541.1 LTS + Ansible 9.5.1 + Nginx
-  Single-Server Oracle Linux 8 Production Guide — H2 Built-in Database
-  Consolidated June 2026 | Version 1.5 | Verified working deployment
-================================================================================
+==========================
+
+
+=====================================================
+STEP 2: SERVICE ACCOUNT & ENVIRONMENT SETUP
+=====================================================
+
+# Create the dedicated Ansible service account
+sudo useradd -m -s /bin/bash svc_ans
+
+# Grant passwordless sudo rights to the service account
+echo "svc_ans ALL=(ALL) NOPASSWD:ALL" | sudo tee /etc/sudoers.d/svc_ans
+sudo chmod 0440 /etc/sudoers.d/svc_ans
+
+# Switch to the service account context
+sudo su - svc_ans
+
+# Create the virtual environment directory
+mkdir -p /home/svc_ans/ansible-venv
+
+# Initialize the Python 3.11 virtual environment
+python3.11 -m venv /home/svc_ans/ansible-venv
+
+# Activate the virtual environment
+source /home/svc_ans/ansible-venv/bin/activate
+
+# Upgrade core package managers inside the environment
+pip install --upgrade pip setuptools wheel
+
+=====================================================
+STEP 3: ANSIBLE CORE & DEPENDENCIES INSTALLATION
+=====================================================
+
+# Install enterprise-grade Ansible Core and common collections
+pip install ansible-core cryptography jmespath paramiko
+
+# Verify the installation path and version
+ansible --version
+# Expected: ansible-core [2.16.x/2.17.x] inside /home/svc_ans/ansible-venv/
+
+=====================================================
+STEP 4: GLOBAL CONFIGURATION FILE SETUP
+=====================================================
+
+# Return to root user/sudo terminal to create the system directory
+exit
+sudo mkdir -p /etc/ansible
+
+# Create and configure the production ansible.cfg file
+cat << 'EOF' | sudo tee /etc/ansible/ansible.cfg
+[defaults]
+inventory       = /etc/ansible/hosts
+roles_path      = /etc/ansible/roles
+remote_user     = svc_ans
+host_key_checking = False
+forks           = 20
+timeout         = 30
+log_path        = /var/log/ansible.log
+
+[privilege_escalation]
+become          = True
+become_method   = sudo
+become_user     = root
+become_ask_pass = False
+EOF
+
+# Initialize log file with correct ownership
+sudo touch /var/log/ansible.log
+sudo chown svc_ans:svc_ans /var/log/ansible.log /etc/ansible
+
+=====================================================
+STEP 5: AUTOMATE ENVIRONMENT ACTIVATION
+=====================================================
+
+# Switch back to the service account
+sudo su - svc_ans
+
+# Force venv activation upon logging in as svc_ans
+echo 'source /home/svc_ans/ansible-venv/bin/activate' >> ~/.bashrc
+source ~/.bashrc
+
