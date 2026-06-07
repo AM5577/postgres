@@ -1,0 +1,1339 @@
+================================================================================
+                         CHANGE REQUEST DOCUMENT
+                  JENKINS UPGRADE: 2.528.3 → 2.555.2
+                       PLATFORM: Ubuntu 22.04 LTS
+================================================================================
+
+Document Control
+----------------
+Document Title  : Jenkins Controller Upgrade Change Request
+Document ID     : CR-JENKINS-2025-001
+Version         : 1.0
+Status          : DRAFT — Pending CAB Approval
+Prepared By     : [Senior DevOps Engineer / Jenkins Administrator]
+Platform        : Ubuntu 22.04 LTS (Jammy Jellyfish)
+Package Manager : APT (.deb)
+Review Date     : [INSERT DATE]
+Target Change   : [INSERT MAINTENANCE WINDOW DATE & TIME]
+Change Owner    : [INSERT NAME]
+CAB Approval    : [ ] Approved  [ ] Rejected  [ ] Deferred
+
+================================================================================
+SECTION 1 — EXECUTIVE SUMMARY
+================================================================================
+
+1.1  Change Overview
+---------------------
+This change request covers the in-place upgrade of the Jenkins Continuous
+Integration/Continuous Delivery (CI/CD) controller from version 2.528.3
+(current LTS) to version 2.555.2 on an Ubuntu 22.04 LTS system managed
+via the APT package manager.
+
+The upgrade is performed within the same Long-Term Support (LTS) release line
+and is classified as a MINOR-RISK, SCHEDULED maintenance activity.
+
+Current Version : Jenkins 2.528.3
+Target Version  : Jenkins 2.555.2
+Package Type    : DEB (APT)
+Platform        : Ubuntu 22.04 LTS (Jammy Jellyfish)
+Architecture    : amd64 / noarch
+
+--------------------------------------------------------------------------------
+1.2  Benefits of Upgrading
+---------------------------
+  [1] Security Patches
+      - Multiple CVE fixes shipped between 2.528.3 and 2.555.2, including
+        mitigations for XSS, CSRF, path-traversal, and privilege-escalation
+        vulnerabilities identified in Jenkins Security Advisories.
+
+  [2] Bug Fixes
+      - Cumulative fixes for known issues in pipeline execution, workspace
+        cleanup, agent reconnection stability, and queue management.
+
+  [3] Dependency Updates
+      - Updated bundled Remoting (agent protocol) library improving agent
+        connection reliability.
+      - Updated Stapler, Winstone, and Jetty embedded server components.
+
+  [4] Performance Improvements
+      - Reduced memory overhead in the build queue scheduler.
+      - Improved garbage collection behaviour under high-concurrency workloads.
+
+  [5] Compliance
+      - Maintains alignment with vendor-supported LTS versions, ensuring
+        continued access to security advisories and community support.
+
+  [6] Plugin Ecosystem Compatibility
+      - Newer plugin releases may require a minimum Jenkins core version above
+        2.528.3; staying current removes this blocker.
+
+--------------------------------------------------------------------------------
+1.3  Risks Involved
+--------------------
+  RISK-01 | Service Outage During Upgrade        | Likelihood: HIGH    (planned)
+           | Jenkins will be unavailable for the
+           | duration of the upgrade window.
+           | Mitigation: Schedule during off-hours maintenance window.
+
+  RISK-02 | Plugin Incompatibility               | Likelihood: MEDIUM
+           | One or more installed plugins may not
+           | support the new core version.
+           | Mitigation: Run plugin compatibility check pre-upgrade;
+           | update or pin incompatible plugins before upgrade.
+
+  RISK-03 | Pipeline / Job Failures Post-Upgrade | Likelihood: LOW
+           | API changes or removed features may
+           | cause existing pipelines to fail.
+           | Mitigation: Review breaking changes; test pipelines in
+           | a non-production environment first.
+
+  RISK-04 | Rollback Complexity                  | Likelihood: LOW
+           | Downgrading Jenkins core requires a
+           | valid JENKINS_HOME backup.
+           | Mitigation: Full backup taken before upgrade begins.
+
+  RISK-05 | Java Runtime Incompatibility         | Likelihood: LOW
+           | Upgrade may require a newer JDK.
+           | Mitigation: Verify Java version compliance pre-upgrade.
+           | Note: Ubuntu 22.04 ships with OpenJDK 11 and 17 in-repo.
+
+  RISK-06 | APT Repository Key Expiry            | Likelihood: LOW
+           | The Jenkins APT signing key may have
+           | expired or changed since initial setup.
+           | Mitigation: Verify and refresh the Jenkins APT keyring
+           | as part of pre-upgrade steps.
+
+--------------------------------------------------------------------------------
+1.4  Compatibility Considerations
+-----------------------------------
+  - Java 11 is the minimum required version; Java 17 or 21 (LTS) are
+    recommended and fully supported. Ubuntu 22.04 ships OpenJDK 11 and 17.
+  - All installed plugins must be verified against the Jenkins Plugin
+    Compatibility matrix at https://plugins.jenkins.io.
+  - Agents running older Remoting versions should be assessed; Remoting
+    compatibility is typically maintained across minor LTS bumps.
+  - Ubuntu 22.04 uses systemd; all service management commands use systemctl.
+  - This upgrade does NOT include a migration to a new Jenkins release line
+    (e.g., Weekly → LTS), reducing risk significantly.
+  - The Jenkins official APT repository (pkg.jenkins.io/debian-stable) must
+    be configured and accessible from the server.
+
+
+================================================================================
+SECTION 2 — PRE-UPGRADE ASSESSMENT
+================================================================================
+
+2.1  Required Java Version
+---------------------------
+  Jenkins 2.555.2 requires Java 11 or higher.
+  Recommended versions: Java 17 LTS or Java 21 LTS.
+
+  Verify current Java version:
+    java -version
+    update-alternatives --list java
+
+  Ubuntu 22.04 — install Java 17 if not already present:
+    sudo apt-get update
+    sudo apt-get install -y openjdk-17-jdk
+
+  Set default Java to 17:
+    sudo update-alternatives --config java
+    # Select the entry for Java 17
+
+  Verify JAVA_HOME is correct:
+    echo $JAVA_HOME
+    # Should point to: /usr/lib/jvm/java-17-openjdk-amd64
+
+  Update JENKINS_JAVA_HOME in service config if needed (see Section 2.5):
+    cat /etc/default/jenkins | grep JAVA
+
+  NOTE: Java 8 is NOT supported by Jenkins 2.555.2.
+
+--------------------------------------------------------------------------------
+2.2  Operating System Compatibility
+-------------------------------------
+  This document is written specifically for:
+    Ubuntu 22.04 LTS (Jammy Jellyfish)
+
+  Verify OS version:
+    lsb_release -a
+    cat /etc/os-release
+    uname -r
+
+  Expected output:
+    Distributor ID: Ubuntu
+    Release:        22.04
+    Codename:       jammy
+
+  Verify APT package manager version:
+    apt --version
+
+  Disk space requirements:
+    - Minimum 2 GB free on the partition hosting JENKINS_HOME (/var/lib/jenkins)
+    - Minimum 500 MB free on / for APT download and installation
+
+  Check available disk space:
+    df -h /var/lib/jenkins
+    df -h /var
+    df -h /
+
+  Verify network access to Jenkins APT repository:
+    curl -sI https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | head -5
+    # Expected: HTTP/2 200
+
+--------------------------------------------------------------------------------
+2.3  Plugin Compatibility Checks
+----------------------------------
+  STEP 1 — Export installed plugin list with versions:
+    # Method A: Jenkins CLI
+    java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar \
+      -s http://localhost:8080/ \
+      -auth ADMIN_USER:API_TOKEN \
+      list-plugins > /tmp/jenkins_plugins_pre_upgrade_$(date +%Y%m%d).txt
+
+    # Method B: REST API
+    curl -s -u ADMIN_USER:API_TOKEN \
+      "http://localhost:8080/pluginManager/api/json?depth=1" \
+      | python3 -m json.tool > /tmp/jenkins_plugins_api.json
+
+    # Method C: Direct filesystem listing
+    ls -la /var/lib/jenkins/plugins/*.jpi 2>/dev/null \
+      > /tmp/jenkins_plugin_files.txt
+
+  STEP 2 — Check plugin compatibility via Plugin Manager UI:
+    Navigate to: Manage Jenkins → Plugin Manager → Available Updates
+    Look for plugins showing a warning icon or "incompatible" status.
+
+  STEP 3 — Cross-reference critical plugins (commonly used):
+    - workflow-aggregator (Pipeline)
+    - git
+    - credentials
+    - credentials-binding
+    - ssh-credentials
+    - kubernetes
+    - docker-workflow
+    - blueocean (check carefully — often lags behind LTS)
+    - configuration-as-code (JCasC)
+    - matrix-auth / role-strategy
+    - active-directory / ldap
+    - sonarqube
+    - nexus-artifact-uploader
+
+  STEP 4 — Identify pinned plugins:
+    grep -r "pinned" /var/lib/jenkins/plugins/ 2>/dev/null
+
+--------------------------------------------------------------------------------
+2.4  Agent Compatibility Checks
+---------------------------------
+  STEP 1 — List all configured agents:
+    curl -s -u ADMIN_USER:API_TOKEN \
+      "http://localhost:8080/computer/api/json?depth=1" \
+      | python3 -m json.tool > /tmp/jenkins_agents.json
+
+  STEP 2 — Verify agent Java versions (SSH agents):
+    ssh agent-host "java -version"
+
+  STEP 3 — Check agent Remoting version:
+    Navigate to: Manage Jenkins → Nodes → [Agent Name] → System Information
+    Note the "Remoting Version" value.
+
+  STEP 4 — Document agent connectivity method for each node:
+    [ ] SSH Launch Method
+    [ ] JNLP / Inbound Agent
+    [ ] Cloud-provisioned (Kubernetes, EC2, Docker)
+    [ ] Permanent Agent / Static Node
+
+  STEP 5 — Ubuntu agent nodes — verify Java:
+    # On each Ubuntu agent:
+    java -version
+    # Minimum: Java 11. Recommended: Java 17.
+
+--------------------------------------------------------------------------------
+2.5  Backup Requirements
+-------------------------
+  CRITICAL: A full, verified backup MUST be completed before proceeding.
+  No upgrade steps should begin until backup completion is confirmed.
+
+  Key paths on Ubuntu 22.04:
+  ┌──────────────────────────────┬─────────────────────────────────────────────┐
+  │ Component                    │ Path                                         │
+  ├──────────────────────────────┼─────────────────────────────────────────────┤
+  │ Full JENKINS_HOME             │ /var/lib/jenkins/                            │
+  │ Jobs / Build Configs          │ /var/lib/jenkins/jobs/                       │
+  │ Credentials Store             │ /var/lib/jenkins/credentials.xml             │
+  │ Global Configuration          │ /var/lib/jenkins/config.xml                  │
+  │ Plugin Files                  │ /var/lib/jenkins/plugins/                    │
+  │ Secrets / Encrypted Keys      │ /var/lib/jenkins/secrets/                    │
+  │ User Configurations           │ /var/lib/jenkins/users/                      │
+  │ Shared Libraries (if local)   │ /var/lib/jenkins/workflow-libs/              │
+  │ Node / Agent Configurations   │ /var/lib/jenkins/nodes/                      │
+  │ Jenkins Service Config        │ /etc/default/jenkins                         │
+  │ Systemd Override (if exists)  │ /etc/systemd/system/jenkins.service.d/       │
+  │ APT Sources List              │ /etc/apt/sources.list.d/jenkins.list         │
+  │ APT Keyring                   │ /usr/share/keyrings/jenkins-keyring.asc      │
+  └──────────────────────────────┴─────────────────────────────────────────────┘
+
+  Full JENKINS_HOME backup command:
+    BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+    sudo tar -czpvf /backup/jenkins_full_${BACKUP_DATE}.tar.gz \
+      /var/lib/jenkins/ \
+      --exclude=/var/lib/jenkins/workspace \
+      --exclude=/var/lib/jenkins/caches \
+      --warning=no-file-changed
+
+  Backup Jenkins service and APT configuration:
+    sudo cp /etc/default/jenkins \
+      /backup/jenkins_default_${BACKUP_DATE}.bak
+
+    sudo cp /etc/apt/sources.list.d/jenkins.list \
+      /backup/jenkins_apt_sources_${BACKUP_DATE}.bak 2>/dev/null || true
+
+  Backup verification:
+    tar -tzf /backup/jenkins_full_${BACKUP_DATE}.tar.gz | wc -l
+    tar -tzf /backup/jenkins_full_${BACKUP_DATE}.tar.gz | grep "config.xml" | head -5
+    du -sh /backup/jenkins_full_${BACKUP_DATE}.tar.gz
+
+
+================================================================================
+SECTION 3 — IMPACT ANALYSIS
+================================================================================
+
+3.1  Breaking Changes (2.528.3 → 2.555.2)
+-------------------------------------------
+  NOTE: Both versions are within the same LTS stream. Breaking changes between
+  minor LTS point releases are typically minimal.
+
+  [BC-01] Remoting Protocol Updates
+    - If the bundled Remoting version has changed, agents using older
+      incompatible Remoting JARs may fail to connect.
+    - Action: Verify Remoting compatibility; update agent .jar files if needed.
+
+  [BC-02] Deprecated API Removal
+    - Jenkins core periodically removes APIs previously marked @Deprecated.
+    - Plugins relying on removed APIs will throw ClassNotFoundException or
+      NoSuchMethodError at load time.
+    - Action: Check the Jenkins LTS Changelog for API removals in this range.
+
+  [BC-03] Security Realm / Authorisation Changes
+    - Some LTS releases harden default security settings.
+    - Action: After upgrade, verify security realm (LDAP/internal) and
+      authorisation strategy are functioning correctly.
+
+  [BC-04] Pipeline Engine (Workflow) Changes
+    - Updates to workflow-cps or workflow-job may alter serialisation
+      behaviour for in-flight builds.
+    - Action: Allow no running builds prior to upgrade.
+
+  [BC-05] Build Queue / Executor Changes
+    - Scheduler improvements may alter how pending builds are prioritised.
+    - Action: Observe build queue behaviour for 48 hours post-upgrade.
+
+  Reference URLs:
+    Jenkins LTS Changelog  : https://www.jenkins.io/changelog-stable/
+    Security Advisories    : https://www.jenkins.io/security/advisories/
+    Plugin Compat Matrix   : https://plugins.jenkins.io
+
+--------------------------------------------------------------------------------
+3.2  Deprecated Features
+--------------------------
+  The following feature categories are commonly deprecated in this LTS range:
+
+  - Legacy SlaveToMasterFileCallable API (use AgentToControllerCallable)
+  - Older Stapler request/response APIs
+  - hudson.* package classes replaced by jenkins.* equivalents
+  - Remoting 3.x agent communication (moving toward Remoting 4.x)
+  - JNLP protocol versions 1, 2, 3 (JNLP4-connect is current standard)
+
+  Action: Search your Jenkinsfiles, shared libraries, and custom plugins for
+  usage of deprecated APIs. Use Manage Jenkins → Deprecation Notices post-
+  upgrade to identify active deprecation warnings.
+
+--------------------------------------------------------------------------------
+3.3  Security Fixes Included
+------------------------------
+  Jenkins LTS releases in this range typically address issues from the
+  following vulnerability classes. Exact CVEs must be confirmed against the
+  official Jenkins Security Advisories:
+
+  - Cross-Site Scripting (XSS) — input sanitisation improvements
+  - Cross-Site Request Forgery (CSRF) — enhanced crumb protection
+  - Path Traversal — workspace and artifact access hardening
+  - Privilege Escalation — permission check improvements in Plugin Manager
+  - Information Disclosure — build log and credential masking improvements
+  - Insecure Deserialisation — Remoting channel hardening
+
+  Post-upgrade action:
+    Review: https://www.jenkins.io/security/advisories/
+    Filter for advisories affecting versions between 2.528.3 and 2.555.2.
+
+--------------------------------------------------------------------------------
+3.4  Changes Affecting Pipelines, Shared Libraries, and Plugins
+-----------------------------------------------------------------
+  Pipelines:
+    - Confirm pipeline sandbox security rules have not tightened in a way
+      that blocks existing Groovy calls.
+    - Script Security plugin updates may require re-approving certain
+      method signatures post-upgrade.
+    - In-progress builds may show stale state immediately after restart —
+      this resolves on the next build execution.
+
+  Shared Libraries:
+    - Shared library caching may be invalidated post-upgrade — expect first
+      run to re-fetch library branches.
+    - Review any library code using internal Jenkins APIs (non-stable).
+
+  Plugins:
+    - Any plugin bundling Remoting or Stapler must be compatible with the
+      new versions shipped in 2.555.2.
+    - Blue Ocean plugin set has historically lagged behind LTS — verify
+      compatibility explicitly if Blue Ocean is installed.
+    - Kubernetes and Docker plugins have active release cycles; update to
+      versions compatible with 2.555.2.
+
+
+================================================================================
+SECTION 4 — UPGRADE PROCEDURE (Ubuntu 22.04 LTS / APT)
+================================================================================
+
+MAINTENANCE WINDOW REQUIREMENT
+  Estimated downtime: 15–45 minutes
+  Recommended window: Non-business hours / weekend
+  Pre-requisites before starting:
+    [ ] All running builds completed or safely stopped
+    [ ] All automated triggers (cron, webhooks) temporarily disabled
+    [ ] Backup verified complete (Section 2.5)
+    [ ] Change ticket approved by CAB
+    [ ] Rollback plan reviewed and confirmed ready
+    [ ] Root or sudo access confirmed on the Jenkins host
+
+================================================================================
+
+PHASE 1 — PRE-UPGRADE PREPARATION
+-----------------------------------
+
+Step 1.1 — Announce the Maintenance Window
+  # Notify all stakeholders via agreed communication channel.
+  # Update Jenkins system message:
+  #   Manage Jenkins → Configure System → System Message
+
+Step 1.2 — Verify Sudo Access
+  sudo whoami
+  # Expected output: root
+
+Step 1.3 — Confirm Current Jenkins Version
+  dpkg -l jenkins
+  # Or:
+  curl -s http://localhost:8080/api/json | python3 -m json.tool | grep version
+
+Step 1.4 — Enable Quiet Down Mode (stop accepting new builds)
+  curl -X POST -u ADMIN_USER:API_TOKEN \
+    http://localhost:8080/quietDown
+
+  # Verify quiet-down is active:
+  curl -s -u ADMIN_USER:API_TOKEN \
+    http://localhost:8080/api/json | python3 -m json.tool | grep quietingDown
+  # Expected: "quietingDown": true
+
+Step 1.5 — Wait for All Running Builds to Complete
+  # Check executor / queue status:
+  curl -s -u ADMIN_USER:API_TOKEN \
+    "http://localhost:8080/computer/api/json?depth=1" \
+    | python3 -m json.tool | grep -E "busy|idle|size"
+
+  # Confirm build queue is empty via UI:
+  #   Jenkins Dashboard → Build Queue (should show "No builds in the queue")
+
+Step 1.6 — Record Pre-Upgrade State
+  # Save plugin list:
+  java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar \
+    -s http://localhost:8080/ \
+    -auth ADMIN_USER:API_TOKEN \
+    list-plugins > /tmp/jenkins_plugins_pre_$(date +%Y%m%d).txt
+
+  # Save Java version:
+  java -version 2>&1 | tee /tmp/java_version_pre_upgrade.txt
+
+  # Save Jenkins process info:
+  ps aux | grep jenkins | tee /tmp/jenkins_process_pre_upgrade.txt
+
+  # Save APT package state:
+  dpkg -l jenkins | tee /tmp/dpkg_jenkins_pre_upgrade.txt
+
+================================================================================
+
+PHASE 2 — BACKUP
+-----------------
+
+Step 2.1 — Create Backup Directory
+  sudo mkdir -p /backup/jenkins_upgrade
+  sudo chmod 750 /backup/jenkins_upgrade
+
+Step 2.2 — Stop Jenkins Service
+  sudo systemctl stop jenkins
+
+  # Verify Jenkins has stopped:
+  sudo systemctl status jenkins
+  # Expected: "Active: inactive (dead)"
+
+  # Confirm no Java process remains:
+  ps aux | grep jenkins | grep -v grep
+  # Expected: no output
+
+Step 2.3 — Full JENKINS_HOME Backup
+  BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+  BACKUP_FILE="/backup/jenkins_upgrade/jenkins_full_${BACKUP_DATE}.tar.gz"
+
+  sudo tar -czpvf ${BACKUP_FILE} \
+    /var/lib/jenkins/ \
+    --exclude=/var/lib/jenkins/workspace \
+    --exclude=/var/lib/jenkins/caches \
+    --warning=no-file-changed
+
+  echo "Backup file: ${BACKUP_FILE}"
+  echo "Backup completed at: $(date)"
+
+Step 2.4 — Verify Backup Integrity
+  tar -tzf ${BACKUP_FILE} | wc -l
+  # Should output thousands of files
+
+  tar -tzf ${BACKUP_FILE} | grep "config.xml" | head -10
+  # Should show main config and several job configs
+
+  du -sh ${BACKUP_FILE}
+  # Note the backup size for records
+
+Step 2.5 — Backup Jenkins System and APT Configuration
+  sudo cp /etc/default/jenkins \
+    /backup/jenkins_upgrade/default_jenkins_${BACKUP_DATE}.bak
+
+  # Backup APT sources entry:
+  sudo cp /etc/apt/sources.list.d/jenkins.list \
+    /backup/jenkins_upgrade/jenkins_apt_sources_${BACKUP_DATE}.bak 2>/dev/null || \
+  echo "No jenkins.list found — may be using sources.list directly"
+
+  # Backup APT keyring:
+  sudo cp /usr/share/keyrings/jenkins-keyring.asc \
+    /backup/jenkins_upgrade/jenkins-keyring_${BACKUP_DATE}.asc 2>/dev/null || true
+
+  # Backup systemd override if present:
+  if [ -d /etc/systemd/system/jenkins.service.d ]; then
+    sudo cp -r /etc/systemd/system/jenkins.service.d \
+      /backup/jenkins_upgrade/systemd_override_${BACKUP_DATE}/
+  fi
+
+Step 2.6 — Record Current APT Package Details
+  dpkg -s jenkins > /backup/jenkins_upgrade/dpkg_info_pre_${BACKUP_DATE}.txt
+  dpkg -L jenkins > /backup/jenkins_upgrade/dpkg_filelist_pre_${BACKUP_DATE}.txt
+
+================================================================================
+
+PHASE 3 — APT REPOSITORY VERIFICATION AND UPGRADE
+----------------------------------------------------
+
+Step 3.1 — Verify Jenkins APT Repository is Configured
+  cat /etc/apt/sources.list.d/jenkins.list
+  # Expected (stable/LTS repo):
+  # deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+  #   https://pkg.jenkins.io/debian-stable binary/
+
+  # If the file does not exist, configure it:
+  curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key \
+    | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+
+  echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+    https://pkg.jenkins.io/debian-stable binary/" \
+    | sudo tee /etc/apt/sources.list.d/jenkins.list
+
+Step 3.2 — Verify APT Signing Key is Valid
+  # Check key expiry and fingerprint:
+  gpg --no-default-keyring \
+    --keyring /usr/share/keyrings/jenkins-keyring.asc \
+    --list-keys 2>/dev/null
+
+  # If key is expired or missing, refresh it:
+  curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key \
+    | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+
+Step 3.3 — Update APT Package Index
+  sudo apt-get update
+
+  # Verify Jenkins packages are visible from the repository:
+  apt-cache policy jenkins
+  # Should show Candidate version and the pkg.jenkins.io origin
+
+Step 3.4 — Confirm Target Version is Available
+  apt-cache madison jenkins | grep 2.555
+  # Expected output should include 2.555.2 from the stable repo
+
+  # List all available Jenkins versions:
+  apt-cache showpkg jenkins | grep -A 20 "Versions:"
+
+Step 3.5 — Perform the APT Upgrade
+
+  # Option A — Upgrade to latest available LTS (recommended):
+  sudo apt-get install --only-upgrade jenkins -y
+
+  # Option B — Pin to exact target version:
+  sudo apt-get install jenkins=2.555.2 -y
+
+  # Option C — If version string includes build suffix:
+  sudo apt-get install jenkins=2.555.2~lts -y
+  # (Adjust suffix to match exact string from apt-cache madison output)
+
+  # During install, APT will show:
+  #   Unpacking jenkins (2.555.2) over (2.528.3) ...
+  #   Setting up jenkins (2.555.2) ...
+
+Step 3.6 — Verify Package Installation
+  dpkg -l jenkins
+  # Expected:
+  # ii  jenkins  2.555.2  all  Jenkins Automation Server
+
+  dpkg -s jenkins | grep Version
+  # Expected: Version: 2.555.2
+
+================================================================================
+
+PHASE 4 — SERVICE RESTART AND VERIFICATION
+--------------------------------------------
+
+Step 4.1 — Reload Systemd Daemon
+  sudo systemctl daemon-reload
+
+Step 4.2 — Start Jenkins Service
+  sudo systemctl start jenkins
+
+  # Watch startup logs in real-time:
+  sudo journalctl -u jenkins -f &
+  # Press Ctrl+C once "Jenkins is fully up and running" appears in log
+
+Step 4.3 — Verify Jenkins Started Successfully
+  # Check service status:
+  sudo systemctl status jenkins
+  # Expected: "Active: active (running)"
+
+  # Wait for Jenkins to become ready (allow up to 3 minutes):
+  for i in $(seq 1 18); do
+    STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/login)
+    echo "Attempt ${i}: HTTP ${STATUS} at $(date +%H:%M:%S)"
+    [ "$STATUS" = "200" ] && echo "Jenkins is UP" && break
+    sleep 10
+  done
+
+Step 4.4 — Verify New Version
+  # Via REST API:
+  curl -s -u ADMIN_USER:API_TOKEN \
+    http://localhost:8080/api/json | python3 -m json.tool | grep version
+  # Expected: "version": "2.555.2"
+
+  # Via Jenkins CLI:
+  java -jar /var/cache/jenkins/war/WEB-INF/jenkins-cli.jar \
+    -s http://localhost:8080/ \
+    -auth ADMIN_USER:API_TOKEN \
+    version
+  # Expected output: 2.555.2
+
+  # Via dpkg:
+  dpkg -l jenkins
+
+Step 4.5 — Enable Auto-Start on Boot (verify still enabled)
+  sudo systemctl enable jenkins
+  systemctl is-enabled jenkins
+  # Expected: enabled
+
+Step 4.6 — Cancel Quiet Down Mode
+  curl -X POST -u ADMIN_USER:API_TOKEN \
+    http://localhost:8080/cancelQuietDown
+
+  # Verify:
+  curl -s -u ADMIN_USER:API_TOKEN \
+    http://localhost:8080/api/json | python3 -m json.tool | grep quietingDown
+  # Expected: "quietingDown": false
+
+Step 4.7 — Hold Jenkins Package Version (Optional — prevent unintended upgrades)
+  # Pin Jenkins to the current version via APT hold:
+  sudo apt-mark hold jenkins
+
+  # To release the hold before the next planned upgrade:
+  sudo apt-mark unhold jenkins
+
+  # Verify hold status:
+  apt-mark showhold | grep jenkins
+
+
+================================================================================
+SECTION 5 — PLUGIN UPGRADE STRATEGY
+================================================================================
+
+5.1  Identify Incompatible Plugins
+------------------------------------
+  STEP 1 — Check Plugin Manager for warnings after upgrade:
+    Navigate to: Manage Jenkins → Plugin Manager → Installed
+    Look for:
+      - "Requires core >= X.X.X" warnings
+      - Red warning icons
+      - "Failed to load" indicators in Jenkins system log
+
+  STEP 2 — Review Jenkins system log for plugin errors:
+    sudo journalctl -u jenkins -n 500 \
+      | grep -iE "warning|error|exception|plugin|failed"
+
+  STEP 3 — Use Jenkins Script Console to find inactive plugins:
+    Navigate to: Manage Jenkins → Script Console
+    Run:
+      Jenkins.instance.pluginManager.plugins.each { plugin ->
+        if (!plugin.isActive()) {
+          println "INACTIVE: ${plugin.getShortName()} v${plugin.getVersion()}"
+        }
+      }
+
+  STEP 4 — List all plugins with their active state:
+      Jenkins.instance.pluginManager.plugins
+        .sort { it.shortName }
+        .each { println "${it.shortName}:${it.version}:${it.active}" }
+
+--------------------------------------------------------------------------------
+5.2  Recommended Plugin Upgrade Sequence
+------------------------------------------
+  Upgrade plugins in the following priority order:
+
+  TIER 1 — Core Infrastructure Plugins (upgrade first):
+    1.  Credentials Plugin
+    2.  Credentials Binding Plugin
+    3.  SSH Credentials Plugin
+    4.  Plain Credentials Plugin
+    5.  Structs Plugin
+    6.  Script Security Plugin
+    7.  Mailer Plugin
+    8.  Branch API Plugin
+
+  TIER 2 — Pipeline Engine Plugins:
+    9.  Workflow API Plugin
+    10. Workflow Step API Plugin
+    11. Workflow CPS Plugin
+    12. Workflow Basic Steps Plugin
+    13. Workflow Job Plugin
+    14. Workflow Aggregator (Pipeline)
+    15. Pipeline Stage View
+
+  TIER 3 — SCM and Source Plugins:
+    16. Git Plugin
+    17. Git Client Plugin
+    18. GitHub / GitLab / Bitbucket plugins (as applicable)
+    19. SCM API Plugin
+
+  TIER 4 — Integration Plugins:
+    20. Kubernetes Plugin (if applicable)
+    21. Docker Plugin / Docker Workflow
+    22. Configuration as Code (JCasC)
+    23. Matrix Auth / Role Strategy
+    24. LDAP / Active Directory
+    25. All remaining plugins
+
+  Plugin Upgrade via Jenkins CLI:
+    # Download jenkins-cli.jar if needed:
+    wget http://localhost:8080/jnlpJars/jenkins-cli.jar -O /tmp/jenkins-cli.jar
+
+    # Install all available plugin updates:
+    java -jar /tmp/jenkins-cli.jar \
+      -s http://localhost:8080/ \
+      -auth ADMIN_USER:API_TOKEN \
+      install-plugin \
+      $(java -jar /tmp/jenkins-cli.jar \
+          -s http://localhost:8080/ \
+          -auth ADMIN_USER:API_TOKEN \
+          list-plugins \
+        | grep -E "^\S+\s.*\(" \
+        | awk '{print $1}')
+
+    # Safe restart after plugin updates:
+    java -jar /tmp/jenkins-cli.jar \
+      -s http://localhost:8080/ \
+      -auth ADMIN_USER:API_TOKEN \
+      safe-restart
+
+--------------------------------------------------------------------------------
+5.3  Rollback Considerations for Plugins
+------------------------------------------
+  - Before upgrading any plugin, note the CURRENT version.
+  - Old .jpi backup files may be present at:
+      /var/lib/jenkins/plugins/PLUGIN_NAME.jpi.bak
+  - To downgrade a specific plugin manually:
+      1. sudo systemctl stop jenkins
+      2. sudo cp /var/lib/jenkins/plugins/PLUGIN_NAME.jpi.bak \
+              /var/lib/jenkins/plugins/PLUGIN_NAME.jpi
+      3. sudo rm -rf /var/lib/jenkins/plugins/PLUGIN_NAME/
+      4. sudo systemctl start jenkins
+  - A full rollback (Section 7) via JENKINS_HOME backup restores all
+    plugins to their pre-upgrade state automatically.
+
+
+================================================================================
+SECTION 6 — VALIDATION CHECKLIST
+================================================================================
+
+Complete all items. Mark each as PASS / FAIL / N/A.
+
+--------------------------------------------------------------------------------
+6.1  Controller Health Checks
+-------------------------------
+  [ ] Jenkins service running:     sudo systemctl status jenkins
+  [ ] Jenkins UI accessible:       http://[JENKINS_HOST]:8080
+  [ ] Version shows 2.555.2:       UI footer / /api/json / dpkg -l jenkins
+  [ ] Manage Jenkins page loads without errors
+  [ ] No SEVERE entries in system log (Manage Jenkins → System Log)
+  [ ] No failed plugin loading warnings in UI or logs
+  [ ] Script Security plugin is active
+  [ ] Global Tool Configuration intact (JDK, Maven, Gradle paths)
+  [ ] System message and branding settings retained
+  [ ] Job count matches pre-upgrade total
+  [ ] Jenkins executor count matches pre-upgrade setting
+  [ ] APT package held to prevent unintended upgrades (if required)
+
+  Verification commands:
+    sudo systemctl status jenkins
+    curl -s -u ADMIN:TOKEN http://localhost:8080/api/json | python3 -m json.tool
+    sudo journalctl -u jenkins -n 200 | grep -iE "severe|error|exception"
+    dpkg -l jenkins
+
+--------------------------------------------------------------------------------
+6.2  Agent Connectivity Validation
+------------------------------------
+  [ ] All static/permanent agents reconnected successfully
+  [ ] Cloud agents (K8s/Docker) provisioning successfully
+  [ ] Agent node count matches pre-upgrade total
+  [ ] No agents showing unexpected "offline" status
+  [ ] Agent labels correctly assigned
+  [ ] Agent executor counts correct
+
+  Verification:
+    curl -s -u ADMIN:TOKEN \
+      "http://localhost:8080/computer/api/json?depth=1" \
+      | python3 -m json.tool | grep -E "displayName|offline|idle"
+
+  Navigate to: Manage Jenkins → Nodes — all nodes should show green status.
+
+--------------------------------------------------------------------------------
+6.3  Pipeline Execution Validation
+------------------------------------
+  [ ] Simple declarative pipeline executes successfully
+  [ ] Scripted pipeline executes successfully
+  [ ] Multibranch pipeline scans and builds successfully
+  [ ] Pipeline using shared library executes successfully
+  [ ] Pipeline using credentials binding completes without errors
+  [ ] Docker / Kubernetes agent pipeline completes (if applicable)
+  [ ] Pipeline archiving artifacts works
+  [ ] Pipeline publishing test results works
+
+  Test pipeline — create a new Pipeline job and run:
+    pipeline {
+      agent any
+      stages {
+        stage('Post-Upgrade Validation') {
+          steps {
+            echo "Jenkins version: ${env.JENKINS_VERSION}"
+            echo "Build Number:    ${env.BUILD_NUMBER}"
+            sh 'java -version'
+            sh 'echo Node: $(hostname)'
+            sh 'echo Workspace: $(pwd)'
+            sh 'echo OS: $(lsb_release -d)'
+          }
+        }
+      }
+    }
+
+--------------------------------------------------------------------------------
+6.4  Credential Verification
+------------------------------
+  [ ] All credentials present in Credentials Store
+  [ ] Username/Password credentials accessible
+  [ ] SSH private key credentials accessible
+  [ ] Secret text / secret file credentials accessible
+  [ ] Certificate credentials accessible (if used)
+  [ ] Credentials used in a test pipeline resolve without errors
+
+  Navigate to:
+    Manage Jenkins → Credentials → System → Global Credentials
+
+  Test credential resolution in a pipeline:
+    withCredentials([usernamePassword(
+        credentialsId: 'TEST_CREDENTIAL_ID',
+        usernameVariable: 'USER',
+        passwordVariable: 'PASS')]) {
+      sh 'echo Credential resolved OK'
+    }
+
+--------------------------------------------------------------------------------
+6.5  Job Scheduling Verification
+----------------------------------
+  [ ] Cron-triggered jobs retain their schedule configuration
+  [ ] SCM polling schedules are intact
+  [ ] Periodic build (timer) triggers configured correctly
+  [ ] No unexpected builds triggered at restart
+  [ ] Build history is intact for key jobs
+  [ ] Build artifacts from prior builds are accessible
+
+  Navigate to: Dashboard → each key project → Configure → Build Triggers
+
+
+================================================================================
+SECTION 7 — ROLLBACK PLAN
+================================================================================
+
+7.1  Conditions Requiring Rollback
+------------------------------------
+  Initiate rollback immediately if ANY of the following are observed:
+
+  [R-01] Jenkins service fails to start after upgrade and cannot be resolved
+         within the maintenance window.
+  [R-02] More than 20% of installed plugins fail to load and cannot be updated
+         quickly.
+  [R-03] Critical pipelines (CI/CD for production deployments) fail
+         consistently and the root cause cannot be identified.
+  [R-04] Credential store is inaccessible or credentials are missing.
+  [R-05] Agent connectivity cannot be restored for production agents.
+  [R-06] Data corruption detected in JENKINS_HOME.
+  [R-07] Security vulnerability introduced by the upgrade discovered
+         post-change.
+
+  Rollback Decision Authority: [INSERT CHANGE OWNER / ONCALL MANAGER NAME]
+  Maximum time before rollback decision: [INSERT — e.g., 60 minutes]
+
+--------------------------------------------------------------------------------
+7.2  Recovery Procedure Using Backup
+--------------------------------------
+
+  ROLLBACK STEPS — Estimated time: 20–40 minutes
+
+  Step R1 — Stop Jenkins immediately:
+    sudo systemctl stop jenkins
+    sudo systemctl status jenkins
+    # Confirm: Active: inactive (dead)
+
+  Step R2 — Preserve failed upgrade state for post-incident analysis:
+    FAIL_DATE=$(date +%Y%m%d_%H%M%S)
+    sudo tar -czf \
+      /backup/jenkins_upgrade/jenkins_failed_state_${FAIL_DATE}.tar.gz \
+      /var/lib/jenkins/ \
+      --exclude=/var/lib/jenkins/workspace \
+      --exclude=/var/lib/jenkins/caches
+
+  Step R3 — Remove the upgraded JENKINS_HOME:
+    sudo rm -rf /var/lib/jenkins/
+
+  Step R4 — Restore JENKINS_HOME from backup:
+    # Replace BACKUP_DATE with the value recorded during Phase 2
+    sudo tar -xzpvf \
+      /backup/jenkins_upgrade/jenkins_full_${BACKUP_DATE}.tar.gz \
+      -C /
+
+    # Fix ownership:
+    sudo chown -R jenkins:jenkins /var/lib/jenkins/
+    sudo chmod 750 /var/lib/jenkins/
+
+  Step R5 — Downgrade Jenkins via APT
+
+    # Remove upgraded version:
+    sudo apt-get remove jenkins -y
+
+    # Option A — Install specific previous version from APT repo
+    #            (if version is still available in the repo):
+    sudo apt-get install jenkins=2.528.3 -y
+
+    # Option B — Install from a locally saved .deb package:
+    #            (recommended — save the .deb before upgrading)
+    sudo dpkg -i /backup/jenkins_upgrade/jenkins_2.528.3_all.deb
+
+    # Verify downgraded version:
+    dpkg -l jenkins
+    # Expected: jenkins 2.528.3
+
+  Step R6 — Restore Jenkins Service Configuration:
+    sudo cp /backup/jenkins_upgrade/default_jenkins_${BACKUP_DATE}.bak \
+      /etc/default/jenkins
+
+    # Restore systemd override if it was backed up:
+    if [ -d /backup/jenkins_upgrade/systemd_override_${BACKUP_DATE} ]; then
+      sudo cp -r \
+        /backup/jenkins_upgrade/systemd_override_${BACKUP_DATE} \
+        /etc/systemd/system/jenkins.service.d
+    fi
+
+  Step R7 — Start Jenkins with Previous Version:
+    sudo systemctl daemon-reload
+    sudo systemctl start jenkins
+
+    # Watch startup logs:
+    sudo journalctl -u jenkins -f &
+
+    # Verify version:
+    dpkg -l jenkins
+    # Expected: jenkins 2.528.3
+
+    # Wait for UI to be available:
+    for i in $(seq 1 18); do
+      STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/login)
+      echo "Attempt ${i}: HTTP ${STATUS}"
+      [ "$STATUS" = "200" ] && echo "Jenkins is UP" && break
+      sleep 10
+    done
+
+  Step R8 — Cancel Quiet Down Mode:
+    curl -X POST -u ADMIN:TOKEN http://localhost:8080/cancelQuietDown
+
+  Step R9 — Run Full Validation Checklist (Section 6):
+    Confirm all checks pass for the restored version.
+
+  Step R10 — Notify Stakeholders of Rollback Completion.
+
+  Step R11 — Raise Post-Incident Review. Document:
+    - What failed and at which step
+    - Logs captured
+    - Time to detect and recover
+    - Actions required before re-attempting the upgrade
+
+--------------------------------------------------------------------------------
+7.3  Pre-Saving the Rollback .deb Package (RECOMMENDED)
+---------------------------------------------------------
+  Before starting the upgrade, save the current Jenkins .deb for fast rollback:
+
+    # Find and copy the currently cached .deb:
+    find /var/cache/apt/archives/ -name "jenkins*.deb" \
+      -exec cp {} /backup/jenkins_upgrade/ \;
+
+    # If not in cache, download it explicitly:
+    sudo apt-get install --download-only jenkins=2.528.3 -y
+    sudo cp /var/cache/apt/archives/jenkins_2.528.3_all.deb \
+      /backup/jenkins_upgrade/
+
+    # Verify the saved .deb:
+    dpkg --info /backup/jenkins_upgrade/jenkins_2.528.3_all.deb | grep Version
+
+  This ensures a fast, offline rollback even if the APT repository no longer
+  carries version 2.528.3.
+
+
+================================================================================
+SECTION 8 — POST-UPGRADE ACTIVITIES
+================================================================================
+
+8.1  Log Monitoring
+--------------------
+  Monitor Jenkins logs for 48–72 hours post-upgrade.
+
+  Real-time log monitoring:
+    sudo journalctl -u jenkins -f
+
+  Check for WARNING/SEVERE entries since upgrade:
+    sudo journalctl -u jenkins --since "2 hours ago" \
+      | grep -iE "warning|severe|error|exception|caused by"
+
+  Check for plugin-specific load errors:
+    sudo journalctl -u jenkins -n 1000 \
+      | grep -iE "plugin|classnotfound|nosuchmethod|failed to load"
+
+  Jenkins log via UI:
+    Manage Jenkins → System Log → All Jenkins Logs
+
+  Ubuntu system log (supplementary):
+    sudo tail -100 /var/log/syslog | grep jenkins
+
+  Key items to watch for:
+    - Plugin load failures or ClassNotFoundException
+    - Authentication/authorisation failures
+    - Agent connection timeouts or Remoting errors
+    - Out-of-memory errors (heap space, GC overhead)
+    - Pipeline CPS serialisation errors
+    - Script Security approval prompts blocking builds
+
+  Log rotation — verify it is configured:
+    cat /etc/logrotate.d/jenkins 2>/dev/null || \
+      echo "No Jenkins logrotate config found — consider adding one"
+
+--------------------------------------------------------------------------------
+8.2  Performance Validation
+-----------------------------
+  [1] Jenkins Heap Usage:
+      Navigate to: Manage Jenkins → System Information → Memory
+      Alert threshold: Used heap > 80% of -Xmx consistently.
+
+      Check heap settings in service config:
+        grep -E "JAVA_ARGS|Xmx|Xms" /etc/default/jenkins
+
+  [2] Build Queue Wait Times:
+      Compare average queue wait times over first 48 hours.
+      Navigate to: Jenkins Dashboard → Build Queue / Executors.
+
+  [3] JVM Metrics — from command line:
+      # Check Java process memory usage:
+      ps aux | grep jenkins | awk '{print "PID:"$2, "MEM:"$4"%", "VSZ:"$5, "RSS:"$6}'
+
+      # Find Jenkins PID and check open file descriptors:
+      JENKINS_PID=$(pgrep -f jenkins.war)
+      ls /proc/${JENKINS_PID}/fd | wc -l
+
+  [4] System Resource Usage:
+      # CPU and memory during peak build periods:
+      top -b -n 5 -p $(pgrep -f jenkins.war) | tail -20
+      free -h
+      vmstat 5 10
+      iostat -x 5 3   # If iostat is available (sysstat package)
+
+  [5] Monitoring Integration (if applicable):
+      - Prometheus / Grafana: Verify Jenkins Prometheus plugin metrics
+      - Datadog / New Relic: Confirm JVM metrics flowing post-restart
+      - Alert thresholds should be reviewed and re-confirmed
+
+--------------------------------------------------------------------------------
+8.3  Security Review
+---------------------
+  [1] Review newly exposed Security Advisories:
+      https://www.jenkins.io/security/advisories/
+
+  [2] Verify security realm is functioning:
+      - Test LDAP/AD login with a standard user account
+      - Test LDAP/AD login with an admin account
+      - Confirm that unauthorised access is still blocked
+
+  [3] Verify Script Approval queue:
+      Navigate to: Manage Jenkins → In-Process Script Approval
+      Approve any newly pending scripts that are confirmed safe.
+      Do NOT bulk-approve without reviewing each entry.
+
+  [4] Confirm CSRF protection is enabled:
+      Manage Jenkins → Configure Global Security → CSRF Protection
+      Should be: "Default Crumb Issuer" — ENABLED
+
+  [5] Verify API token security settings:
+      Manage Jenkins → Configure Global Security
+      Ensure API token generation settings match organisational policy.
+
+  [6] Check for plugin Security Warnings:
+      Manage Jenkins → Plugin Manager → Installed → Warnings tab
+      Investigate any newly flagged plugin vulnerabilities.
+
+  [7] Verify file permissions on sensitive files:
+      ls -la /var/lib/jenkins/secrets/
+      # Expected: drwx------ (700) jenkins:jenkins
+
+      ls -la /var/lib/jenkins/credentials.xml
+      # Expected: -rw------- (600) jenkins:jenkins
+
+      # Fix if incorrect:
+      sudo chmod 700 /var/lib/jenkins/secrets/
+      sudo chmod 600 /var/lib/jenkins/credentials.xml
+      sudo chown -R jenkins:jenkins /var/lib/jenkins/secrets/
+
+  [8] Ubuntu firewall — verify UFW rules are still intact:
+      sudo ufw status verbose
+      # Jenkins UI port (8080 or 443) should only be open to expected sources
+      # JNLP agent port (50000) should only be open to agent hosts
+
+  [9] Verify SSL/TLS configuration (if Jenkins is behind reverse proxy):
+      # Check nginx/apache config has not been altered:
+      sudo nginx -t 2>/dev/null || sudo apache2ctl configtest 2>/dev/null
+
+--------------------------------------------------------------------------------
+8.4  Plugin Cleanup
+--------------------
+  [1] Remove disabled or detached plugins:
+      Navigate to: Manage Jenkins → Plugin Manager → Installed
+      Filter by "Disabled" — remove plugins no longer needed.
+
+  [2] Remove orphaned .disabled files:
+      ls /var/lib/jenkins/plugins/*.disabled 2>/dev/null
+      # Review and remove only if intentionally disabled
+
+  [3] Clean up old plugin backup files:
+      ls /var/lib/jenkins/plugins/*.jpi.bak 2>/dev/null
+      # Archive or remove after confirming upgrade is stable
+
+  [4] Clear stale plugin working directories:
+      # Directories without corresponding .jpi files:
+      for dir in /var/lib/jenkins/plugins/*/; do
+        plugin=$(basename "$dir")
+        if [ ! -f "/var/lib/jenkins/plugins/${plugin}.jpi" ]; then
+          echo "Orphan directory: $dir"
+        fi
+      done
+
+  [5] Update internal plugin inventory:
+      Export final plugin list post-upgrade:
+        java -jar /tmp/jenkins-cli.jar \
+          -s http://localhost:8080/ \
+          -auth ADMIN:TOKEN \
+          list-plugins > /tmp/jenkins_plugins_post_upgrade_$(date +%Y%m%d).txt
+
+      Compare with pre-upgrade list:
+        diff /tmp/jenkins_plugins_pre_$(date +%Y%m%d).txt \
+             /tmp/jenkins_plugins_post_upgrade_$(date +%Y%m%d).txt
+
+  [6] Schedule next plugin review:
+      Jenkins plugins should be reviewed every 30–60 days.
+      Navigate to: Manage Jenkins → Plugin Manager → Advanced → Update Site
+      Recommended check interval: Daily.
+
+  [7] Archive upgrade artefacts to long-term storage:
+      sudo mv /backup/jenkins_upgrade/ \
+        /archive/jenkins/upgrade_${BACKUP_DATE}/
+      # Retain for minimum 90 days per change management policy.
+
+
+================================================================================
+APPENDIX A — QUICK REFERENCE: UBUNTU 22.04 COMMAND SUMMARY
+================================================================================
+
+# Check current Jenkins version
+dpkg -l jenkins
+curl -s http://localhost:8080/api/json | python3 -m json.tool | grep version
+
+# Check Java version
+java -version
+update-alternatives --list java
+
+# Stop Jenkins
+sudo systemctl stop jenkins
+
+# Start Jenkins
+sudo systemctl start jenkins
+
+# Restart Jenkins
+sudo systemctl restart jenkins
+
+# Check Jenkins status
+sudo systemctl status jenkins
+
+# View live logs
+sudo journalctl -u jenkins -f
+
+# Quiet Down (stop accepting new builds)
+curl -X POST -u USER:TOKEN http://localhost:8080/quietDown
+
+# Cancel Quiet Down
+curl -X POST -u USER:TOKEN http://localhost:8080/cancelQuietDown
+
+# Full backup (excluding workspace)
+BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+sudo tar -czpvf /backup/jenkins_full_${BACKUP_DATE}.tar.gz \
+  /var/lib/jenkins/ \
+  --exclude=/var/lib/jenkins/workspace \
+  --exclude=/var/lib/jenkins/caches
+
+# Update APT index
+sudo apt-get update
+
+# Upgrade Jenkins (latest LTS)
+sudo apt-get install --only-upgrade jenkins -y
+
+# Upgrade Jenkins to specific version
+sudo apt-get install jenkins=2.555.2 -y
+
+# Downgrade Jenkins (rollback)
+sudo apt-get remove jenkins -y
+sudo dpkg -i /backup/jenkins_upgrade/jenkins_2.528.3_all.deb
+
+# Fix ownership after restore
+sudo chown -R jenkins:jenkins /var/lib/jenkins/
+
+# Hold Jenkins version (prevent auto-upgrade)
+sudo apt-mark hold jenkins
+
+# Unhold Jenkins version (before next planned upgrade)
+sudo apt-mark unhold jenkins
+
+# Check APT hold status
+apt-mark showhold | grep jenkins
+
+# Reload systemd after config changes
+sudo systemctl daemon-reload
+
+# Check UFW firewall status
+sudo ufw status verbose
+
+
+================================================================================
+APPENDIX B — CHANGE TIMELINE / SCHEDULE
+================================================================================
+
+  Pre-Change (T-7 days)
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ - Submit this Change Request for CAB approval                            │
+  │ - Notify stakeholders of planned maintenance window                      │
+  │ - Run plugin compatibility pre-checks                                    │
+  │ - Verify Java version on all controllers and agents                      │
+  │ - Confirm APT repo is accessible and signing key is valid                │
+  │ - Save jenkins_2.528.3_all.deb to backup for rollback                   │
+  │ - Test upgrade procedure in a non-production Jenkins environment         │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Pre-Change (T-24 hours)
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ - Send final maintenance reminder to all team members                    │
+  │ - Confirm rollback procedure with on-call engineer                       │
+  │ - Verify backup destination has sufficient free space                    │
+  │ - Confirm sudo access on Jenkins host                                    │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Maintenance Window
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ Phase 1 — Pre-Upgrade Preparation        (Est. 10–15 minutes)           │
+  │ Phase 2 — Backup                         (Est. 10–30 minutes)           │
+  │ Phase 3 — APT Repo Verify + Upgrade      (Est.  5–10 minutes)           │
+  │ Phase 4 — Service Restart & Verification (Est. 10–15 minutes)           │
+  │ Plugin Updates (if required)             (Est. 10–20 minutes)           │
+  │ Validation Checklist                     (Est. 15–20 minutes)           │
+  │ TOTAL ESTIMATED DOWNTIME                 (Est. 30–60 minutes)           │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+  Post-Change (T+48 hours)
+  ┌──────────────────────────────────────────────────────────────────────────┐
+  │ - Review Jenkins logs for anomalies                                      │
+  │ - Confirm all production pipelines executed successfully                 │
+  │ - Complete and close the change ticket                                   │
+  │ - Archive backup and upgrade artefacts                                   │
+  └──────────────────────────────────────────────────────────────────────────┘
+
+
+================================================================================
+APPENDIX C — CAB APPROVAL SIGN-OFF
+================================================================================
+
+Change Request ID   : CR-JENKINS-2025-001
+Change Type         : Standard / Minor
+Risk Level          : LOW-MEDIUM
+Platform            : Ubuntu 22.04 LTS (Jammy Jellyfish)
+Package Manager     : APT (.deb)
+Rollback Available  : YES (full backup + saved .deb verified pre-upgrade)
+Stakeholder Impact  : Jenkins unavailable during maintenance window only
+
+CAB Review Meeting  : [INSERT DATE & TIME]
+CAB Chair           : [INSERT NAME]
+
+  Approvals Required:
+  ┌──────────────────────────┬──────────────────┬────────────────┬──────────┐
+  │ Name                     │ Role             │ Signature      │ Date     │
+  ├──────────────────────────┼──────────────────┼────────────────┼──────────┤
+  │                          │ Change Owner     │                │          │
+  ├──────────────────────────┼──────────────────┼────────────────┼──────────┤
+  │                          │ DevOps Lead      │                │          │
+  ├──────────────────────────┼──────────────────┼────────────────┼──────────┤
+  │                          │ Security Review  │                │          │
+  ├──────────────────────────┼──────────────────┼────────────────┼──────────┤
+  │                          │ CAB Chair        │                │          │
+  └──────────────────────────┴──────────────────┴────────────────┴──────────┘
+
+  CAB Decision:   [ ] APPROVED    [ ] REJECTED    [ ] DEFERRED
+
+  Conditions / Notes:
+  ___________________________________________________________________________
+  ___________________________________________________________________________
+  ___________________________________________________________________________
+
+
+================================================================================
+DOCUMENT END
+Document: CR-JENKINS-2025-001
+Jenkins Upgrade: 2.528.3 → 2.555.2 | Platform: Ubuntu 22.04 LTS
+Prepared by: Senior DevOps Engineer / Jenkins Administrator
+Last Updated: [INSERT DATE]
+================================================================================
