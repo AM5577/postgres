@@ -833,6 +833,161 @@ PART 11 — ANSIBLE INSTALLATION (Python venv)
 11.1 Install Python 3.9 (available in AppStream)
 ------------------------------------------------------------------------
 
+# Install system dependencies (as root)
+ 
+yum groupinstall "Development Tools" -y
+yum install -y python3 python3-devel git
+dnf install -y python3-pip python3.11
+
+# Verify Python 3.11
+
+python3.11 --version
+
+# Expected: Python 3.11.x
+
+# Create venv as root in svc_ans home using Python 3.11
+
+python3.11 -m venv /home/svc_ans/ansible-env
+
+# Fix ownership so svc_ans owns it
+
+chown -R svc_ans:svc_ans /home/svc_ans/ansible-env
+
+# Switch to svc_ans user
+
+su - svc_ans
+
+# Activate venv
+
+source ~/ansible-env/bin/activate
+
+# Prompt changes to: (ansible-env) [svc_ans@localhost ~]$
+
+# Verify Python inside venv
+
+which python
+python --version
+
+# Expected: Python 3.11.x
+
+# Upgrade pip, setuptools, wheel inside venv
+
+pip install --upgrade pip setuptools wheel
+
+# Verify Ansible
+
+which ansible
+ansible --version
+
+# Expected: ansible [core 2.19.x] OR ansible 2.9.27
+
+# Make venv auto-activate on every login
+
+echo 'source ~/ansible-env/bin/activate' >> ~/.bashrc
+source ~/.bashrc
+
+su - svc_ans
+
+source ~/ansible-venv/bin/activate
+
+pip install --upgrade pip setuptools wheel
+pip install ansible==9.5.1
+pip install pyvmomi==8.0.3.0.1 requests
+pip install paramiko jinja2 PyYAML cryptography packaging resolvelib six==1.17.0
+
+
+ansible-galaxy collection install community.vmware:==3.11.0 --force
+ansible-galaxy collection install community.general --force
+ansible-galaxy collection install ansible.posix --force
+ansible-galaxy collection install vmware.vmware_rest --force
+
+
+# Current - may catch unintended matches
+
+ansible-galaxy collection list | grep -E "vmware|general|posix"
+
+# Better - explicitly confirm exactly what you expect
+
+ansible-galaxy collection list | grep -E "community\.vmware|community\.general|ansible\.posix|vmware\.vmware_rest"
+
+
+chmod 755 /home/svc_ans
+chmod 755 /home/svc_ans/ansible-venv
+chmod -R 755 /home/svc_ans/ansible-venv/bin
+sudo -u jenkins /home/svc_ans/ansible-venv/bin/ansible --version
+
+Run directly as root:
+
+/home/svc_ans/ansible-env/bin/ansible --version
+
+Add to root's PATH permanently:
+
+echo 'export PATH=/home/svc_ans/ansible-env/bin:$PATH' >> /root/.bashrc
+source /root/.bashrc
+ansible --version
+
+Or Symlink (replaces system ansible):
+
+ln -sf /home/svc_ans/ansible-env/bin/ansible /usr/local/bin/ansible
+ansible --version
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+=================================================
+# Install system dependencies (as root)
+sudo yum groupinstall "Development Tools" -y
+sudo yum install -y python3 python3-devel git
+dnf install -y python3-pip python3.11
+
+# Verify Python 3.11
+
+python3.11 --version
+# Expected: Python 3.11.x
+
+# Create venv as root in svc_ans home using Python 3.11
+python3.11 -m venv /home/svc_ans/ansible-env
+
+# Fix ownership so svc_ans owns it
+chown -R svc_ans:svc_ans /home/svc_ans/ansible-env
+
+# Switch to svc_ans user
+su - svc_ans
+
+# Activate venv
+source ~/ansible-env/bin/activate
+# Prompt changes to: (ansible-env) [svc_ans@localhost ~]$
+
+# Verify Python inside venv
+which python
+python --version
+# Expected: Python 3.11.x
+
+# Upgrade pip, setuptools, wheel inside venv
+pip install --upgrade pip setuptools wheel
+
+# Verify Ansible
+which ansible
+ansible --version
+# Expected: ansible [core 2.19.x] OR ansible 2.9.27
+
+# Make venv auto-activate on every login
+echo 'source ~/ansible-env/bin/activate' >> ~/.bashrc
+source ~/.bashrc
+
+
+yum groupinstall "Development Tools" -y
+
 dnf module enable python39 -y
 dnf install -y python39 python39-devel
 python3.9 --version
@@ -861,7 +1016,6 @@ su - svc_ans
 source ~/ansible-venv/bin/activate
 
 pip install --upgrade pip setuptools wheel
-pip install ansible==9.5.1 ansible-core==2.17.10
 pip install ansible==9.5.1
 pip install pyvmomi==8.0.3.0.1 requests
 pip install paramiko jinja2 PyYAML cryptography packaging resolvelib six==1.17.0
