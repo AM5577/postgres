@@ -756,6 +756,8 @@ exit
   console as root and run the steps in Part 14 first, then re-run
   ssh-copy-id above.
 
+for host in $(cat file.txt); do ssh-copy-id -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa.pub svc_ans@$host; done
+
 ------------------------------------------------------------------------
 10.4 Populate known_hosts
 ------------------------------------------------------------------------
