@@ -2000,3 +2000,156 @@ ansible --version
 Also remove the redundant duplicate line — your doc has:
 pip install ansible==9.5.1 ansible-core==2.17.10   # ← conflicts
 pip install ansible==9.5.1                          # ← duplicate, remove one
+
+
+===============================================================
+   RUNDECK JOBS RESTORE - END TO END STEPS
+   Rundeck Version: 3.3.18
+===============================================================
+
+---------------------------------------------------------------
+STEP 1 - EXPORT JOBS FROM OLD SERVER
+---------------------------------------------------------------
+
+Option A - Export via GUI (Old Server):
+  1. Login to old Rundeck
+  2. Go to Project > Jobs
+  3. Click "Job Actions" > "Export All Jobs"
+  4. Select format: YAML or XML
+  5. Save file: jobs_backup.yaml
+
+Option B - Export via CLI (Old Server):
+  tar -czf rundeck_jobs_backup.tar.gz /var/lib/rundeck/projects/
+  scp rundeck_jobs_backup.tar.gz root@rundeckpreprod.local:/tmp/
+
+
+---------------------------------------------------------------
+STEP 2 - EXPORT PLUGINS FROM OLD SERVER
+---------------------------------------------------------------
+
+  scp -r /var/lib/rundeck/libext/ root@rundeckpreprod.local:/tmp/libext_backup/
+
+
+---------------------------------------------------------------
+STEP 3 - FULL BACKUP (Optional but Recommended)
+---------------------------------------------------------------
+
+  # On OLD server
+  tar -czf rundeck_full_backup.tar.gz \
+      /var/lib/rundeck/projects/ \
+      /var/lib/rundeck/libext/ \
+      /etc/rundeck/
+
+  scp rundeck_full_backup.tar.gz root@rundeckpreprod.local:/tmp/
+
+
+---------------------------------------------------------------
+STEP 4 - RESTORE PLUGINS ON NEW SERVER
+---------------------------------------------------------------
+
+  # Stop Rundeck first
+  systemctl stop rundeckd
+
+  # Copy plugins
+  cp -r /tmp/libext_backup/* /var/lib/rundeck/libext/
+
+  # Fix permissions
+  chown -R rundeck:rundeck /var/lib/rundeck/libext/
+
+
+---------------------------------------------------------------
+STEP 5 - CREATE PROJECT ON NEW SERVER (GUI)
+---------------------------------------------------------------
+
+  1. Open https://rundeckpreprod.local/menu/home
+  2. Click "New Project +"
+  3. Enter EXACT same project name as old server
+  4. Click "Create"
+
+
+---------------------------------------------------------------
+STEP 6 - RESTORE JOBS ON NEW SERVER
+---------------------------------------------------------------
+
+Option A - Import via GUI:
+  1. Go to Project > Jobs
+  2. Click "Job Actions" > "Upload Job Definition"
+  3. Select your jobs_backup.yaml or .xml file
+  4. Click "Upload"
+
+Option B - Import via CLI:
+  # Copy jobs file to new server
+  scp jobs_backup.yaml root@rundeckpreprod.local:/tmp/
+
+  # Import jobs
+  rd jobs load \
+      -p <project_name> \
+      -f /tmp/jobs_backup.yaml \
+      --format yaml
+
+
+---------------------------------------------------------------
+STEP 7 - RESTORE FULL BACKUP (If using Step 3)
+---------------------------------------------------------------
+
+  # Stop Rundeck
+  systemctl stop rundeckd
+
+  # Extract backup
+  tar -xzf /tmp/rundeck_full_backup.tar.gz -C /
+
+  # Fix permissions
+  chown -R rundeck:rundeck /var/lib/rundeck/projects/
+  chown -R rundeck:rundeck /var/lib/rundeck/libext/
+  chown -R rundeck:rundeck /etc/rundeck/
+
+
+---------------------------------------------------------------
+STEP 8 - START RUNDECK AND VERIFY
+---------------------------------------------------------------
+
+  # Start Rundeck
+  systemctl start rundeckd
+
+  # Check status
+  systemctl status rundeckd
+
+  # Check logs if issues
+  tail -f /var/log/rundeck/service.log
+
+  # Verify in browser
+  https://rundeckpreprod.local/menu/home
+
+
+---------------------------------------------------------------
+QUICK REFERENCE - KEY DIRECTORIES
+---------------------------------------------------------------
+
+  /var/lib/rundeck/projects/   = Project configs and jobs
+  /var/lib/rundeck/libext/     = Plugins (.jar files)
+  /etc/rundeck/                = Config files
+  /var/log/rundeck/            = Logs
+
+
+---------------------------------------------------------------
+TROUBLESHOOTING
+---------------------------------------------------------------
+
+  Issue: Jobs not showing after import
+  Fix:   Verify project name matches exactly (case-sensitive)
+
+  Issue: Plugins not working
+  Fix:   chown -R rundeck:rundeck /var/lib/rundeck/libext/
+         systemctl restart rundeckd
+
+  Issue: Permission denied errors
+  Fix:   chown -R rundeck:rundeck /var/lib/rundeck/
+         chmod -R 755 /var/lib/rundeck/
+
+  Issue: Service won't start
+  Fix:   tail -f /var/log/rundeck/service.log
+
+===============================================================
+END OF DOCUMENT
+===============================================================
+
