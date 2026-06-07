@@ -113,6 +113,7 @@ PART 1 — ARCHITECTURE & PORT MAP
   pyVmomi           : 8.0.3.0.1
   -----------------------------------------------------------------------
 
+for host in $(cat file.txt); do ssh-copy-id -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa.pub svc_ans@$host; done
 
 ================================================================================
 PART 2 — BASE SYSTEM PREPARATION
