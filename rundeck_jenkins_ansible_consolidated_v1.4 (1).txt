@@ -859,6 +859,7 @@ source ~/ansible-venv/bin/activate
 
 pip install --upgrade pip setuptools wheel
 pip install ansible==9.5.1 ansible-core==2.17.10
+pip install ansible==9.5.1
 pip install pyvmomi==8.0.3.0.1 requests
 pip install paramiko jinja2 PyYAML cryptography packaging resolvelib six==1.17.0
 
@@ -867,6 +868,14 @@ ansible --version
 
 echo 'source ~/ansible-venv/bin/activate' >> ~/.bashrc
 exit
+
+
+pip install --upgrade pip setuptools wheel
+pip install ansible==9.5.1
+pip install pyvmomi==8.0.3.0.1 requests
+pip install paramiko jinja2 PyYAML cryptography packaging resolvelib six==1.17.0
+ansible --version
+# Expected: ansible [core 2.16.x]
 
 ------------------------------------------------------------------------
 11.4 Install Ansible Collections (as svc_ans)
@@ -883,6 +892,31 @@ ansible-galaxy collection install vmware.vmware_rest --force
 ansible-galaxy collection list | grep -E "vmware|general|posix"
 exit
 
+ansible-galaxy collection install community.vmware:==3.11.0 --force
+ansible-galaxy collection install community.general:==9.5.0 --force
+ansible-galaxy collection install ansible.posix:==1.6.2 --force
+ansible-galaxy collection install vmware.vmware_rest:==4.4.0 --force
+
+Or use a requirements.yml instead — much cleaner for documentation:
+
+# collections/requirements.yml
+collections:
+  - name: community.vmware
+    version: "3.11.0"
+  - name: community.general
+    version: "9.5.0"
+  - name: ansible.posix
+    version: "1.6.2"
+  - name: vmware.vmware_rest
+    version: "4.4.0"
+
+ansible-galaxy collection install -r collections/requirements.yml --force
+
+# Current - may catch unintended matches
+ansible-galaxy collection list | grep -E "vmware|general|posix"
+
+# Better - explicitly confirm exactly what you expect
+ansible-galaxy collection list | grep -E "community\.vmware|community\.general|ansible\.posix|vmware\.vmware_rest"
 ------------------------------------------------------------------------
 11.5 Fix Directory Permissions
 ------------------------------------------------------------------------
