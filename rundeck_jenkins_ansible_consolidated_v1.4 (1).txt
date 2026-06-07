@@ -1698,3 +1698,53 @@ sudo su - svc_ans
 echo 'source /home/svc_ans/ansible-venv/bin/activate' >> ~/.bashrc
 source ~/.bashrc
 
+
+
+================================================================================
+SECTION 6 -- PYTHON 3.11 AND ANSIBLE VENV SETUP (OEL 8 SERVER)
+================================================================================
+
+# Install system dependencies (as root)
+sudo yum groupinstall "Development Tools" -y
+sudo yum install -y python3 python3-devel git
+dnf install -y python3-pip python3.11
+
+# Verify Python 3.11
+python3.11 --version
+# Expected: Python 3.11.x
+
+# Create venv as root in svc_ans home using Python 3.11
+python3.11 -m venv /home/svc_ans/ansible-env
+
+# Fix ownership so svc_ans owns it
+chown -R svc_ans:svc_ans /home/svc_ans/ansible-env
+
+# Switch to svc_ans user
+su - svc_ans
+
+# Activate venv
+source ~/ansible-env/bin/activate
+# Prompt changes to: (ansible-env) [svc_ans@localhost ~]$
+
+# Verify Python inside venv
+which python
+python --version
+# Expected: Python 3.11.x
+
+# Upgrade pip, setuptools, wheel inside venv
+pip install --upgrade pip setuptools wheel
+
+# --- OPTION A: Install Ansible 2.9.27 (stable, proven) ---
+pip install ansible==2.9.27
+
+# --- OPTION B: Install Ansible 2.19.x (latest, from GitHub) ---
+pip install git+https://github.com/ansible/ansible.git@stable-2.19
+
+# Verify Ansible
+which ansible
+ansible --version
+# Expected: ansible [core 2.19.x] OR ansible 2.9.27
+
+# Make venv auto-activate on every login
+echo 'source ~/ansible-env/bin/activate' >> ~/.bashrc
+source ~/.bashrc
