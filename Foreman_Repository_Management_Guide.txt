@@ -1,0 +1,255 @@
+================================================================
+       FOREMAN - END TO END REPOSITORY MANAGEMENT GUIDE
+================================================================
+
+TABLE OF CONTENTS
+-----------------
+1. Adding a New Product in Foreman
+2. Adding Repositories to a Product
+3. Syncing Repositories
+4. Removing / Deleting a Product (e.g., Ubuntu 20.04)
+5. Pre-checks Before Deletion
+6. Notes & Tips
+
+================================================================
+1. ADDING A NEW PRODUCT IN FOREMAN
+================================================================
+
+Step 1:  Log in to the Foreman/Katello web UI.
+
+Step 2:  Navigate to:
+         Content --> Products
+
+Step 3:  Click "New Product" (top-right button).
+
+Step 4:  Fill in the details:
+         - Name        : e.g., Ubuntu_24.04
+         - Label       : Auto-filled (or set manually)
+         - GPG Key     : (optional, add if you have one)
+         - Description : (optional)
+
+Step 5:  Click "Save".
+
+The product is now created and ready for repositories to be added.
+
+
+================================================================
+2. ADDING REPOSITORIES TO A PRODUCT
+================================================================
+
+Based on a typical Ubuntu Noble (24.04) sources.list, repeat
+these steps for each repository entry.
+
+Step 1:  Go to Content --> Products --> [Your Product Name]
+
+Step 2:  Click the "Repositories" tab.
+
+Step 3:  Click "New Repository".
+
+Step 4:  Fill in the repository details:
+
+         --- Example 1: noble main ---
+         Name          : noble-main
+         Type          : deb
+         URL           : http://us.archive.ubuntu.com/ubuntu/
+         Releases      : noble
+         Components    : main restricted
+         Architectures : amd64
+
+         --- Example 2: noble-updates ---
+         Name          : noble-updates
+         Type          : deb
+         URL           : http://us.archive.ubuntu.com/ubuntu/
+         Releases      : noble-updates
+         Components    : main restricted
+         Architectures : amd64
+
+         --- Example 3: noble universe ---
+         Name          : noble-universe
+         Type          : deb
+         URL           : http://us.archive.ubuntu.com/ubuntu/
+         Releases      : noble
+         Components    : universe
+         Architectures : amd64
+
+         --- Example 4: noble-updates universe ---
+         Name          : noble-updates-universe
+         Type          : deb
+         URL           : http://us.archive.ubuntu.com/ubuntu/
+         Releases      : noble-updates
+         Components    : universe
+         Architectures : amd64
+
+         --- Example 5: noble multiverse ---
+         Name          : noble-multiverse
+         Type          : deb
+         URL           : http://us.archive.ubuntu.com/ubuntu/
+         Releases      : noble
+         Components    : multiverse
+         Architectures : amd64
+
+         --- Example 6: noble-updates multiverse ---
+         Name          : noble-updates-multiverse
+         Type          : deb
+         URL           : http://us.archive.ubuntu.com/ubuntu/
+         Releases      : noble-updates
+         Components    : multiverse
+         Architectures : amd64
+
+         --- Example 7: noble-backports ---
+         Name          : noble-backports
+         Type          : deb
+         URL           : http://us.archive.ubuntu.com/ubuntu/
+         Releases      : noble-backports
+         Components    : main restricted universe multiverse
+         Architectures : amd64
+
+         --- Example 8: noble-security main ---
+         Name          : noble-security-main
+         Type          : deb
+         URL           : http://security.ubuntu.com/ubuntu
+         Releases      : noble-security
+         Components    : main restricted
+         Architectures : amd64
+
+         --- Example 9: noble-security universe ---
+         Name          : noble-security-universe
+         Type          : deb
+         URL           : http://security.ubuntu.com/ubuntu
+         Releases      : noble-security
+         Components    : universe
+         Architectures : amd64
+
+         --- Example 10: noble-security multiverse ---
+         Name          : noble-security-multiverse
+         Type          : deb
+         URL           : http://security.ubuntu.com/ubuntu
+         Releases      : noble-security
+         Components    : multiverse
+         Architectures : amd64
+
+Step 5:  Click "Save" after each repository entry.
+
+Step 6:  Repeat Steps 3-5 for every repository you want to add.
+
+
+================================================================
+3. SYNCING REPOSITORIES
+================================================================
+
+Step 1:  Go to Content --> Products --> [Your Product Name]
+
+Step 2:  Click the "Repositories" tab.
+
+Step 3:  Select the checkboxes next to the repos you want to sync
+         (or select all).
+
+Step 4:  Click "Sync Now".
+
+Step 5:  Monitor sync progress:
+         Content --> Sync Status
+         - Green "Success" = sync completed OK
+         - Red "Failed"    = check URL or network connectivity
+
+Optional: Schedule recurring syncs via:
+         Content --> Sync Plans --> New Sync Plan
+         Then assign the plan to your product.
+
+
+================================================================
+4. REMOVING / DELETING A PRODUCT (e.g., Ubuntu 20.04)
+================================================================
+
+** IMPORTANT: Complete the Pre-checks in Section 5 FIRST **
+
+--- Step A: Remove All Repositories from the Product ---
+
+Step 1:  Go to Content --> Products --> Ubuntu_20.04
+
+Step 2:  Click the "Repositories" tab.
+
+Step 3:  Check ALL repositories listed:
+         - focal
+         - focal-backports
+         - focal_pbis
+         - focal-security
+         - focal-updates
+
+Step 4:  Click "Remove Repositories".
+
+Step 5:  Confirm the removal when prompted.
+
+Step 6:  Wait for the task to complete
+         (Monitor under: Administer --> About --> Tasks, or
+          Monitor --> Tasks).
+
+--- Step B: Delete the Product ---
+
+Step 1:  Go to Content --> Products.
+
+Step 2:  Check the checkbox next to "Ubuntu_20.04".
+
+Step 3:  Click "Select Action" (top-right dropdown).
+
+Step 4:  Choose "Delete".
+
+Step 5:  Confirm the deletion when prompted.
+
+Step 6:  Verify the product no longer appears in the list.
+
+
+================================================================
+5. PRE-CHECKS BEFORE DELETING A PRODUCT
+================================================================
+
+Before deleting Ubuntu 20.04, verify these areas are clean:
+
+CHECK 1 - Content Views:
+  Go to: Content --> Content Views
+  - Make sure no Content View includes Ubuntu 20.04 repositories.
+  - If found: edit the Content View, remove those repos,
+    publish a new version, and promote it.
+
+CHECK 2 - Activation Keys:
+  Go to: Content --> Activation Keys
+  - Make sure no Activation Key references Ubuntu 20.04
+    repositories or Content Views.
+  - If found: update or delete the activation key first.
+
+CHECK 3 - Hosts:
+  Go to: Hosts --> All Hosts
+  - Check if any registered hosts are subscribed to Ubuntu 20.04.
+  - If found: migrate or unregister those hosts first.
+
+CHECK 4 - Sync Plans:
+  Go to: Content --> Sync Plans
+  - Remove Ubuntu_20.04 from any sync plans it is assigned to.
+
+Skipping these checks may result in:
+  - Deletion errors
+  - Broken Content Views
+  - Hosts losing package access
+
+
+================================================================
+6. NOTES & TIPS
+================================================================
+
+- Always take a Foreman DB backup before mass deletions:
+    foreman-maintain backup offline --skip-pulp-content /backup/
+
+- "Reclaim Space" button in Repositories tab frees disk space
+  after removing repos.
+
+- Tasks can be monitored at:
+    Monitor --> Tasks (filter by "Running" or "Error")
+
+- For large sync jobs, run syncs during off-peak hours.
+
+- To verify repo content after sync:
+    Content --> Products --> [Product] --> Repositories
+    --> Click repo name --> "Packages" tab
+
+================================================================
+                        END OF GUIDE
+================================================================
