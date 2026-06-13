@@ -1,0 +1,399 @@
+================================================================================
+  DEPENDENCY-TRACK — END-TO-END SETUP & SBOM UPLOAD GUIDE
+  (Troubleshooting walkthrough: June 13, 2026)
+================================================================================
+
+ENVIRONMENT
+-----------
+  Host OS       : RHEL / CentOS (localhost)
+  DTrack version: 5.0.1 (running via Docker Compose)
+  Frontend      : http://localhost:8080   (nginx)
+  API server    : http://localhost:8081   (bound to 127.0.0.1 only)
+  Script        : 10.sh
+
+
+================================================================================
+PROBLEM 1 — Connection refused on 192.168.121.176:8081
+================================================================================
+
+SYMPTOM
+  curl: (7) Failed to connect to 192.168.121.176 port 8081: Connection refused
+
+ROOT CAUSE
+  The Docker container binds the API port only to 127.0.0.1:
+    LISTEN 0  4096  127.0.0.1:8081  0.0.0.0:*  (docker-proxy)
+  The external IP 192.168.121.176 is not exposed.
+
+FIX
+  Always use localhost (or 127.0.0.1) for the API URL:
+
+    export DTRACK_URL="http://localhost:8081"
+
+  Do NOT use the external/VM IP for local scripts.
+
+
+================================================================================
+PROBLEM 2 — Phase 2 silently fails ("creation failed — response: ")
+================================================================================
+
+SYMPTOM
+  [2026-06-13 16:06:24] ERROR [project-1] creation failed — response:
+  (response body is empty)
+
+ROOT CAUSE
+  The script was using the wrong DTRACK_URL (external IP → connection refused),
+  so curl returned nothing. jq found no .uuid, so the error fired with an
+  empty $resp variable.
+
+FIX
+  Set the correct URL before running the script (see Problem 1 fix above).
+
+
+================================================================================
+PROBLEM 3 — 401 Unauthorized
+================================================================================
+
+SYMPTOM
+  curl returns HTTP 401 with empty body when calling /api/v1/project.
+
+ROOT CAUSE
+  The API key used (odt_vFoVY0v4_TXsKUO5CL1TsymxB0OipGk2iec4stIuX) was
+  invalid, expired, or belonged to a team that no longer existed.
+
+FIX
+  Generate a fresh API key in the DTrack UI:
+
+    1. Browse to http://localhost:8080
+    2. Log in as admin / admin
+    3. Administration → Access Management → Teams
+    4. Select the Administrators team
+    5. Click [+] next to API Keys
+    6. Copy the new key
+
+  Test it:
+    curl -s -H "X-Api-Key: <new-key>" http://localhost:8081/api/v1/project
+    Expected response: []   (empty array, not 401)
+
+  New key issued: odt_vFoVY0v4_O4OK7pj0TpH2oQUKBArmtku7F0aj4kGs
+
+
+================================================================================
+PROBLEM 4 — 403 Forbidden
+================================================================================
+
+SYMPTOM
+  curl -v ... http://localhost:8081/api/v1/project
+  < HTTP/1.1 403 Forbidden
+
+ROOT CAUSE
+  The new API key was generated under a team that had NO permissions assigned.
+  DTrack uses role-based access; a key with no permissions gets 403 on every
+  protected endpoint.
+
+FIX — Option A: Assign permissions to the team (granular)
+  1. Administration → Access Management → Teams
+  2. Open the team that owns the key
+  3. Add the following permissions:
+       - VIEW_PORTFOLIO       (list/read projects)
+       - PROJECT_CREATION     (create new projects)
+       - BOM_UPLOAD           (upload SBOMs)
+  4. Save
+
+FIX — Option B: Use the Administrators team key (quickest)
+  1. Administration → Access Management → Teams → Administrators
+  2. Click [+] next to API Keys → copy the key
+  3. That team already has all permissions — no extra steps needed.
+
+  export DTRACK_API_KEY="<administrators-team-key>"
+
+
+================================================================================
+WORKING END-TO-END PROCEDURE
+================================================================================
+
+STEP 1 — Verify DTrack is running
+----------------------------------------------------------------------
+  curl -s http://localhost:8081/api/version | python3 -m json.tool
+  # Should print version info including "application":"Dependency-Track"
+
+STEP 2 — Generate a valid API key (Administrators team)
+----------------------------------------------------------------------
+  Browser → http://localhost:8080 → admin / admin
+  Administration → Access Management → Teams → Administrators → [+] API Key
+
+STEP 3 — Verify the key works
+----------------------------------------------------------------------
+  export DTRACK_URL="http://localhost:8081"
+  export DTRACK_API_KEY="<your-key-here>"
+
+  curl -s -H "X-Api-Key: $DTRACK_API_KEY" \
+       http://localhost:8081/api/v1/project
+  # Expected: []   (200 OK, empty array)
+
+STEP 4 — Run the upload script
+----------------------------------------------------------------------
+  ./10.sh
+
+  Expected output (success):
+    Phase 1: all 10 SBOMs generated (10 components each)
+    Phase 2: all 10 projects CREATED, BOMs UPLOADED, processing DONE
+
+STEP 5 — Verify in the UI
+----------------------------------------------------------------------
+  Browser → http://localhost:8080
+  Projects → confirm project-1 through project-10 exist with 10 components each
+
+
+================================================================================
+QUICK DIAGNOSTIC COMMANDS
+================================================================================
+
+# Is DTrack running?
+curl -s http://localhost:8081/api/version
+
+# What port is the API bound to?
+ss -tlnp | grep 8081
+
+# Is the API key valid and does it have permissions?
+curl -v -H "X-Api-Key: $DTRACK_API_KEY" http://localhost:8081/api/v1/project
+  → 200 + JSON  : key is valid and has permissions  ✓
+  → 401          : key is wrong / expired            ✗
+  → 403          : key is valid but team lacks perms ✗
+
+# Full verbose API test (create a project manually)
+curl -v -X PUT \
+  -H "X-Api-Key: $DTRACK_API_KEY" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json" \
+  -d '{"name":"test-project","active":true,"classifier":"APPLICATION"}' \
+  http://localhost:8081/api/v1/project
+
+
+================================================================================
+SCRIPT NOTES (10.sh)
+================================================================================
+
+  • The script default URL is https://192.168.121.176 — always override with
+    DTRACK_URL before running on the local VM.
+
+  • Phase 1  : Generates CycloneDX 1.4 JSON SBOMs in ./sboms/
+  • Phase 2a : Checks if project exists (GET); creates it if not (PUT)
+  • Phase 2b : Base64-encodes the SBOM and uploads via PUT /api/v1/bom
+  • Phase 2c : Polls GET /api/v1/bom/token/{token} until processing=false
+               (20 attempts × 6 s = 2-minute timeout per project)
+
+  • "creation failed — response: " with empty response always means either:
+      (a) wrong URL / connection refused  →  fix DTRACK_URL
+      (b) 401 Unauthorized               →  fix API key
+      (c) 403 Forbidden                  →  fix team permissions
+
+
+================================================================================
+WORKING SCRIPT (10.sh)
+================================================================================
+
+#!/usr/bin/env bash
+# =============================================================================
+# dtrack_upload.sh — Dependency-Track v5.0.1
+# Creates 10 projects, generates 10-component CycloneDX 1.4 SBOMs, uploads all.
+#
+# PRE-REQUISITES:
+#   1. DTrack running via Docker Compose on this host
+#   2. API accessible at http://localhost:8081
+#   3. API key from the Administrators team (has all permissions)
+#
+# USAGE:
+#   export DTRACK_URL="http://localhost:8081"
+#   export DTRACK_API_KEY="<administrators-team-key>"
+#   bash 10.sh
+# =============================================================================
+set -euo pipefail
+
+# ── Config ────────────────────────────────────────────────────────────────────
+DTRACK_URL="${DTRACK_URL:-http://localhost:8081}"
+API="${DTRACK_URL}/api/v1"
+: "${DTRACK_API_KEY:?ERROR: DTRACK_API_KEY not set}"
+SBOM_DIR="${SBOM_DIR:-./sboms}"
+LOG="./dtrack_upload_$(date +%Y%m%d_%H%M%S).log"
+CURL="curl -sk --max-time 60"
+
+PROJECTS=(project-1 project-2 project-3 project-4 project-5
+          project-6 project-7 project-8 project-9 project-10)
+
+# 30-entry pool — 10 unique components per project (no adjacent overlap)
+POOL=(
+  "log4j-core|2.20.0|org.apache.logging.log4j|pkg:maven/org.apache.logging.log4j/log4j-core@2.20.0|Apache-2.0"
+  "spring-boot-autoconfigure|3.1.5|org.springframework.boot|pkg:maven/org.springframework.boot/spring-boot-autoconfigure@3.1.5|Apache-2.0"
+  "jackson-databind|2.15.3|com.fasterxml.jackson.core|pkg:maven/com.fasterxml.jackson.core/jackson-databind@2.15.3|Apache-2.0"
+  "guava|32.1.3-jre|com.google.guava|pkg:maven/com.google.guava/guava@32.1.3-jre|Apache-2.0"
+  "slf4j-api|2.0.9|org.slf4j|pkg:maven/org.slf4j/slf4j-api@2.0.9|MIT"
+  "commons-lang3|3.14.0|org.apache.commons|pkg:maven/org.apache.commons/commons-lang3@3.14.0|Apache-2.0"
+  "netty-all|4.1.100.Final|io.netty|pkg:maven/io.netty/netty-all@4.1.100.Final|Apache-2.0"
+  "hibernate-core|6.3.1.Final|org.hibernate.orm|pkg:maven/org.hibernate.orm/hibernate-core@6.3.1.Final|LGPL-2.1-only"
+  "okhttp|4.12.0|com.squareup.okhttp3|pkg:maven/com.squareup.okhttp3/okhttp@4.12.0|Apache-2.0"
+  "grpc-core|1.59.0|io.grpc|pkg:maven/io.grpc/grpc-core@1.59.0|Apache-2.0"
+  "reactor-core|3.5.11|io.projectreactor|pkg:maven/io.projectreactor/reactor-core@3.5.11|Apache-2.0"
+  "micrometer-core|1.11.5|io.micrometer|pkg:maven/io.micrometer/micrometer-core@1.11.5|Apache-2.0"
+  "caffeine|3.1.8|com.github.ben-manes.caffeine|pkg:maven/com.github.ben-manes.caffeine/caffeine@3.1.8|Apache-2.0"
+  "resilience4j-circuitbreaker|2.1.0|io.github.resilience4j|pkg:maven/io.github.resilience4j/resilience4j-circuitbreaker@2.1.0|Apache-2.0"
+  "flyway-core|9.22.3|org.flywaydb|pkg:maven/org.flywaydb/flyway-core@9.22.3|Apache-2.0"
+  "postgresql|42.6.0|org.postgresql|pkg:maven/org.postgresql/postgresql@42.6.0|BSD-2-Clause"
+  "kafka-clients|3.6.0|org.apache.kafka|pkg:maven/org.apache.kafka/kafka-clients@3.6.0|Apache-2.0"
+  "snakeyaml|2.2|org.yaml|pkg:maven/org.yaml/snakeyaml@2.2|Apache-2.0"
+  "protobuf-java|3.24.4|com.google.protobuf|pkg:maven/com.google.protobuf/protobuf-java@3.24.4|BSD-3-Clause"
+  "opentelemetry-api|1.31.0|io.opentelemetry|pkg:maven/io.opentelemetry/opentelemetry-api@1.31.0|Apache-2.0"
+  "lettuce-core|6.2.7.RELEASE|io.lettuce|pkg:maven/io.lettuce/lettuce-core@6.2.7.RELEASE|Apache-2.0"
+  "mapstruct|1.5.5.Final|org.mapstruct|pkg:maven/org.mapstruct/mapstruct@1.5.5.Final|Apache-2.0"
+  "lombok|1.18.30|org.projectlombok|pkg:maven/org.projectlombok/lombok@1.18.30|MIT"
+  "bcprov-jdk18on|1.76|org.bouncycastle|pkg:maven/org.bouncycastle/bcprov-jdk18on@1.76|MIT"
+  "gson|2.10.1|com.google.code.gson|pkg:maven/com.google.code.gson/gson@2.10.1|Apache-2.0"
+  "rxjava|3.1.8|io.reactivex.rxjava3|pkg:maven/io.reactivex.rxjava3/rxjava@3.1.8|Apache-2.0"
+  "zxing-core|3.5.2|com.google.zxing|pkg:maven/com.google.zxing/core@3.5.2|Apache-2.0"
+  "poi-ooxml|5.2.4|org.apache.poi|pkg:maven/org.apache.poi/poi-ooxml@5.2.4|Apache-2.0"
+  "commons-io|2.15.0|commons-io|pkg:maven/commons-io/commons-io@2.15.0|Apache-2.0"
+  "jedis|5.0.2|redis.clients|pkg:maven/redis.clients/jedis@5.0.2|MIT"
+)
+
+declare -A R_UUID R_CREATE R_UPLOAD R_POLL
+POOL_SIZE=${#POOL[@]}
+OVERALL_RC=0
+mkdir -p "$SBOM_DIR"
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+log() { local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $*"; echo "$msg" | tee -a "$LOG"; }
+ok()  { log "OK    $*"; }
+err() { log "ERROR $*" >&2; }
+
+# ── Phase 1: Generate SBOMs ───────────────────────────────────────────────────
+log "=== Phase 1: Generating SBOMs ==="
+for idx in "${!PROJECTS[@]}"; do
+  p="${PROJECTS[$idx]}"
+  out="$SBOM_DIR/${p}-bom.json"
+  serial="urn:uuid:$(python3 -c 'import uuid; print(uuid.uuid4())')"
+
+  comps="["
+  for i in $(seq 0 9); do
+    pi=$(( (idx * 10 + i) % POOL_SIZE ))
+    IFS='|' read -r cname cver cgroup cpurl clicense <<< "${POOL[$pi]}"
+    [[ $i -gt 0 ]] && comps+=","
+    comps+=$(jq -n \
+      --arg t "$cname"   \
+      --arg v "$cver"    \
+      --arg g "$cgroup"  \
+      --arg p "$cpurl"   \
+      --arg l "$clicense" \
+      '{type:"library",name:$t,version:$v,group:$g,purl:$p,licenses:[{license:{id:$l}}]}')
+  done
+  comps+="]"
+
+  jq -n \
+    --arg  serial "$serial" \
+    --arg  ts     "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" \
+    --arg  name   "$p" \
+    --argjson cs  "$comps" \
+    '{bomFormat:"CycloneDX",specVersion:"1.4",serialNumber:$serial,version:1,
+      metadata:{timestamp:$ts,component:{type:"application",name:$name,version:"1.0.0"}},
+      components:$cs}' > "$out"
+
+  ok "$out  ($(jq '.components|length' "$out") components)"
+done
+
+# ── Phase 2: Create projects + Upload SBOMs ───────────────────────────────────
+log "=== Phase 2: Create projects + Upload SBOMs ==="
+
+api_headers=(-H "X-Api-Key: ${DTRACK_API_KEY}" -H "Accept: application/json")
+
+for p in "${PROJECTS[@]}"; do
+
+  # 2a. Get existing UUID or create project
+  enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1],safe=''))" "$p")
+  resp=$($CURL "${api_headers[@]}" "${API}/project?name=${enc}&excludeInactive=false&limit=100")
+  uuid=$(echo "$resp" | jq -r --arg n "$p" '.[]|select(.name==$n)|.uuid' 2>/dev/null | head -1)
+
+  if [[ -n "$uuid" ]]; then
+    log "[$p] already exists → $uuid"
+    R_CREATE[$p]="EXISTS"
+  else
+    resp=$($CURL -X PUT "${api_headers[@]}" -H "Content-Type: application/json" \
+      -d "{\"name\":\"$p\",\"active\":true,\"classifier\":\"APPLICATION\"}" \
+      "${API}/project")
+    uuid=$(echo "$resp" | jq -r '.uuid // empty')
+    if [[ -z "$uuid" ]]; then
+      err "[$p] creation failed — response: $resp"
+      R_UUID[$p]="ERROR"; R_CREATE[$p]="FAILED"
+      R_UPLOAD[$p]="SKIPPED"; R_POLL[$p]="SKIPPED"
+      OVERALL_RC=1; continue
+    fi
+    ok "[$p] created → $uuid"
+    R_CREATE[$p]="CREATED"
+  fi
+  R_UUID[$p]="$uuid"
+
+  # 2b. Upload SBOM
+  bom_file="$SBOM_DIR/${p}-bom.json"
+  if [[ ! -f "$bom_file" ]]; then
+    err "[$p] $bom_file not found — skipping"
+    R_UPLOAD[$p]="SKIPPED"; R_POLL[$p]="N/A"; continue
+  fi
+
+  bom_b64=$(base64 -w0 "$bom_file" 2>/dev/null || base64 -b0 "$bom_file")
+  payload=$(jq -n --arg proj "$uuid" --arg bom "$bom_b64" '{"project":$proj,"bom":$bom}')
+  resp=$($CURL -X PUT "${api_headers[@]}" -H "Content-Type: application/json" \
+    -d "$payload" "${API}/bom")
+  token=$(echo "$resp" | jq -r '.token // empty')
+
+  if [[ -z "$token" ]]; then
+    err "[$p] upload failed — response: $resp"
+    R_UPLOAD[$p]="FAILED"; R_POLL[$p]="N/A"; OVERALL_RC=1; continue
+  fi
+  ok "[$p] BOM queued → token: $token"
+  R_UPLOAD[$p]="UPLOADED"
+
+  # 2c. Poll for processing completion
+  R_POLL[$p]="TIMEOUT"
+  for attempt in $(seq 1 20); do
+    sleep 6
+    status=$($CURL "${api_headers[@]}" "${API}/bom/token/${token}" | jq -r '.processing // "unknown"')
+    if [[ "$status" == "false" ]]; then
+      ok "[$p] processing complete (${attempt} poll(s))"
+      R_POLL[$p]="DONE (${attempt} polls)"; break
+    fi
+    log "[$p] still processing… (${attempt}/20)"
+  done
+  [[ "${R_POLL[$p]}" == "TIMEOUT" ]] && { err "[$p] processing timed out"; OVERALL_RC=1; }
+done
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+DIV="+--------------------------+--------------------------------------+----------+----------+---------------------+"
+printf "\n"
+echo "╔══════════════════════════════════════════════════════════════════════════════════════════════════╗"
+echo "║                           DEPENDENCY-TRACK UPLOAD SUMMARY                                       ║"
+echo "╚══════════════════════════════════════════════════════════════════════════════════════════════════╝"
+echo "$DIV"
+printf "| %-24s | %-36s | %-8s | %-8s | %-19s |\n" "PROJECT" "UUID" "CREATE" "UPLOAD" "PROCESSING"
+echo "$DIV"
+for p in "${PROJECTS[@]}"; do
+  printf "| %-24s | %-36s | %-8s | %-8s | %-19s |\n" \
+    "$p" "${R_UUID[$p]:-N/A}" "${R_CREATE[$p]:-N/A}" "${R_UPLOAD[$p]:-N/A}" "${R_POLL[$p]:-N/A}"
+done
+echo "$DIV"
+printf "\n"
+log "Log: $LOG"
+exit "$OVERALL_RC"
+
+# ── KEY CHANGE FROM ORIGINAL ──────────────────────────────────────────────────
+# Line 8 of original script had:
+#   DTRACK_URL="${DTRACK_URL:-https://192.168.121.176}"
+#
+# Changed to:
+#   DTRACK_URL="${DTRACK_URL:-http://localhost:8081}"
+#
+# The external IP 192.168.121.176 is not reachable because Docker binds the
+# API port to 127.0.0.1 only. Using localhost fixes the connection.
+# The DTRACK_API_KEY must come from the Administrators team in the DTrack UI.
+# =============================================================================
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
