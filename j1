@@ -1,0 +1,377 @@
+================================================================================
+  DEPENDENCY-TRACK v5 — PRODUCTION DEPLOYMENT GUIDE
+  Docker Compose | PostgreSQL 17 | LDAP / Active Directory
+  Server: dgsdppddtk01 | CONFIDENTIAL
+================================================================================
+
+
+================================================================================
+1. OVERVIEW
+================================================================================
+
+Application      : Dependency-Track v5.0.1
+API Server Image : dependencytrack/apiserver:5.0.1
+Frontend Image   : dependencytrack/frontend:5.0.1
+Database         : PostgreSQL 17 (Alpine)
+Authentication   : LDAP / Active Directory
+Host Port (UI)   : 127.0.0.1:8080 -> container 8080
+Host Port (API)  : 127.0.0.1:8081 -> container 8080
+Memory (API)     : 4 GB limit
+Data Path        : /data/dependency-track/
+
+NOTE: All ALPINE_ prefixed environment variables from v4 have been renamed
+      to DT_ in v5. Using old ALPINE_ names will be silently ignored.
+
+
+================================================================================
+2. DIRECTORY & FILE STRUCTURE
+================================================================================
+
+  mkdir -p /data/dependency-track/postgres
+  useradd -r -s /sbin/nologin dtrack
+  chown -R dtrack:dtrack /data/dependency-track
+  chmod 750 /data/dependency-track
+
+Expected layout after deployment:
+
+  /data/dependency-track/
+  ├── .env                  <- secrets (chmod 600)
+  ├── docker-compose.yml    <- service definitions
+  └── postgres/             <- PostgreSQL data volume
+
+
+================================================================================
+3. ENVIRONMENT FILE (.env)
+================================================================================
+
+NOTE: Replace ALL placeholder values with your real values before deploying.
+NOTE: Never commit .env to version control. Add it to .gitignore immediately.
+
+--------------------------------------------------------------------------------
+
+cat > /data/dependency-track/.env << 'EOF'
+# ─────────────────────────────────────────────────────────────────────────────
+# DATABASE
+# ─────────────────────────────────────────────────────────────────────────────
+POSTGRES_DB=dtrack
+POSTGRES_USER=dtrack
+POSTGRES_PASSWORD=<CHANGE_ME_STRONG_PASSWORD>
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DEPENDENCY-TRACK ADMIN
+# ─────────────────────────────────────────────────────────────────────────────
+ALPINE_ADMIN_PASSWORD=<CHANGE_ME_STRONG_PASSWORD>
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FRONTEND / CORS
+# ─────────────────────────────────────────────────────────────────────────────
+API_BASE_URL=https://192.168.121.176
+FRONTEND_URL=https://192.168.121.176
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LDAP / ACTIVE DIRECTORY
+# ─────────────────────────────────────────────────────────────────────────────
+LDAP_SERVER_URL=ldap://192.168.121.x:389
+LDAP_BASEDN=dc=example,dc=com
+LDAP_BIND_USERNAME=cn=svc-dtrack,dc=example,dc=com
+LDAP_BIND_PASSWORD=<SERVICE_ACCOUNT_PASSWORD>
+LDAP_AUTH_USERNAME_FORMAT=%s@example.com
+LDAP_ATTRIBUTE_NAME=userPrincipalName
+LDAP_ATTRIBUTE_MAIL=mail
+LDAP_GROUPS_FILTER=(objectClass=group)
+LDAP_USER_GROUPS_FILTER=(&(objectClass=group)(member={USER_DN}))
+LDAP_GROUPS_SEARCH_FILTER=(objectClass=group)
+LDAP_USERS_SEARCH_FILTER=(&(objectClass=user)(objectCategory=person))
+EOF
+
+chmod 600 /data/dependency-track/.env
+chown dtrack:dtrack /data/dependency-track/.env
+
+# Verify
+cat /data/dependency-track/.env
+ls -la /data/dependency-track/.env
+
+--------------------------------------------------------------------------------
+
+
+================================================================================
+4. DOCKER COMPOSE FILE (docker-compose.yml)
+================================================================================
+
+NOTE: All environment variables now use DT_ prefix (v5 format).
+      ALPINE_ prefix variables are removed entirely.
+
+--------------------------------------------------------------------------------
+
+cat > /data/dependency-track/docker-compose.yml << 'EOF'
+services:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # API SERVER
+  # ───────────────────────────────────────────────────────────────────────────
+  apiserver:
+    image: dependencytrack/apiserver:5.0.1
+    container_name: dependency-track-apiserver
+    dns: [8.8.8.8, 8.8.4.4]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # --- Database ---
+      DT_DATASOURCE_DEFAULT_URL: 'jdbc:postgresql://postgres:5432/${POSTGRES_DB}'
+      DT_DATASOURCE_DEFAULT_USERNAME: '${POSTGRES_USER}'
+      DT_DATASOURCE_DEFAULT_PASSWORD: '${POSTGRES_PASSWORD}'
+      DT_DEFAULT_ADMIN_PASSWORD: '${ALPINE_ADMIN_PASSWORD}'
+      # --- CORS ---
+      DT_CORS_ENABLED: 'true'
+      DT_CORS_ALLOWED_ORIGINS: '${FRONTEND_URL}'
+      # --- LDAP / Active Directory ---
+      DT_LDAP_ENABLED: 'true'
+      DT_LDAP_SERVER_URL: '${LDAP_SERVER_URL}'
+      DT_LDAP_BASEDN: '${LDAP_BASEDN}'
+      DT_LDAP_SECURITY_AUTH: 'simple'
+      DT_LDAP_BIND_USERNAME: '${LDAP_BIND_USERNAME}'
+      DT_LDAP_BIND_PASSWORD: '${LDAP_BIND_PASSWORD}'
+      DT_LDAP_AUTH_USERNAME_FORMAT: '${LDAP_AUTH_USERNAME_FORMAT}'
+      DT_LDAP_ATTRIBUTE_NAME: '${LDAP_ATTRIBUTE_NAME}'
+      DT_LDAP_ATTRIBUTE_MAIL: '${LDAP_ATTRIBUTE_MAIL}'
+      DT_LDAP_GROUPS_FILTER: '${LDAP_GROUPS_FILTER}'
+      DT_LDAP_USER_GROUPS_FILTER: '${LDAP_USER_GROUPS_FILTER}'
+      DT_LDAP_GROUPS_SEARCH_FILTER: '${LDAP_GROUPS_SEARCH_FILTER}'
+      DT_LDAP_USERS_SEARCH_FILTER: '${LDAP_USERS_SEARCH_FILTER}'
+    deploy:
+      resources:
+        limits:
+          memory: 4g
+    ports: ['127.0.0.1:8081:8080']
+    volumes: [dtrack-data:/data]
+    restart: unless-stopped
+    networks:
+      - dtrack-internal
+    healthcheck:
+      test: ['CMD-SHELL','curl -f -s --max-time 3 -o /dev/null http://127.0.0.1:8080/health || exit 1']
+      interval: 30s
+      start_period: 90s
+      timeout: 5s
+      retries: 5
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # FRONTEND
+  # ───────────────────────────────────────────────────────────────────────────
+  frontend:
+    image: dependencytrack/frontend:5.0.1
+    container_name: dependency-track-frontend
+    depends_on:
+      apiserver:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: '${API_BASE_URL}'
+    ports: ['127.0.0.1:8080:8080']
+    restart: unless-stopped
+    networks:
+      - dtrack-internal
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # POSTGRESQL 17
+  # ───────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
+    container_name: dependency-track-postgres
+    environment:
+      POSTGRES_DB: '${POSTGRES_DB}'
+      POSTGRES_USER: '${POSTGRES_USER}'
+      POSTGRES_PASSWORD: '${POSTGRES_PASSWORD}'
+    healthcheck:
+      test: ['CMD-SHELL','pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - /data/dependency-track/postgres:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - dtrack-internal
+
+volumes:
+  dtrack-data:
+
+networks:
+  dtrack-internal:
+    driver: bridge
+EOF
+
+--------------------------------------------------------------------------------
+
+
+================================================================================
+5. DEPLOY & START
+================================================================================
+
+--- 5.1 Pull Images and Start Stack ---
+
+  cd /data/dependency-track
+
+  # Pull all images first (avoids timeout during startup)
+  docker compose pull
+
+  # Start all services detached
+  docker compose up -d
+
+
+--- 5.2 Watch Startup Logs ---
+
+  # Follow API server startup (takes 60-90 seconds)
+  docker logs -f dependency-track-apiserver
+
+  # Watch for LDAP config being loaded
+  docker logs -f dependency-track-apiserver 2>&1 | grep -i ldap
+
+  # Watch PostgreSQL readiness
+  docker logs -f dependency-track-postgres
+
+
+--- 5.3 Verify All Containers Running ---
+
+  docker compose ps
+
+  # Expected output:
+  # NAME                          STATUS
+  # dependency-track-postgres     Up (healthy)
+  # dependency-track-apiserver    Up (healthy)
+  # dependency-track-frontend     Up
+
+
+================================================================================
+6. HEALTH VERIFICATION
+================================================================================
+
+  # API health endpoint
+  curl -sf http://127.0.0.1:8081/health | python3 -m json.tool
+
+  # Frontend reachable
+  curl -sf -o /dev/null -w '%{http_code}' http://127.0.0.1:8080
+
+  # PostgreSQL connectivity check
+  docker exec dependency-track-apiserver \
+    curl -sf http://127.0.0.1:8080/health
+
+TIP: Expected API health response: {"status":"UP"}
+
+
+================================================================================
+7. KEY CHANGES: v4 -> v5 VARIABLE MAPPING
+================================================================================
+
+  v4 Variable (ALPINE_)                  v5 Variable (DT_)
+  ─────────────────────────────────────  ──────────────────────────────────────
+  ALPINE_DATABASE_MODE                   (removed — external DB is default)
+  ALPINE_DATABASE_URL                    DT_DATASOURCE_DEFAULT_URL
+  ALPINE_DATABASE_DRIVER                 (removed — auto-detected)
+  ALPINE_DATABASE_USERNAME               DT_DATASOURCE_DEFAULT_USERNAME
+  ALPINE_DATABASE_PASSWORD               DT_DATASOURCE_DEFAULT_PASSWORD
+  ALPINE_ADMIN_PASSWORD                  DT_DEFAULT_ADMIN_PASSWORD
+  ALPINE_CORS_ENABLED                    DT_CORS_ENABLED
+  ALPINE_CORS_ALLOW_ORIGIN               DT_CORS_ALLOWED_ORIGINS
+  ALPINE_LDAP_ENABLED                    DT_LDAP_ENABLED
+  ALPINE_LDAP_SERVER_URL                 DT_LDAP_SERVER_URL
+  ALPINE_LDAP_BASEDN                     DT_LDAP_BASEDN
+  ALPINE_LDAP_SECURITY_AUTH              DT_LDAP_SECURITY_AUTH
+  ALPINE_LDAP_BIND_USERNAME              DT_LDAP_BIND_USERNAME
+  ALPINE_LDAP_BIND_PASSWORD              DT_LDAP_BIND_PASSWORD
+  ALPINE_LDAP_AUTH_USERNAME_FORMAT       DT_LDAP_AUTH_USERNAME_FORMAT
+  ALPINE_LDAP_ATTRIBUTE_NAME             DT_LDAP_ATTRIBUTE_NAME
+  ALPINE_LDAP_ATTRIBUTE_MAIL             DT_LDAP_ATTRIBUTE_MAIL
+  ALPINE_LDAP_GROUPS_FILTER              DT_LDAP_GROUPS_FILTER
+  ALPINE_LDAP_USER_GROUPS_FILTER         DT_LDAP_USER_GROUPS_FILTER
+  ALPINE_LDAP_GROUPS_SEARCH_FILTER       DT_LDAP_GROUPS_SEARCH_FILTER
+  ALPINE_LDAP_USERS_SEARCH_FILTER        DT_LDAP_USERS_SEARCH_FILTER
+
+
+================================================================================
+8. TROUBLESHOOTING
+================================================================================
+
+--- LDAP Connection Issues ---
+
+  # Test LDAP reachability from API container
+  docker exec dependency-track-apiserver \
+    curl -v ldap://192.168.121.x:389
+
+  # Check LDAP logs in API server
+  docker logs dependency-track-apiserver 2>&1 | grep -iE 'ldap|auth|error'
+
+
+--- Database Issues ---
+
+  # Connect to PostgreSQL directly
+  docker exec -it dependency-track-postgres \
+    psql -U dtrack -d dtrack
+
+  # Check DB logs
+  docker logs dependency-track-postgres
+
+
+--- Container Won't Start ---
+
+  # Full restart with log capture
+  cd /data/dependency-track
+  docker compose down
+  docker compose up -d
+  sleep 10
+  docker compose ps
+  docker logs dependency-track-apiserver --tail 100
+
+
+--- Common Issues ---
+
+  * LDAP bind fails
+    -> Verify LDAP_BIND_USERNAME is full DN
+       e.g. cn=svc-dtrack,dc=example,dc=com
+
+  * API stays unhealthy
+    -> Increase start_period to 120s if server is slow to boot
+
+  * CORS errors in browser
+    -> Ensure FRONTEND_URL matches exact browser origin
+       including protocol (https://)
+
+  * Old v4 ALPINE_ vars silently ignored
+    -> Double-check ALL vars use DT_ prefix in docker-compose.yml
+
+  * Port conflict on host
+    -> Ensure nothing else binds 127.0.0.1:8080 or 8081
+       Run: ss -tlnp | grep -E '8080|8081'
+
+
+================================================================================
+9. MAINTENANCE COMMANDS
+================================================================================
+
+  # Stop all services
+  cd /data/dependency-track && docker compose down
+
+  # Update to new version (change image tag in compose file first)
+  docker compose pull && docker compose up -d
+
+  # Backup PostgreSQL
+  docker exec dependency-track-postgres \
+    pg_dump -U dtrack dtrack | gzip > /backup/dtrack_$(date +%Y%m%d).sql.gz
+
+  # View resource usage
+  docker stats dependency-track-apiserver \
+    dependency-track-frontend dependency-track-postgres
+
+  # Prune old images
+  docker image prune -f
+
+  # Restart single service
+  docker compose restart apiserver
+
+  # View live logs for all services
+  docker compose logs -f
+
+
+================================================================================
+END OF DOCUMENT
+Dependency-Track v5 Production Deployment Guide | CONFIDENTIAL
+================================================================================
