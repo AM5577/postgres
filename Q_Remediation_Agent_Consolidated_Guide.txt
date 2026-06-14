@@ -1,0 +1,485 @@
+================================================================
+QUALYS VULNERABILITY REMEDIATION AGENT
+CONSOLIDATED BUILD & DEPLOYMENT GUIDE
+Microsoft Copilot Studio — Pay-As-You-Go (lowest-cost model)
+================================================================
+
+----------------------------------------------------------------
+0. LICENSING REALITY CHECK (READ FIRST)
+----------------------------------------------------------------
+- There is NO "free / zero license" version of Copilot Studio that
+  supports custom agents with file upload + flow tools.
+- The closest thing to free is the PAY-AS-YOU-GO meter:
+    * No upfront license fee, no monthly minimum.
+    * Billed at $0.01 per Copilot Credit, consumed only when the
+      agent actually runs (a session/message/action).
+    * Building and maintaining agents in Copilot Studio is free —
+      every maker gets a free Copilot Studio seat for authoring.
+      You only pay when the agent is USED.
+    * Realistic cost for an internal tool used a few times a week
+      by a security team: a few dollars per month, often under $5.
+- Power Automate: flows called from Copilot Studio as "tools" run
+  under the agent's PAYG consumption — no separate per-flow license
+  needed for the connectors used in this design (SharePoint, Excel
+  Online, HTTP — all standard connectors).
+- PDF parsing is the one area needing care: AI Builder premium
+  actions are NOT included in PAYG. This guide avoids them by using
+  a free Azure Function (consumption plan — first 1M executions/month
+  free) for PDF/DOCX text extraction.
+
+Net result: $0 upfront, pay-per-use only, realistically low single
+digits of dollars per month for normal internal usage.
+
+----------------------------------------------------------------
+1. WHAT GETS BUILT
+----------------------------------------------------------------
+A Teams-accessible Copilot Studio agent that:
+1. Lets a user upload a Qualys report (CSV, XLSX, PDF, or DOCX).
+2. Extracts every vulnerability finding (CVE, QID, Title, Severity,
+   CVSS, Host, IP, OS, Software Version).
+3. Deduplicates/groups findings by QID+CVE across hosts.
+4. Sorts Critical > High > Medium > Low.
+5. Generates production-grade remediation guidance per finding.
+6. Produces Executive Summary, Priority List, Quick Wins, CAB
+   Summary, and Patch Schedule.
+7. Exports the full report as a downloadable .txt file in Teams.
+8. (Optional) Creates ServiceNow change requests for Critical/High
+   findings on user confirmation.
+
+----------------------------------------------------------------
+2. AGENT INSTRUCTIONS (paste into Copilot Studio "Instructions")
+----------------------------------------------------------------
+You are a Qualys Vulnerability Remediation Agent.
+
+Your primary purpose is to analyze uploaded Qualys vulnerability
+reports and provide remediation guidance for every vulnerability
+identified.
+
+When a user uploads a Qualys report (PDF, XLSX, CSV, or DOCX),
+perform the following:
+
+1. Read and analyze the uploaded file (via the parsing tool).
+2. Extract all vulnerability records.
+3. Identify for each record:
+   - CVE
+   - QID
+   - Vulnerability Title
+   - Severity
+   - CVSS Score
+   - Affected Host
+   - IP Address
+   - Operating System
+   - Installed Software Version
+4. Group duplicate vulnerabilities together (same QID/CVE across hosts).
+5. Prioritize Critical and High vulnerabilities first.
+6. For each unique vulnerability, produce remediation guidance in the
+   exact format below.
+
+OUTPUT FORMAT (per vulnerability)
+----------------------------------
+Vulnerability
+Title:
+QID:
+CVE:
+Severity:
+CVSS:
+Affected Hosts: (list all impacted hosts/IPs together if duplicate)
+
+Business Risk:
+- Impact explanation
+- Exploitation risk
+- Compliance impact (PCI-DSS, HIPAA, ISO 27001, etc. as relevant)
+
+Root Cause:
+- Why the vulnerability exists
+- Vulnerable software version
+- Vulnerable configuration
+
+Remediation:
+1. Verify installed version
+2. Review vendor advisory
+3. Download approved patch
+4. Test in non-production
+5. Schedule maintenance window
+6. Deploy fix
+7. Restart services if required
+8. Validate application functionality
+9. Perform Qualys rescan
+10. Confirm closure
+
+Platform-Specific Commands:
+Windows:
+- PowerShell commands
+- Applicable KB updates
+
+Linux:
+- yum / dnf / apt / rpm commands
+- Validation commands
+
+Container:
+- Image update guidance
+- Kubernetes rollout commands (if applicable)
+
+Cloud:
+- AWS / Azure / GCP remediation steps (if applicable)
+
+Validation:
+- Commands to verify remediation
+- Version verification steps
+- Service health checks
+
+Rollback Plan:
+- Backup requirements
+- Snapshot requirements
+- Recovery procedure
+
+AFTER ALL FINDINGS ARE PROCESSED, GENERATE:
+1. Executive Summary (Total Critical / High / Medium / Low)
+2. Remediation Priority List
+3. Quick Wins (fixable immediately, low risk/effort)
+4. CAB Change Request Summary
+5. Recommended Patching Schedule
+
+ADDITIONAL RULES
+-----------------
+- If the report contains CVEs, use CVE data to drive remediation.
+- If the report contains Qualys QIDs, use QID details to determine
+  remediation.
+- If multiple hosts share a vulnerability, provide ONE remediation
+  plan and list all affected hosts under it.
+- Always provide production-safe recommendations.
+- Always recommend: testing before production, backup/snapshot
+  creation, CAB approval where required, post-remediation Qualys
+  rescan.
+- Never provide destructive actions without an explicit warning.
+- Final output must be concise, actionable, and suitable for
+  Infrastructure, Security, and Operations teams.
+- Offer to export the full report as a downloadable .txt file and/or
+  create a ServiceNow ticket per Critical/High vulnerability group
+  (only with user confirmation).
+
+----------------------------------------------------------------
+3. BUILD STEPS — STEP BY STEP
+----------------------------------------------------------------
+
+STEP 1 — Create the Agent
+1. Go to copilotstudio.microsoft.com (free maker login — no license
+   needed to author).
+2. Agents -> "+ New agent" -> "Skip to configure".
+3. Name: "Qualys Vulnerability Remediation Agent"
+4. Description: "Analyzes uploaded Qualys vulnerability reports and
+   returns remediation guidance."
+5. Paste the Agent Instructions from Section 2 into the
+   Instructions box.
+6. Settings -> Generative AI -> ensure "Generative AI orchestration"
+   is ON (default model included under PAYG).
+7. Settings -> Billing -> confirm "Pay-as-you-go" is the active
+   metering option for this environment (set once at the environment
+   level in Power Platform admin center if not already configured).
+8. Save.
+
+STEP 2 — Build the Upload Topic
+1. Topics -> "+ Add a topic" -> "From blank".
+2. Name: "Upload Vulnerability Report".
+3. Trigger phrases: "upload report", "scan report", "Qualys report",
+   "analyze vulnerabilities".
+4. Add a "Question" node:
+   - Identify: File
+   - Prompt: "Please upload your Qualys report (PDF, XLSX, CSV, or DOCX)."
+   - Properties -> Entity recognition -> enable "Include file metadata"
+   - Save response to variable: Topic.UploadedFile
+
+STEP 3 — Build the Parsing Flow (Power Automate)
+Create a Cloud Flow named "Qualys-ParseReport" with trigger
+"Run a flow from Copilot" (auto-created when adding as a tool). Must
+be in the same Dataverse environment/solution as the agent.
+
+Inputs: ContentBytes (File), Name (Text)
+  Pass via Power Fx: { contentBytes: Topic.UploadedFile.Content,
+                        name: Topic.UploadedFile.Name }
+
+Steps:
+1. "Create file" (SharePoint) -> save the upload to a
+   "QualysReports/Incoming" library for audit trail.
+2. Switch on file extension:
+
+   CSV:
+     - "Get file content" -> pass to the free Azure Function (see
+       Step 4) for parsing into normalized JSON. CSV parsing is
+       trivial and cheap (Consumption plan, effectively free at
+       this volume).
+
+   XLSX:
+     - "List rows present in a table" (Excel Online Business
+       connector — standard, included). Requires the Qualys export
+       sheet to have a defined Table; if not, add an "Office Script
+       — Run script" step to convert the used range to a Table named
+       "Findings" first.
+     - Map columns to: qid, cve, title, severity, cvss, host, ip,
+       os, version (Qualys column names vary by export template —
+       adjust mapping in the "Select" action accordingly).
+
+   PDF / DOCX:
+     - HTTP action -> call the free Azure Function (Step 4), which
+       extracts text and regex-splits Qualys's repeating
+       "QID: / CVE: / Severity: / CVSS Base:" finding blocks into
+       the same normalized JSON schema.
+
+3. "Compose" — normalize all branches to:
+   { qid, cve, title, severity, cvss, host, ip, os, version }
+
+4. Call Azure Function "GroupAndSort" (Step 4) with the normalized
+   array -> returns deduplicated/grouped findings (one entry per
+   QID+CVE with an affected_hosts array) sorted Critical > High >
+   Medium > Low, then CVSS descending. Also returns
+   TotalCritical/High/Medium/Low counts.
+
+5. "Respond to Copilot" (Return value(s) to Microsoft Copilot Studio):
+   - GroupedFindingsJson (Text)
+   - TotalCritical, TotalHigh, TotalMedium, TotalLow (Number)
+
+STEP 4 — Free Azure Function for Parsing/Grouping
+- Create an Azure Function App on the Consumption plan (free tier:
+  1M executions + 400,000 GB-s/month at no cost — sufficient for
+  this workload).
+- Two HTTP-triggered functions:
+  a) "ExtractText" — accepts file bytes + type (pdf/docx/csv),
+     uses pdfplumber (PDF) / python-docx (DOCX) / csv module (CSV)
+     to return normalized finding records as JSON.
+  b) "GroupAndSort" — accepts the normalized array, groups by
+     QID+CVE (merging affected_hosts), computes severity counts,
+     and returns sorted grouped JSON.
+- Both functions are stateless and small; no database required.
+- Deploy via VS Code Azure Functions extension or `func azure
+  functionapp publish` (free Azure account covers this).
+
+STEP 5 — Add the Flow as a Tool
+1. In the agent: Tools -> "Add a tool" -> "New tool" -> "Flow" ->
+   select "Qualys-ParseReport".
+2. Confirm Inputs map to Topic.UploadedFile (ContentBytes, Name).
+3. Confirm Outputs: GroupedFindingsJson, TotalCritical, TotalHigh,
+   TotalMedium, TotalLow.
+4. Save.
+
+STEP 6 — Generate Remediation (chunked, to control credit usage)
+1. After the parsing tool returns, add a small second flow
+   "Qualys-ChunkJson" (pure JSON manipulation, no premium
+   connectors) that splits GroupedFindingsJson into batches of 5-10
+   findings. Add as a second tool.
+2. In the topic, loop over chunks. For each chunk, use a
+   "Create generative answer" / generative orchestration step with
+   prompt:
+   "Using this grouped Qualys findings JSON, produce remediation
+   sections in the format defined in your instructions, one per
+   finding group: {chunk_json}"
+3. Append each response into Topic.FullReportText.
+4. After the loop, one final generative step:
+   "Using totals Critical={TotalCritical}, High={TotalHigh},
+   Medium={TotalMedium}, Low={TotalLow} and the remediation sections
+   already generated: {Topic.FullReportText}
+   Generate: 1) Executive Summary 2) Remediation Priority List
+   3) Quick Wins 4) CAB Change Request Summary
+   5) Recommended Patching Schedule. Prepend to the report."
+
+   COST NOTE: each generative step consumes Copilot Credits. Chunk
+   size of 5-10 findings keeps per-report cost low (typically a
+   handful of credits = a few cents per full report run).
+
+STEP 7 — Export to .txt and Return to Teams
+1. Third flow "Qualys-ExportReport":
+   - Input: ReportText (Text)
+   - "Create file" (SharePoint) in "QualysReports/Outgoing", name =
+     "Qualys_Remediation_Report_" + utcNow('yyyyMMdd_HHmm') + ".txt"
+   - "Create share link" (Organization scope) -> return FileUrl
+2. Add as a third tool.
+3. In the topic, after report generation, call this tool then send:
+   "Analysis complete.
+    Critical: {TotalCritical} | High: {TotalHigh} |
+    Medium: {TotalMedium} | Low: {TotalLow}
+    Download full remediation report: {FileUrl}"
+
+STEP 8 — Optional: ServiceNow Change Requests
+1. Fourth flow "Qualys-CreateChangeRequests":
+   - Input: GroupedFindingsJson (filtered to Critical/High)
+   - "Apply to each" -> HTTP POST to
+     https://<instance>.service-now.com/api/now/table/change_request
+     (Basic/OAuth2 connection, never hardcoded credentials)
+   - Body: short_description, description (remediation steps),
+     priority, cmdb_ci (host), category: "Security Patch"
+2. Add as a fourth tool.
+3. In the topic, add a Confirm node: "Create CAB change requests for
+   all Critical/High findings? (Yes/No)" — only call on explicit
+   "Yes". Never automatic.
+
+----------------------------------------------------------------
+4. END-TO-END PRODUCTION DEPLOYMENT STEPS
+----------------------------------------------------------------
+This section sequences everything above into a single go-live runbook,
+from empty tenant to production rollout.
+
+PHASE A — ENVIRONMENT SETUP (one-time)
+1. Power Platform admin center -> Environments -> create (or select)
+   a dedicated environment, e.g. "Security-Production".
+2. In that environment, confirm Dataverse is provisioned (required
+   for Copilot Studio agents + flows in a solution).
+3. Billing -> confirm Pay-As-You-Go is linked to an Azure
+   subscription for this environment (Power Platform admin center ->
+   Billing policies -> create policy -> attach environment).
+4. Create a Solution named "QualysRemediationAgent" — all agents,
+   flows, and connections built below go into this solution so they
+   move together across environments (Dev -> Test -> Prod).
+5. SharePoint: create site "SecurityOps" with document library
+   "QualysReports" containing folders /Incoming, /Outgoing,
+   /TestSamples.
+6. Azure: create a Resource Group "rg-qualys-remediation" and, inside
+   it, the Function App (Consumption plan) per Step 4 above.
+
+PHASE B — BUILD IN DEV
+7. In the "QualysRemediationAgent" solution, build the agent
+   (Section 3, Step 1), the topic (Step 2), and all four flows
+   (Steps 3, 6, 7, 8) exactly as specified, inside the
+   "Security-Production" environment but treated as Dev during build
+   (or use a separate Dev environment and migrate the solution later
+   via export/import if you require strict Dev/Test/Prod separation).
+8. Deploy the Azure Function App (Step 4) and note its endpoint
+   URL(s) + function keys; store the key in a Power Automate
+   connection (not hardcoded in flow actions).
+9. Wire all four flows as Tools on the agent (Step 5 and
+   equivalents for flows 2-4).
+
+PHASE C — INTEGRATION TEST (END TO END)
+10. Run the full Testing checklist (Section 5) against sample CSV,
+    XLSX, and PDF/DOCX Qualys exports placed in /TestSamples.
+11. Validate a full round trip: upload in Test pane -> parsing ->
+    grouping/sorting -> chunked remediation generation -> Executive
+    Summary/Priority List/Quick Wins/CAB Summary/Patch Schedule ->
+    .txt exported to /Outgoing -> share link returned in chat.
+12. If using the optional ServiceNow flow, test against a
+    ServiceNow Dev instance first; confirm Change Requests are
+    created with correct priority/CI mapping and that the Confirm
+    node blocks creation until the user explicitly says "Yes".
+
+PHASE D — SECURITY HARDENING
+13. Apply Section 6 (Security & Governance) in full: SharePoint
+    permissions, DLP policy (Business data group for SharePoint,
+    HTTP, Excel Online, Azure Function connector), Entra ID
+    authentication on the agent, generative AI content moderation,
+    and restricted publish/edit roles.
+14. Rotate and store the Azure Function key and any ServiceNow
+    credentials in Power Automate connection references (not in
+    flow definitions) so they can be swapped without republishing.
+
+PHASE E — GO-LIVE / PUBLISH
+15. Publish the agent in Copilot Studio (Section 7, Step 1).
+16. Add the Microsoft Teams + Microsoft 365 channel (Step 2).
+17. For org-wide rollout, submit via Teams admin center -> Manage
+    apps for approval; for a pilot, share the bot link directly with
+    the Security/Infrastructure/Ops channel members first.
+18. Run a pilot for 1-2 weeks with a small group (3-5 users)
+    uploading real (non-production-impacting) Qualys exports; collect
+    feedback on extraction accuracy and remediation quality.
+
+PHASE F — CUTOVER TO FULL PRODUCTION
+19. Address any column-mapping or parsing issues found during the
+    pilot (most commonly Qualys XLSX/PDF template differences —
+    adjust the "Select" mapping in Qualys-ParseReport and/or the
+    regex in the Azure Function's ExtractText).
+20. Submit the Teams app for org-wide availability (if not already
+    done in Step 17) and announce to the broader Security/Infra/Ops
+    teams with a short usage guide (how to upload a report, how to
+    download the .txt, how CAB ticket creation works).
+21. Set up budget alerts (Section 8 — Monitoring & Cost Control)
+    before wide rollout so PAYG Copilot Credit usage is monitored
+    from day one.
+
+PHASE G — ROLLBACK PLAN (FOR THE AGENT ITSELF)
+22. Before publishing any update to instructions, topics, or flows,
+    export the current solution as a managed solution (backup).
+23. If a published change causes issues in production: Copilot
+    Studio -> agent -> Versions/Publish history -> revert to the
+    previous published version, or re-import the last-known-good
+    solution export into the environment.
+24. For flow-specific issues, disable the affected flow (turn off)
+    so the agent tool call fails gracefully with an error message
+    rather than producing incorrect output, while you fix and
+    re-test in isolation.
+
+----------------------------------------------------------------
+5. TESTING
+----------------------------------------------------------------
+1. Use the Test pane in Copilot Studio (free, no credit cost during
+   authoring/testing in most configurations — verify in your
+   environment's billing settings).
+2. Start with a small CSV (5-10 rows), then XLSX, then PDF/DOCX.
+3. Verify:
+   - All 9 fields extracted correctly per finding
+   - Duplicates grouped with all hosts listed
+   - Output matches the exact template
+   - .txt file created and link accessible
+   - Each flow completes within the 100-second Copilot Studio
+     timeout (move slow steps after "Respond to Copilot"/"Return
+     value(s)" if needed)
+4. Test edge cases: empty report, no Critical/High findings, large
+   report (200+ rows) to confirm chunking doesn't drop findings.
+
+----------------------------------------------------------------
+6. SECURITY & GOVERNANCE
+----------------------------------------------------------------
+1. Restrict the SharePoint "QualysReports" library to the
+   Security/Infrastructure team.
+2. Configure DLP policy in Power Platform admin center: keep
+   SharePoint, HTTP, Excel Online, and the Azure Function connector
+   in the "Business" data group.
+3. Settings -> Security -> enable "Authenticate with Microsoft Entra
+   ID (single sign-on)" so only tenant users can use the agent.
+4. Settings -> Generative AI -> set content moderation to Medium or
+   higher.
+5. Limit publish/edit rights via Power Platform admin -> Environment
+   -> Security roles.
+
+----------------------------------------------------------------
+7. PUBLISH TO TEAMS
+----------------------------------------------------------------
+1. Click "Publish" in Copilot Studio.
+2. Channels -> Microsoft Teams + Microsoft 365 -> "Add channel".
+3. "Open bot" for personal use, or "Make available for org" to push
+   to the Teams app catalog (requires Teams admin approval via
+   Teams admin center -> Manage apps).
+4. Share with the Security/Infra/Ops Teams channels.
+
+----------------------------------------------------------------
+8. MONITORING & COST CONTROL
+----------------------------------------------------------------
+1. Copilot Studio -> Analytics: session volume, success rate.
+2. Power Platform admin center -> Billing -> Copilot Credits: track
+   PAYG consumption; set a budget alert in Azure Cost Management on
+   the connected subscription.
+3. Power Automate -> Run history: monitor flow failures (PDF parsing
+   is the most common failure point if Qualys changes its export
+   layout — re-check the Azure Function's regex patterns quarterly).
+4. Keep golden sample CSV/XLSX/PDF Qualys exports in
+   "QualysReports/TestSamples" for regression testing.
+
+----------------------------------------------------------------
+9. COMPONENT SUMMARY
+----------------------------------------------------------------
+- 1 Copilot Studio agent (PAYG metering, free authoring)
+- 1 Topic: "Upload Vulnerability Report"
+- Flow 1: Qualys-ParseReport (intake + routing)
+- Flow 2: Qualys-ChunkJson (batching for generative steps)
+- Flow 3: Qualys-ExportReport (.txt export + share link)
+- Flow 4 (optional): Qualys-CreateChangeRequests (ServiceNow)
+- Azure Function App (Consumption/free tier): ExtractText,
+  GroupAndSort
+- 1 SharePoint library: QualysReports (/Incoming, /Outgoing,
+  /TestSamples)
+- Teams channel publish with Entra ID authentication
+
+ESTIMATED RUNNING COST: $0 upfront. Typical internal usage (a few
+reports per week) = low single-digit dollars/month in Copilot
+Credits, plus Azure Function usage that stays within the
+always-free Consumption tier.
+
+================================================================
+END OF DOCUMENT
+================================================================
