@@ -1,0 +1,88 @@
+#!/bin/bash
+# Ubuntu 22.04 --> 24.04 LTS Upgrade Script
+
+SERVERS=("server1.example.com" "server2.example.com" "server3.example.com")
+SSH_USER="ubuntu"
+SSH_KEY="$HOME/.ssh/id_rsa"
+REMOTE_LOG="/var/log/do-release-upgrade-nohup.log"
+PULP="http://123.123.local/pulp/content/123/Library/custom/Ubuntu_24_04_Noble"
+
+for SERVER in "${SERVERS[@]}"; do
+  echo "==> [$SERVER] Starting upgrade"
+  ssh -i "$SSH_KEY" -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+      "${SSH_USER}@${SERVER}" "sudo bash -s" <<ENDSSH
+
+    echo "---- Step 1: Pre-upgrade assessment ----"
+    lsb_release -a; df -h
+
+    echo "---- Step 2: Backup Foreman sources ----"
+    cp /etc/apt/sources.list /etc/apt/sources.list.foreman
+
+    echo "---- Step 3: Write Jammy sources & disable Pulp repos ----"
+    cat > /etc/apt/sources.list << 'EOF'
+deb http://us.archive.ubuntu.com/ubuntu/ jammy main restricted
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-updates main restricted
+deb http://us.archive.ubuntu.com/ubuntu/ jammy universe
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-updates universe
+deb http://us.archive.ubuntu.com/ubuntu/ jammy multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-updates multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
+deb http://security.ubuntu.com/ubuntu jammy-security main restricted
+deb http://security.ubuntu.com/ubuntu jammy-security universe
+deb http://security.ubuntu.com/ubuntu jammy-security multiverse
+EOF
+    for f in /etc/apt/sources.list.d/*.list; do [[ -f "\$f" ]] && mv "\$f" "\${f}.disabled"; done
+
+    echo "---- Step 4: Patch to latest 22.04 packages ----"
+    apt-get clean -q && apt-get update -q
+    DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -q
+    DEBIAN_FRONTEND=noninteractive apt-get autoremove -y -q
+
+    echo "---- Step 5: Check held/broken packages ----"
+    dpkg -C; apt-get check
+
+    echo "---- Step 6: Install update-manager-core & set Prompt=lts ----"
+    apt-get install -y update-manager-core
+    sed -i 's/^Prompt=.*/Prompt=lts/' /etc/update-manager/release-upgrades
+
+    echo "---- Step 7: Remove immutable flag on pam.d/common-password ----"
+    chattr -i /etc/pam.d/common-password 2>/dev/null || true
+
+    echo "---- Step 8: Stop Qualys agent ----"
+    systemctl stop qualys-cloud-agent 2>/dev/null || true
+
+    echo "---- Step 9: Remove from Ansible inventory ----"
+    sed -i "/$SERVER/d" /etc/ansible/hosts
+
+    echo "---- Step 10: Launch do-release-upgrade ----"
+    nohup do-release-upgrade -f DistUpgradeViewNonInteractive > $REMOTE_LOG 2>&1 &
+    echo "Upgrade launched on \$(hostname) with PID \$!"
+
+    echo "---- Step 11: Post-upgrade validation ----"
+    sleep 3600
+    lsb_release -a; uname -r; dpkg -C; systemctl --failed; df -hT
+
+    echo "---- Step 12: Restore Foreman Noble sources ----"
+    mv /etc/apt/sources.list /etc/apt/sources.list.noble_upstream 2>/dev/null || true
+    cat > /etc/apt/sources.list.d/foreman.list << 'EOF'
+deb [trusted=yes] $PULP/noble-main/ noble main restricted
+deb [trusted=yes] $PULP/noble-updates/ noble-updates main restricted
+deb [trusted=yes] $PULP/noble-universe/ noble universe
+deb [trusted=yes] $PULP/noble-updates-uni/ noble-updates universe
+deb [trusted=yes] $PULP/noble-multiverse/ noble multiverse
+deb [trusted=yes] $PULP/noble-updates-mul/ noble-updates multiverse
+deb [trusted=yes] $PULP/noble-backports/ noble-backports main restricted universe multiverse
+deb [trusted=yes] $PULP/noble-security-ma/ noble-security main restricted
+deb [trusted=yes] $PULP/noble-security-un/ noble-security universe
+deb [trusted=yes] $PULP/noble-security-mu/ noble-security multiverse
+EOF
+    apt-get update -q
+    echo "==> [$SERVER] Upgrade complete. OS: \$(lsb_release -d | cut -f2)"
+
+ENDSSH
+  echo "==> [$SERVER] Done. Monitor: ssh ${SSH_USER}@${SERVER} 'tail -f $REMOTE_LOG'"
+done
+
+echo "=============================="
+echo " All servers processed"
+echo "=============================="
