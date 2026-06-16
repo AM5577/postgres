@@ -1,0 +1,398 @@
+================================================================================
+       UBUNTU 22.04 --> 24.04 LTS UPGRADE SCRIPTS - COMPLETE GUIDE
+================================================================================
+Written in simple language so anyone can understand what each step does.
+
+There are TWO scripts:
+  - SCRIPT 1: Runs the actual OS upgrade (takes 30-60 mins per server)
+  - SCRIPT 2: Runs AFTER the upgrade is done (cleanup + reboot)
+
+================================================================================
+BEFORE YOU START - THINGS TO KNOW
+================================================================================
+
+- These scripts connect to servers over SSH and run commands remotely
+- You need sudo/root access on the target servers
+- The upgrade takes a long time (30-60+ minutes per server)
+- The server will reboot at the end of Script 2
+- Test on ONE server first before running on many servers
+- Make sure you have console/out-of-band access in case SSH breaks
+
+================================================================================
+VARIABLES YOU MUST CHANGE BEFORE RUNNING
+================================================================================
+
+  SERVERS=("123")
+    --> Replace "123" with your actual server hostname or IP address
+    --> For multiple servers: SERVERS=("server1" "server2" "server3")
+
+  SSH_USER="svc_123"
+    --> The SSH username used to connect to the servers
+
+  SSH_KEY="/home/svc_123/.ssh/id_rsa"
+    --> Path to the SSH private key file on your LOCAL machine
+
+  FOREMAN="http://123.123.local/pulp/content/123/Library/custom/Ubuntu_24_04_Noble"
+    --> Your internal Foreman/Pulp server URL for Ubuntu Noble (24.04) packages
+    --> Replace with your actual Foreman server address
+
+================================================================================
+SCRIPT 1 - MAIN UPGRADE SCRIPT
+================================================================================
+Save this as: upgrade_script.sh
+Run with:     bash upgrade_script.sh
+
+--------------------------------------------------------------------------------
+
+#!/bin/bash
+# Ubuntu 22.04 --> 24.04 LTS Upgrade Script
+
+# -------------------------------------------------------
+# CONFIGURATION - Change these values for your environment
+# -------------------------------------------------------
+SERVERS=("123")                                  # List of servers to upgrade
+SSH_USER="svc_123"                               # SSH username
+SSH_KEY="/home/svc_123/.ssh/id_rsa"             # SSH private key path
+REMOTE_LOG="/var/log/do-release-upgrade-nohup.log"  # Log file on remote server
+FOREMAN="http://123.123.local/pulp/content/123/Library/custom/Ubuntu_24_04_Noble"
+
+# -------------------------------------------------------
+# LOOP - Runs all steps on each server one by one
+# -------------------------------------------------------
+for SERVER in "${SERVERS[@]}"; do
+    echo "==> [$SERVER] Starting upgrade"
+
+    # Connect to the server via SSH and run everything below remotely
+    ssh -i "$SSH_KEY" -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+        "${SSH_USER}@${SERVER}" "sudo bash -s" <<ENDSSH
+
+        # ---------------------------------------------------
+        # STEP 1: PRE-UPGRADE CHECK
+        # What it does: Shows current OS version and disk space
+        # Why: Confirm we're on 22.04 and have enough free disk
+        # ---------------------------------------------------
+        echo "---- Step 1: Pre-upgrade assessment ----"
+        lsb_release -a      # Shows current Ubuntu version
+        df -h               # Shows disk space (need at least 5-10GB free)
+
+        # ---------------------------------------------------
+        # STEP 2: BACKUP APT SOURCES
+        # What it does: Makes a copy of your current sources.list file
+        # Why: Safety backup so we can restore if something goes wrong
+        # ---------------------------------------------------
+        echo "---- Step 2: Backup Foreman sources ----"
+        cp /etc/apt/sources.list /etc/apt/sources.list.foreman
+
+        # ---------------------------------------------------
+        # STEP 3: WRITE CLEAN JAMMY (22.04) SOURCES & DISABLE EXTRA REPOS
+        # What it does: Replaces sources.list with plain Ubuntu mirrors
+        #               and disables any extra repo files (Foreman, etc.)
+        # Why: The upgrade tool needs clean, standard Ubuntu sources.
+        #      Third-party repos can cause conflicts during upgrade.
+        # ---------------------------------------------------
+        echo "---- Step 3: Write Jammy sources & disable Foreman repos ----"
+        cat > /etc/apt/sources.list << 'EOF'
+deb http://us.archive.ubuntu.com/ubuntu/ jammy main restricted
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-updates main restricted
+deb http://us.archive.ubuntu.com/ubuntu/ jammy universe
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-updates universe
+deb http://us.archive.ubuntu.com/ubuntu/ jammy multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-updates multiverse
+deb http://us.archive.ubuntu.com/ubuntu/ jammy-backports main restricted universe multiverse
+deb http://security.ubuntu.com/ubuntu jammy-security main restricted
+deb http://security.ubuntu.com/ubuntu jammy-security universe
+deb http://security.ubuntu.com/ubuntu jammy-security multiverse
+EOF
+
+        # Disable all extra repo files by renaming them to .disabled
+        for f in /etc/apt/sources.list.d/*.list; do
+            [[ -f "$f" ]] && mv "$f" "${f}.disabled"
+        done
+
+        # ---------------------------------------------------
+        # STEP 4: FULLY PATCH 22.04 BEFORE UPGRADING
+        # What it does: Updates all packages to latest 22.04 versions
+        # Why: Ubuntu requires you to be fully up to date on 22.04
+        #      before upgrading to 24.04. Skipping this causes failures.
+        # ---------------------------------------------------
+        echo "---- Step 4: Patch to latest 22.04 packages ----"
+        apt-get clean -q                                          # Clear package cache
+        apt-get update -q                                         # Refresh package list
+        DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y -q # Install all updates
+        DEBIAN_FRONTEND=noninteractive apt-get autoremove -y -q   # Remove old packages
+
+        # ---------------------------------------------------
+        # STEP 5: CHECK FOR BROKEN PACKAGES
+        # What it does: Looks for any broken or held-back packages
+        # Why: Broken packages will cause the upgrade to fail.
+        #      Fix any issues shown here before continuing.
+        # ---------------------------------------------------
+        echo "---- Step 5: Check held/broken packages ----"
+        dpkg -C         # Check for broken package configs
+        apt-get check   # Verify package system is healthy
+
+        # ---------------------------------------------------
+        # STEP 6: INSTALL UPGRADE TOOL & SET LTS MODE
+        # What it does: Installs the release upgrade manager and
+        #               configures it to only upgrade to LTS versions
+        # Why: Without Prompt=lts, it might try to upgrade to a
+        #      non-LTS version (like 23.04) instead of 24.04
+        # ---------------------------------------------------
+        echo "---- Step 6: Install update-manager-core & set Prompt=lts ----"
+        apt-get install -y update-manager-core
+        sed -i 's/Prompt=.*/Prompt=lts/' /etc/update-manager/release-upgrades
+
+        # ---------------------------------------------------
+        # STEP 7: REMOVE IMMUTABLE FLAG FROM PAM FILE
+        # What it does: Removes the "locked/immutable" attribute from
+        #               the password configuration file
+        # Why: Some security tools (like PBIS) lock this file.
+        #      The upgrade needs to modify it, so we unlock it first.
+        # ---------------------------------------------------
+        echo "---- Step 7: Remove immutable flag on pam.d/common-password ----"
+        chattr -i /etc/pam.d/common-password 2>/dev/null || true
+
+        # ---------------------------------------------------
+        # STEP 8: STOP QUALYS SECURITY AGENT
+        # What it does: Stops the Qualys cloud security scanner
+        # Why: Qualys can interfere with the upgrade process.
+        #      It will be restarted automatically after reboot.
+        # ---------------------------------------------------
+        echo "---- Step 8: Stop Qualys agent ----"
+        systemctl stop qualys-cloud-agent 2>/dev/null || true
+
+        # ---------------------------------------------------
+        # STEP 9: LAUNCH THE UPGRADE (runs in background)
+        # What it does: Starts the actual Ubuntu upgrade process
+        #               Runs in background (&) so SSH doesn't block
+        # Why: The upgrade takes 30-60+ minutes. Running in background
+        #      means the SSH connection can close without killing it.
+        #      Monitor progress with: tail -f /var/log/do-release-upgrade-nohup.log
+        # ---------------------------------------------------
+        echo "---- Step 9: Launch do-release-upgrade ----"
+        nohup do-release-upgrade -f DistUpgradeViewNonInteractive \
+            > $REMOTE_LOG 2>&1 &
+        echo "Upgrade launched on \$(hostname) with PID \$!"
+
+ENDSSH
+
+    echo "==> [$SERVER] Done. Monitor with:"
+    echo "    ssh ${SSH_USER}@${SERVER} 'tail -f $REMOTE_LOG'"
+done
+
+echo "================================"
+echo " Upgrade launched on all servers"
+echo " Wait 30-60 mins then run Script 2"
+echo "================================"
+
+
+================================================================================
+HOW TO MONITOR THE UPGRADE PROGRESS
+================================================================================
+
+While Script 1 is running in the background on the server, watch the log:
+
+    ssh -i /home/svc_123/.ssh/id_rsa svc_123@YOUR_SERVER \
+        'tail -f /var/log/do-release-upgrade-nohup.log'
+
+You know the upgrade finished when you see:
+    "System upgrade is complete."
+
+Then wait for the server to become reachable again (it may reboot on its own),
+and run Script 2 below.
+
+================================================================================
+SCRIPT 2 - POST-UPGRADE CLEANUP SCRIPT
+================================================================================
+Save this as: post_upgrade.sh
+Run with:     bash post_upgrade.sh
+When to run:  AFTER the server has completed the upgrade and is reachable via SSH
+
+--------------------------------------------------------------------------------
+
+#!/bin/bash
+# Ubuntu 24.04 Post-Upgrade Cleanup Script
+
+# -------------------------------------------------------
+# CONFIGURATION - Must match Script 1 values
+# -------------------------------------------------------
+SERVERS=("123")                                  # Same servers as Script 1
+SSH_USER="svc_123"                               # Same SSH username
+SSH_KEY="/home/svc_123/.ssh/id_rsa"             # Same SSH key
+FOREMAN="http://123.123.local/pulp/content/123/Library/custom/Ubuntu_24_04_Noble"
+
+for SERVER in "${SERVERS[@]}"; do
+    echo "==> [$SERVER] Starting post-upgrade cleanup"
+
+    ssh -i "$SSH_KEY" -o ConnectTimeout=15 -o StrictHostKeyChecking=no \
+        "${SSH_USER}@${SERVER}" "sudo bash -s" <<ENDSSH
+
+        # ---------------------------------------------------
+        # STEP 1: VALIDATE THE UPGRADE WORKED
+        # What it does: Checks OS version, kernel, broken packages,
+        #               failed services, and disk space
+        # Why: Confirm we're now on 24.04 before doing anything else.
+        #      Look for "Ubuntu 24.04" in lsb_release output.
+        # ---------------------------------------------------
+        echo "---- Step 1: Validation ----"
+        lsb_release -a          # Should now show Ubuntu 24.04 Noble
+        uname -r                # Shows current kernel version
+        dpkg -C                 # Check for broken packages
+        systemctl --failed      # Check for any failed services
+        df -h                   # Confirm disk space is OK
+
+        # ---------------------------------------------------
+        # STEP 2: RESTORE YOUR INTERNAL FOREMAN REPO SOURCES
+        # What it does: Replaces the standard Ubuntu sources with your
+        #               internal Foreman server sources for Noble (24.04)
+        # Why: Your organization uses an internal package mirror (Foreman).
+        #      This points the server back to your internal repos.
+        # NOTE: Using <<"EOF" (double-quote) so $FOREMAN variable expands
+        # ---------------------------------------------------
+        echo "---- Step 2: Restore Foreman Noble sources ----"
+        mv /etc/apt/sources.list /etc/apt/sources.list.noble_upstream 2>/dev/null || true
+        cat > /etc/apt/sources.list.d/foreman.list <<"EOF"
+deb [trusted=yes arch=amd64] $FOREMAN/noble-main/ noble main restricted
+deb [trusted=yes arch=amd64] $FOREMAN/noble-updates/ noble-updates main restricted
+deb [trusted=yes arch=amd64] $FOREMAN/noble-universe/ noble universe
+deb [trusted=yes arch=amd64] $FOREMAN/noble-updates-universe/ noble-updates universe
+deb [trusted=yes arch=amd64] $FOREMAN/noble-multiverse/ noble multiverse
+deb [trusted=yes arch=amd64] $FOREMAN/noble-updates-multiverse/ noble-updates multiverse
+deb [trusted=yes arch=amd64] $FOREMAN/noble-backports/ noble-backports main restricted universe multiverse
+deb [trusted=yes arch=amd64] $FOREMAN/noble-security-main/ noble-security main restricted
+deb [trusted=yes arch=amd64] $FOREMAN/noble-security-universe/ noble-security universe
+deb [trusted=yes arch=amd64] $FOREMAN/noble-security-multiverse/ noble-security multiverse
+EOF
+
+        # ---------------------------------------------------
+        # STEP 3: CLEAN UP OLD/LEFTOVER REPO FILES
+        # What it does: Moves old Jammy (22.04) repo files out of the way
+        # Why: Old repo files pointing to 22.04 repos will cause
+        #      "apt-get update" errors on the new 24.04 system.
+        #      We move them to an "old" folder instead of deleting
+        #      in case we need to reference them later.
+        # ---------------------------------------------------
+        echo "---- Step 3: Clean up old sources ----"
+        cd /etc/apt/sources.list.d
+        mkdir -p old
+
+        # Move old Docker repo (was for Jammy, needs updating for Noble)
+        mv archive_uri-https_download_docker_com_linux_ubuntu-jammy.list \
+           old/ 2>/dev/null || true
+
+        # Move old ubuntu.sources file (replaced by foreman.list)
+        mv ubuntu.sources old/ 2>/dev/null || true
+
+        # Rename old PBIS (PowerBroker Identity) list file
+        mv 123_mcs_local_pulp_content_123_Library_custom_Ubuntu22_Ubuntu22_PBIS.list.disabled \
+           123_123_local_pulp_content_123_Library_custom_Ubuntu22_Ubuntu22_PBIS.list \
+           2>/dev/null || true
+
+        # ---------------------------------------------------
+        # STEP 4: RE-ENABLE KUBERNETES REPO
+        # What it does: Renames kubernetes.list.disabled back to kubernetes.list
+        # Why: We disabled it in Script 1 to prevent upgrade conflicts.
+        #      Now that we're on 24.04, we can re-enable it.
+        # NOTE: You may need to update the Kubernetes repo URL to
+        #       a Noble-compatible version if it fails.
+        # ---------------------------------------------------
+        echo "---- Step 4: Re-enable Kubernetes repo ----"
+        mv /etc/apt/sources.list.d/kubernetes.list.disabled \
+           /etc/apt/sources.list.d/kubernetes.list 2>/dev/null || true
+
+        # ---------------------------------------------------
+        # STEP 5: REFRESH PACKAGE LISTS
+        # What it does: Clears old cache and downloads fresh package info
+        # Why: After changing all the repo sources, apt needs to
+        #      reload the package lists from the new locations.
+        #      Fix any errors shown here before proceeding.
+        # ---------------------------------------------------
+        echo "---- Step 5: Update apt package lists ----"
+        apt-get clean       # Clear old cached package files
+        apt-get update -q   # Download fresh package lists
+
+        # ---------------------------------------------------
+        # STEP 6: FINAL VALIDATION
+        # What it does: One last check of system health
+        # Why: Confirm everything looks good before rebooting
+        # ---------------------------------------------------
+        echo "---- Step 6: Final validation ----"
+        lsb_release -a      # Confirm Ubuntu 24.04
+        systemctl --failed  # Should show no failed services
+        df -h               # Confirm disk space
+
+        # ---------------------------------------------------
+        # STEP 7: REBOOT
+        # What it does: Reboots the server
+        # Why: Required to load the new 24.04 kernel and apply
+        #      all changes made during the upgrade process.
+        #      Server will be offline for 2-5 minutes.
+        # ---------------------------------------------------
+        echo "---- Step 7: Rebooting server ----"
+        reboot
+
+ENDSSH
+
+    echo "==> [$SERVER] Post-upgrade complete. Server is rebooting."
+    echo "    Check again in 5 minutes: ssh ${SSH_USER}@${SERVER}"
+done
+
+echo "================================"
+echo " Post-upgrade cleanup complete!"
+echo " Servers are rebooting now."
+echo "================================"
+
+
+================================================================================
+FULL RUN ORDER - STEP BY STEP
+================================================================================
+
+ 1. Edit both scripts and replace all "123" placeholders with real values
+
+ 2. Run Script 1:
+       bash upgrade_script.sh
+
+ 3. Monitor the upgrade log on the server (takes 30-60 mins):
+       ssh -i /home/svc_123/.ssh/id_rsa svc_123@YOUR_SERVER \
+           'tail -f /var/log/do-release-upgrade-nohup.log'
+
+ 4. Wait until you see "System upgrade is complete" in the log
+
+ 5. Wait for the server to come back online after it reboots
+
+ 6. Run Script 2:
+       bash post_upgrade.sh
+
+ 7. Verify the server is on Ubuntu 24.04:
+       ssh -i /home/svc_123/.ssh/id_rsa svc_123@YOUR_SERVER 'lsb_release -a'
+
+================================================================================
+COMMON PROBLEMS & FIXES
+================================================================================
+
+PROBLEM: apt-get update shows errors after Script 2
+FIX:     Check /etc/apt/sources.list.d/ for any remaining .list files
+         pointing to "jammy". Disable them or update to "noble".
+
+PROBLEM: Upgrade seems stuck / no new log lines for 30+ mins
+FIX:     Some config file prompts can pause the upgrade even in
+         non-interactive mode. Check if the process is still running:
+         ps aux | grep do-release-upgrade
+
+PROBLEM: Server doesn't come back after reboot
+FIX:     Use console/IPMI/out-of-band access to check the server.
+         It may have a boot issue that needs manual intervention.
+
+PROBLEM: Kubernetes repo fails after re-enabling
+FIX:     The Kubernetes repo URL may need updating for Noble (24.04).
+         Check https://kubernetes.io/docs/setup/production-environment/
+         tools/kubeadm/install-kubeadm/ for current repo instructions.
+
+PROBLEM: Docker stops working after upgrade
+FIX:     Remove the old jammy Docker repo (already done in Step 3)
+         and add the Noble version:
+         https://docs.docker.com/engine/install/ubuntu/
+
+================================================================================
+END OF DOCUMENT
+================================================================================
