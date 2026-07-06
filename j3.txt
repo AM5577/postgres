@@ -1,0 +1,533 @@
+====================================================================
+STORAGE CHANGE IMPACT INTELLIGENCE COPILOT
+FINAL END-TO-END PRODUCTION GUIDE
+(Agent Build Instructions + Dummy Data Walkthrough — Easy Copy/Paste)
+Microsoft Copilot Studio (Premium License) Edition
+====================================================================
+Version: 3.0 (Final Consolidated)
+
+THE CHALLENGE:
+Automate and optimize enterprise storage management to reduce
+manual effort, improve accuracy, and enable scalable, AI-driven
+operations.
+
+FOCUS AREAS:
+  1. Performance analysis
+  2. Capacity reporting
+  3. Configuration automation & drift detection
+
+SUCCESS METRICS:
+  - Faster insights
+  - Higher accuracy (>99.5%)
+  - Reduced manual effort
+  - Scalable cloud-based solution
+
+Everything you need to copy/paste is inside a block marked:
+------ COPY START ------
+...content...
+------ COPY END ------
+Just select everything between those two lines.
+====================================================================
+
+
+TABLE OF CONTENTS
+--------------------------------------------------------------------
+1. Prerequisites & Licensing
+2. Architecture
+3. BUILD STEP 1 — Create the Agent (copy/paste instructions)
+4. BUILD STEP 2 — Paste the Full System Prompt (copy/paste block)
+5. BUILD STEP 3 — Create Topics (copy/paste trigger phrases)
+6. BUILD STEP 4 — Create Dataverse Tables (copy/paste schema)
+7. BUILD STEP 5 — Load Dummy Data (copy/paste CSVs)
+8. BUILD STEP 6 — Build Power Automate Flows (step by step)
+9. BUILD STEP 7 — Wire Escalation Rules (copy/paste conditions)
+10. BUILD STEP 8 — Power BI Dashboard
+11. BUILD STEP 9 — Publish to Teams / M365 Copilot
+12. FOCUS AREA WALKTHROUGH 1: Performance Analysis (dummy math)
+13. FOCUS AREA WALKTHROUGH 2: Capacity Reporting (dummy math)
+14. FOCUS AREA WALKTHROUGH 3: Config Drift Detection (dummy math)
+15. End-to-End Test Script (copy/paste test message)
+16. Mapping Results to Success Metrics
+17. Security & Governance
+18. Go-Live Checklist
+19. Troubleshooting
+====================================================================
+
+
+1. PREREQUISITES & LICENSING
+--------------------------------------------------------------------
+[ ] Microsoft Copilot Studio Premium
+[ ] Power Platform environment with Dataverse enabled
+[ ] Power Automate Premium (per-user or per-flow)
+[ ] Power BI Pro or Premium workspace
+[ ] Microsoft Teams admin access
+[ ] A separate DEV/Test environment before touching production
+
+Confirm current pricing/bundling with your Microsoft admin center,
+since license packaging changes periodically.
+
+
+2. ARCHITECTURE
+--------------------------------------------------------------------
+  [CSV Snapshots] --> [Power Automate: Ingestion Flow]
+       --> [Dataverse: StorageSnapshots, BaselineStandards]
+       --> [Copilot Studio Agent: 3 focus-area logic + system prompt]
+       --> [8-Section Structured Report]
+       --> [Power BI Dashboard] + [Teams/Email Escalation]
+
+
+3. BUILD STEP 1 — CREATE THE AGENT
+--------------------------------------------------------------------
+  1. Go to https://copilotstudio.microsoft.com
+  2. Select or create a Dataverse-enabled environment (use DEV
+     first).
+  3. Click "+ Create" > "New agent" > "Skip to configure".
+  4. Enter these exact values:
+
+------ COPY START (Agent Basic Info) ------
+Name: Storage Change Impact Intelligence Copilot
+Description: An enterprise AI assistant that compares storage
+device configuration snapshots across two timelines, analyzes
+performance and capacity impact, detects configuration drift
+against baseline standards, assesses risk, and generates actionable
+recommendations for storage administrators.
+------ COPY END ------
+
+  5. Choose agent type: Conversational.
+  6. Click Create.
+
+
+4. BUILD STEP 2 — PASTE THE FULL SYSTEM PROMPT
+--------------------------------------------------------------------
+  1. Open your new agent > "Overview" tab > "Instructions" box.
+  2. Paste the entire block below exactly as-is. This is your
+     locked system prompt — do not let end users or other admins
+     edit the Output Format section once live.
+
+------ COPY START (Full System Prompt for Instructions Field) ------
+You are Storage Change Impact Intelligence Copilot, an enterprise AI assistant specialized in storage infrastructure analysis.
+
+Your mission is to help storage administrators compare storage device configurations across two timelines, identify configuration changes, analyze performance and capacity impact, detect configuration drift, assess risk, and generate actionable recommendations.
+
+BUSINESS PROBLEM:
+Storage administrators frequently make configuration changes to storage arrays, clusters, pools, RAID policies, caching policies, replication settings, and host mappings. Understanding the impact of these changes is difficult and requires manual analysis across multiple systems. Key questions users want answered: What exactly changed? Which configuration parameters changed? Did performance improve or degrade? What capacity impact occurred? Is there configuration drift from standards? What is the likely business risk?
+
+AGENT ROLE:
+You are an intelligent storage operations assistant. Your responsibilities: Compare storage snapshots between two selected timelines. Detect configuration differences. Analyze performance changes. Analyze capacity changes. Detect configuration drift. Generate risk assessment. Provide executive summary. Recommend next actions. You must provide concise, accurate, and actionable responses.
+
+INPUTS:
+The user provides: Device Name, Device Type (Storage Array / Cluster / Pool), Before Change Snapshot, After Change Snapshot. Snapshots may include configuration parameters, capacity metrics, and performance metrics.
+
+DATA FIELDS:
+Configuration Data: RAID Policy, Cache Policy, Replication Settings, Tiering Policy, Host Mappings, Pool Allocation, Deduplication Settings, Compression Settings.
+Performance Data: IOPS, Latency, Throughput, Cache Hit Ratio, Read/Write Ratio.
+Capacity Data: Utilization %, Available Capacity, Used Capacity, Growth Rate.
+
+ANALYSIS LOGIC:
+Step 1 — Compare Configuration: Identify all configuration changes between before and after snapshots.
+Step 2 — Analyze Performance Impact: Calculate percentage change using ((After - Before) / Before) x 100. Determine Improvement, Degradation, or Neutral impact. Higher IOPS = Positive. Lower Latency = Positive. Higher Throughput = Positive.
+Step 3 — Analyze Capacity Impact: Evaluate utilization changes, capacity growth, and available capacity changes.
+Step 4 — Detect Configuration Drift: Compare against enterprise baseline standards. Flag as Standard compliant, Minor drift, or Critical drift.
+Step 5 — Risk Assessment: Assign severity as Low, Medium, High, or Critical based on risk factors including high utilization, performance degradation, unsafe configuration changes, disabled redundancy, and reduced replication.
+
+OUTPUT FORMAT:
+Always structure responses as follows: 1. Executive Summary 2. Configuration Changes 3. Performance Impact 4. Capacity Impact 5. Configuration Drift 6. Risk Assessment 7. AI Insights 8. Recommended Actions
+
+ESCALATION RULES:
+Escalate immediately if: Risk is High or Critical, Utilization exceeds 90%, Latency increases more than 30%, Redundancy is reduced, or Replication is disabled.
+
+AUTOMATION:
+Integrate with Power Automate for snapshot ingestion, scheduled comparisons, alert notifications, Teams notifications, email reports, and Power BI dashboard refresh.
+
+SUCCESS METRICS:
+Measure reduction in manual analysis time, faster root cause identification, increased storage efficiency, reduced configuration drift, and improved incident response time.
+------ COPY END ------
+
+  3. Click Save.
+  4. Enable Settings > Orchestration > "Generative AI
+     orchestration" (toggle ON) so the agent can route between
+     topics dynamically.
+
+
+5. BUILD STEP 3 — CREATE TOPICS
+--------------------------------------------------------------------
+Create 4 topics in the "Topics" tab. For each, paste the trigger
+phrases exactly as shown.
+
+------ COPY START (Topic 1: Compare Snapshots) ------
+Topic name: Compare Snapshots
+Trigger phrases:
+compare snapshots
+what changed
+analyze device
+compare before and after
+run a comparison
+Flow: Ask for Device Name > Device Type > Before Snapshot > After
+Snapshot > Call Power Automate flow "GetSnapshotComparison" >
+Return the 8-section report.
+------ COPY END ------
+
+------ COPY START (Topic 2: Risk Check Only) ------
+Topic name: Risk Check Only
+Trigger phrases:
+what is the risk
+risk assessment for
+how risky is this change
+Flow: Retrieve latest saved comparison from Dataverse table
+ComparisonResults > Return only the Risk Assessment section.
+------ COPY END ------
+
+------ COPY START (Topic 3: Drift Check) ------
+Topic name: Drift Check
+Trigger phrases:
+configuration drift
+is this compliant
+check baseline compliance
+Flow: Compare current config fields to BaselineStandards table >
+Return only the Configuration Drift section.
+------ COPY END ------
+
+------ COPY START (Topic 4: Escalation - System Topic) ------
+Topic name: Escalation
+Trigger: Automatic (not user-typed) — fires when Risk = High or
+Critical, Utilization > 90%, Latency increase > 30%, redundancy
+reduced, or replication disabled.
+Flow: Post adaptive card to Teams channel + send email via Power
+Automate flow "EscalationAlert".
+------ COPY END ------
+
+
+6. BUILD STEP 4 — CREATE DATAVERSE TABLES
+--------------------------------------------------------------------
+In make.powerapps.com, open your environment > Tables > + New table.
+Create these 4 tables with these exact columns:
+
+------ COPY START (Dataverse Schema) ------
+TABLE: StorageSnapshots
+Columns: DeviceName (text), DeviceType (choice: Storage Array,
+Cluster, Pool), SnapshotDate (date), RAIDPolicy (text), CachePolicy
+(text), ReplicationSettings (text), TieringPolicy (text),
+HostMappings (whole number), PoolAllocation (text),
+DeduplicationSettings (text), CompressionSettings (text), IOPS
+(whole number), Latency (decimal), Throughput (decimal),
+CacheHitRatio (decimal), ReadWriteRatio (text), UtilizationPct
+(decimal), AvailableCapacityTB (decimal), UsedCapacityTB (decimal),
+GrowthRatePct (decimal)
+
+TABLE: BaselineStandards
+Columns: DeviceType (choice), StandardRAIDPolicy (text),
+StandardCachePolicy (text), StandardReplication (text),
+StandardTieringPolicy (text), EffectiveDate (date)
+
+TABLE: ComparisonResults
+Columns: DeviceName (text), ComparisonDate (date),
+ExecutiveSummary (text), ConfigChangesJSON (text),
+PerformanceImpactJSON (text), CapacityImpactJSON (text),
+DriftStatus (choice: Compliant, Minor, Critical), RiskLevel
+(choice: Low, Medium, High, Critical), AIInsights (text),
+RecommendedActions (text)
+
+TABLE: EscalationLog
+Columns: DeviceName (text), EscalationDate (date/time), RiskLevel
+(choice), TriggerReason (text), NotifiedChannel (text), Acknowledged
+(yes/no)
+------ COPY END ------
+
+
+7. BUILD STEP 5 — LOAD DUMMY DATA
+--------------------------------------------------------------------
+Use "Get data > Text/CSV" on each table, or paste rows manually.
+
+------ COPY START (StorageSnapshots.csv) ------
+DeviceName,DeviceType,SnapshotDate,RAIDPolicy,CachePolicy,Replication,TieringPolicy,HostMappings,PoolAllocation,Deduplication,Compression,IOPS,Latency,Throughput,CacheHitRatio,ReadWriteRatio,UtilizationPct,AvailableCapacityTB,UsedCapacityTB,GrowthRatePct
+Device_A,Storage Array,2026-06-01,RAID5,Dynamic,Async,Enabled,12,Pool-01,Enabled,Enabled,12000,8.5,450,82,70/30,78,220,780,3.5
+Device_A,Storage Array,2026-07-01,RAID6,Static,Sync,Disabled,12,Pool-01,Enabled,Enabled,14160,7.5,549,86,68/32,65,385,715,1.2
+Device_B,Cluster,2026-06-01,RAID6,Dynamic,Sync,Enabled,20,Pool-02,Enabled,Enabled,25000,5.0,900,90,60/40,55,450,550,2.0
+Device_B,Cluster,2026-07-01,RAID6,Dynamic,Sync,Enabled,20,Pool-02,Enabled,Enabled,24000,6.8,850,88,58/42,91,90,910,4.8
+Device_C,Pool,2026-06-01,RAID10,Dynamic,Sync,Enabled,8,Pool-03,Disabled,Enabled,8000,10.0,300,75,80/20,60,160,240,1.0
+Device_C,Pool,2026-07-01,RAID10,Dynamic,None,Enabled,8,Pool-03,Disabled,Enabled,7900,10.2,295,74,79/21,62,152,248,1.1
+------ COPY END ------
+
+------ COPY START (BaselineStandards.csv) ------
+DeviceType,StandardRAIDPolicy,StandardCachePolicy,StandardReplication,StandardTieringPolicy,EffectiveDate
+Storage Array,RAID6,Dynamic,Sync,Enabled,2026-01-01
+Cluster,RAID6,Dynamic,Sync,Enabled,2026-01-01
+Pool,RAID10,Dynamic,Sync,Enabled,2026-01-01
+------ COPY END ------
+
+Notes:
+  - Device_A = balanced walkthrough example (Sections 12-14 below)
+  - Device_B = HIGH-RISK test case (latency +36%, utilization 91%)
+  - Device_C = CRITICAL test case (replication disabled)
+
+
+8. BUILD STEP 6 — BUILD POWER AUTOMATE FLOWS
+--------------------------------------------------------------------
+Create these 4 flows in https://make.powerautomate.com (same
+environment as your Dataverse tables):
+
+FLOW A "Snapshot Ingestion"
+  1. Trigger: "When a file is created" (SharePoint/OneDrive) or
+     manual trigger from Copilot Studio file upload.
+  2. Action: Parse CSV rows.
+  3. Action: Validate required columns are present.
+  4. Action: Dataverse "Add a new row" into StorageSnapshots for
+     each parsed row.
+  5. Action: Respond to Copilot Studio with success/failure.
+
+FLOW B "GetSnapshotComparison"
+  1. Trigger: "When Copilot triggers a flow" (Power Virtual
+     Agents/Copilot Studio trigger), inputs = DeviceName,
+     BeforeDate, AfterDate.
+  2. Action: Dataverse "List rows" from StorageSnapshots filtered
+     by DeviceName + BeforeDate -> store as BeforeRow.
+  3. Action: Dataverse "List rows" filtered by DeviceName +
+     AfterDate -> store as AfterRow.
+  4. Action: Compose — calculate percentage changes using formula
+     ((After - Before) / Before) x 100 for IOPS, Latency,
+     Throughput, CacheHitRatio.
+  5. Action: Compose — compare each configuration field between
+     BeforeRow and AfterRow; build a list of changed fields.
+  6. Action: Dataverse "List rows" from BaselineStandards filtered
+     by DeviceType.
+  7. Action: Compose — compare AfterRow config fields to baseline;
+     assign Compliant/Minor/Critical per field.
+  8. Action: Compose — apply risk scoring rules (see Section 9
+     below).
+  9. Action: Dataverse "Add a new row" into ComparisonResults with
+     all computed values.
+  10. Action: Respond to Copilot Studio with the full JSON payload
+      matching the 8-section format.
+
+FLOW C "EscalationAlert" — see Section 9 below.
+
+FLOW D "PowerBIRefresh"
+  1. Trigger: Recurrence (e.g., nightly) OR "When a flow completes"
+     (chained after Flow B).
+  2. Action: Power BI "Refresh a dataset".
+  3. Action: Check refresh status; log failure to Dataverse if
+     needed.
+
+
+9. BUILD STEP 7 — WIRE ESCALATION RULES
+--------------------------------------------------------------------
+------ COPY START (Escalation Trigger Conditions) ------
+Escalate immediately if ANY of the following is true:
+  RiskLevel = "High" OR RiskLevel = "Critical"
+  UtilizationPct > 90
+  LatencyChangePct > 30
+  RedundancyReduced = true
+  ReplicationSettings (After) = "None" OR "Disabled"
+------ COPY END ------
+
+FLOW C "EscalationAlert"
+  1. Trigger: "When a flow completes" (chained after Flow B) or
+     "When Copilot triggers a flow".
+  2. Condition action: check the rules above against Flow B's
+     output.
+  3. If true: Action "Post adaptive card in a chat or channel"
+     (Teams) to your storage-ops alert channel.
+  4. If true: Action "Send an email (V2)" to your on-call
+     distribution list.
+  5. Action: Dataverse "Add a new row" into EscalationLog.
+
+
+10. BUILD STEP 8 — POWER BI DASHBOARD
+--------------------------------------------------------------------
+  1. Open Power BI Desktop > Get Data > Dataverse.
+  2. Connect to StorageSnapshots, ComparisonResults, EscalationLog.
+  3. Build 4 visuals:
+     - Line chart: IOPS/Latency/Throughput trend per device
+     - Gauge: Utilization % (red >90, yellow 70-90, green <70)
+     - Bar chart: Drift status by device
+     - Heatmap: Risk level across all devices
+  4. Publish to a workspace shared with storage admins.
+  5. Set scheduled refresh or trigger via Flow D.
+
+
+11. BUILD STEP 9 — PUBLISH TO TEAMS / M365 COPILOT
+--------------------------------------------------------------------
+  1. In Copilot Studio, go to "Channels" tab.
+  2. Enable "Microsoft Teams" > Publish.
+  3. Admins add the agent to a Teams channel or DM for pilot users.
+  4. Optional: enable "Custom website" channel to embed on an
+     internal portal.
+  5. If Microsoft 365 Copilot licensed, publish as a declarative
+     agent so it appears inside M365 Copilot chat/Word/Outlook.
+  6. Roll out in stages: pilot group (2 weeks) > full storage team
+     > broader IT operations.
+
+
+12. FOCUS AREA WALKTHROUGH 1: PERFORMANCE ANALYSIS (DUMMY MATH)
+--------------------------------------------------------------------
+Device_A Before (2026-06-01): IOPS 12,000 | Latency 8.5ms |
+Throughput 450MB/s | Cache Hit 82%
+Device_A After (2026-07-01): IOPS 14,160 | Latency 7.5ms |
+Throughput 549MB/s | Cache Hit 86%
+
+Formula: ((After - Before) / Before) x 100
+  IOPS:       +18.0% -> Improvement
+  Latency:    -11.8% -> Improvement (lower is better)
+  Throughput: +22.0% -> Improvement
+  Cache Hit:  +4.9%  -> Improvement
+
+Expected output:
+"Performance Impact:
+ - IOPS increased by 18.0% (Improvement)
+ - Latency reduced by 11.8% (Improvement)
+ - Throughput increased by 22.0% (Improvement)
+ - Cache hit ratio improved by 4.9% (Improvement)"
+
+
+13. FOCUS AREA WALKTHROUGH 2: CAPACITY REPORTING (DUMMY MATH)
+--------------------------------------------------------------------
+Device_A Before: Utilization 78% | Used 780TB | Available 220TB |
+Growth 3.5%/month
+Device_A After: Utilization 65% | Used 715TB | Available 385TB |
+Growth 1.2%/month
+
+Expected output:
+"Capacity Impact:
+ - Utilization reduced from 78% to 65%
+ - Available capacity increased by 165TB
+ - Used capacity decreased by 65TB
+ - Growth rate slowed from 3.5%/month to 1.2%/month"
+
+Risk check: Utilization stays under the 90% escalation threshold.
+
+
+14. FOCUS AREA WALKTHROUGH 3: CONFIG DRIFT DETECTION (DUMMY MATH)
+--------------------------------------------------------------------
+Device_A Before config: RAID5, Cache=Dynamic, Replication=Async,
+Tiering=Enabled
+Device_A After config: RAID6, Cache=Static, Replication=Sync,
+Tiering=Disabled
+Baseline for Storage Array: RAID6, Cache=Dynamic, Replication=Sync,
+Tiering=Enabled
+
+Diff logic:
+  1. Before vs After changes: RAID Policy, Cache Policy,
+     Replication, Tiering Policy (4 changes).
+  2. After vs Baseline:
+     RAID Policy RAID6 = RAID6 -> Compliant
+     Replication Sync = Sync -> Compliant
+     Cache Policy Static vs Dynamic -> Minor drift
+     Tiering Disabled vs Enabled -> Critical drift
+
+Expected output:
+"Configuration Changes:
+ - RAID Policy changed from RAID5 to RAID6
+ - Cache Policy changed from Dynamic to Static
+ - Replication changed from Async to Sync
+ - Tiering Policy changed from Enabled to Disabled
+
+Configuration Drift:
+ - RAID Policy: Compliant
+ - Replication: Compliant
+ - Cache Policy: Minor drift (baseline = Dynamic)
+ - Tiering Policy: Critical drift (baseline = Enabled)"
+
+Overall Risk = Medium (no redundancy lost, replication improved,
+but one critical drift flag).
+
+
+15. END-TO-END TEST SCRIPT (COPY/PASTE TEST MESSAGE)
+--------------------------------------------------------------------
+------ COPY START (Test Message 1: Device_A - Medium Risk) ------
+Compare snapshots for Device_A, Storage Array, before 2026-06-01,
+after 2026-07-01
+------ COPY END ------
+Expected: 8-section report matching Sections 12-14 above; Risk =
+Medium; no escalation fires.
+
+------ COPY START (Test Message 2: Device_B - High Risk) ------
+Compare snapshots for Device_B, Cluster, before 2026-06-01, after
+2026-07-01
+------ COPY END ------
+Expected: Latency worsens ~36%, Utilization 91% -> Risk = High ->
+Escalation flow (Teams + email) fires automatically.
+
+------ COPY START (Test Message 3: Device_C - Critical Risk) ------
+Compare snapshots for Device_C, Pool, before 2026-06-01, after
+2026-07-01
+------ COPY END ------
+Expected: Replication changes from Sync to None (disabled) -> Risk
+= Critical -> Escalation fires on the hard "replication disabled"
+rule regardless of other factors.
+
+
+16. MAPPING RESULTS TO SUCCESS METRICS
+--------------------------------------------------------------------
+Faster insights: Time the full agent run (message -> 8-section
+report) vs a manual spreadsheet comparison of the same numbers.
+Target: under 60 seconds vs 30-60+ minutes manually.
+
+Higher accuracy (>99.5%): Compare every numeric value the agent
+returns against the manual math in Sections 12-14. Accuracy =
+(correct values / total values) x 100. All 3 dummy devices should
+hit 100% before moving to real data.
+
+Reduced manual effort: Count manual steps eliminated — CSV
+comparison, percentage-change math, baseline lookup, escalation
+drafting — all now automated end to end.
+
+Scalable cloud-based solution: Confirm the same agent, flows, and
+Dataverse tables handled 3 different devices (Device_A/B/C) with
+zero manual reconfiguration. Add more dummy devices to stress-test
+further before go-live.
+
+
+17. SECURITY & GOVERNANCE
+--------------------------------------------------------------------
+  - Keep DEV dummy data isolated from PROD Dataverse.
+  - Apply DLP policies restricting connectors to Dataverse, Teams,
+    Outlook, Power BI, SharePoint only.
+  - Restrict DEV/agent-editing access to the build team.
+  - Enable Microsoft Entra ID authentication on the agent (no
+    anonymous access).
+  - Enable audit logging (Microsoft Purview / Dataverse auditing)
+    on all 4 tables.
+  - Promote DEV -> TEST -> PROD following your normal change
+    management process; do not edit production directly.
+
+
+18. GO-LIVE CHECKLIST
+--------------------------------------------------------------------
+[ ] Sections 12-14 dummy math validated at 100% accuracy
+[ ] Test messages 1-3 (Section 15) all pass
+[ ] Escalation flow confirmed firing for Device_B and Device_C
+[ ] Power BI dashboard renders correctly on dummy data
+[ ] Security review completed (DLP, Entra ID, row-level security)
+[ ] Real baseline standards loaded into BaselineStandards table
+[ ] Pilot group of 2-3 real storage admins signed off on UAT
+[ ] Production Teams channel + email distribution list confirmed
+[ ] Rollback plan documented (disable channel, revert flows)
+
+
+19. TROUBLESHOOTING
+--------------------------------------------------------------------
+Agent doesn't detect configuration changes correctly:
+  Check CSV column headers match Flow B's expected field names
+  exactly; confirm Flow A inserted rows correctly into Dataverse.
+
+Escalation not firing on high risk:
+  Check Flow B's RiskLevel output string matches Flow C's condition
+  exactly (case-sensitive); re-test with Device_B/Device_C dummy
+  rows.
+
+Power BI dashboard shows stale data:
+  Check Flow D's schedule/trigger and Power BI dataset refresh
+  history; confirm Dataverse connector credentials are valid.
+
+Agent gives inconsistent report formatting:
+  Confirm the Output Format section of the system prompt (Section 4
+  above) hasn't been edited; confirm generative orchestration isn't
+  overriding the locked topic flow.
+
+Users get "access denied":
+  Check Entra ID group membership, Dataverse security role
+  assignment, and DLP policy connector restrictions.
+
+====================================================================
+END OF GUIDE
+====================================================================
