@@ -1,0 +1,567 @@
+================================================================
+AI AGENTS FOR THE INFRASTRUCTURE TEAM
+Using Microsoft 365 Copilot (Agent Builder) - No Copilot Studio Required
+================================================================
+
+This is a working reference, not an exhaustive manual. Use it as a
+starting point and expand it with your team's own history and fixes.
+
+CONTENTS
+  1. Proposal Email (ready to send)
+  2. Use Case List (17 ideas)
+  3. How to Build an Agent - Step by Step
+  4. Sample Agent Prompt - Guided Troubleshooting Agent
+  5. Windows Troubleshooting Reference
+  6. Linux Troubleshooting Reference
+  7. Network Troubleshooting Reference
+  8. Storage Troubleshooting Reference
+  9. ServiceNow Troubleshooting & Best Practices
+
+
+================================================================
+SECTION 1: PROPOSAL EMAIL
+================================================================
+
+Subject: Proposal: AI Agent Use Cases for Our Infrastructure Team
+(Microsoft 365 Copilot)
+
+Hi [Name],
+
+I'd like to propose a few ways we could use our Microsoft 365 Copilot
+license -- specifically the built-in Agent Builder and Copilot in the
+Office apps -- to reduce manual effort across our Linux, Windows,
+network, storage, and ServiceNow work. Everything below runs on what
+we already have; no Copilot Studio or extra licensing required.
+
+Use cases worth piloting:
+
+1. SOP & Runbook Knowledge Agent -- Build an Agent Builder agent
+   grounded in our SharePoint libraries (network diagrams, storage
+   runbooks, DR procedures, build docs). Engineers get instant
+   natural-language answers ("failover steps for storage array 3",
+   "how to add a VLAN on switch X") instead of digging through folders.
+
+2. Onboarding / Tribal Knowledge Assistant -- Same approach, grounded
+   in our Teams channels and SharePoint wiki, so new hires and on-call
+   engineers can quickly find escalation paths, naming conventions,
+   and past incident context.
+
+3. Incident & Change Documentation Drafting -- Use Copilot in Word
+   and Outlook to turn raw ticket notes or a Teams thread into a
+   structured first-draft RCA, change request, or outage notification.
+
+4. CAB / On-call Handover Summaries -- Copilot in Teams auto-
+   summarizes change advisory board meetings and on-call handovers
+   into clear action items and decisions, cutting manual note-taking.
+
+5. Health & Compliance Reporting -- Export data from our monitoring
+   and patch tools to Excel, then use Copilot in Excel to spot trends
+   and anomalies, and Copilot in PowerPoint to turn it into a
+   leadership-ready weekly infra health deck.
+
+6. ServiceNow Knowledge Q&A -- If our M365 admin sets up the
+   ServiceNow Knowledge connector (a Microsoft Graph connector --
+   separate from Copilot Studio, no Studio license needed), our
+   Agent Builder agent could also answer questions straight from
+   ServiceNow KB articles.
+
+Worth flagging: things like automatically creating or updating
+ServiceNow tickets, multi-step approval workflows, or agents that
+operate legacy network/storage consoles directly all need full
+Copilot Studio, so they're out of scope for now. If the pilot below
+proves valuable, that could be a natural phase-two ask.
+
+I'd suggest starting with the SOP/runbook agent -- it's the fastest
+to stand up and has an immediate, visible payoff. Happy to put
+together a rollout plan if there's interest.
+
+Best regards,
+[Your name]
+
+
+================================================================
+SECTION 2: USE CASE LIST
+================================================================
+
+--- CORE USE CASES (in the proposal email) ---
+
+1. SOP & Runbook Knowledge Agent
+   Grounded in SharePoint runbooks/diagrams. Answers "how do I..."
+   questions instantly instead of folder-diving.
+
+2. Onboarding / Tribal Knowledge Assistant
+   Grounded in Teams channels + SharePoint wiki. Helps new hires and
+   on-call engineers find escalation paths and past incident context.
+
+3. Incident & Change Documentation Drafting
+   Copilot in Word/Outlook turns raw notes into a structured RCA,
+   change request, or outage notification.
+
+4. CAB / On-call Handover Summaries
+   Copilot in Teams auto-summarizes meetings into action items.
+
+5. Health & Compliance Reporting
+   Copilot in Excel/PowerPoint turns exported monitoring/patch data
+   into trend analysis and a leadership-ready deck.
+
+6. ServiceNow Knowledge Q&A
+   Agent Builder answers questions from ServiceNow KB articles, once
+   an admin enables the ServiceNow Knowledge Graph connector.
+
+--- TROUBLESHOOTING & REMEDIATION USE CASES ---
+
+7. Guided Troubleshooting Agent
+   Grounded in troubleshooting runbooks/decision trees. Walks someone
+   through documented diagnostic steps for a described symptom.
+
+8. Known-Error Lookup Agent
+   Grounded in past incident notes/KB articles. "Seeing X error on Y,
+   what fixed this last time" pulls up the documented resolution.
+
+9. Command/Script Drafting Assistant
+   Copilot Chat drafts the exact PowerShell/Bash/CLI command for a
+   described fix. Engineer reviews and runs it themselves.
+
+10. Remediation Write-Back Agent
+    Copilot in Word/OneNote turns rough post-fix notes into a clean
+    runbook update, so the next person gets an instant answer.
+
+11. Symptom Matrix Agent
+    A SharePoint list mapping "if you see X, try Y" by system, with
+    Agent Builder as the conversational front end for L1.
+
+--- ADDITIONAL USE CASES ---
+
+12. Firewall & Network Rule Documentation Agent
+    Grounded in exported rule sets, VLAN/IP sheets, network diagrams.
+    Answers "what's this rule for," "which VLAN is subnet X on."
+
+13. Asset & Lifecycle Q&A Agent
+    Grounded in CMDB/asset inventory export. Answers warranty status,
+    EOL hardware questions for renewal/refresh planning.
+
+14. DR / Backup Readiness Agent
+    Grounded in DR runbooks and past test results. Answers RTO/RPO
+    and last-successful-test questions before audits or a real event.
+
+15. Capacity & Budget Forecasting
+    Copilot in Excel projects utilization growth trends; Copilot in
+    PowerPoint turns it into a slide for budget conversations.
+
+16. Ticket Trend & Pattern Analysis
+    Copilot in Excel surfaces recurring ticket categories from
+    exported ServiceNow history, pointing at permanent fixes.
+
+17. Audit & Compliance Prep Assistant
+    Copilot in Word/Excel assembles audit evidence packages from
+    policy docs, change records, and control descriptions.
+
+
+================================================================
+SECTION 3: HOW TO BUILD AN AGENT WITH AGENT BUILDER (M365 COPILOT)
+================================================================
+
+Note: Classic agent creation inside Microsoft Teams was retired on
+June 30, 2026. Build agents from the Microsoft 365 Copilot app or web
+experience (copilot.microsoft.com) instead.
+
+STEP 1 - Open Microsoft 365 Copilot
+  Go to copilot.microsoft.com, the Copilot app in Teams, or the
+  Copilot pane inside Word/Excel/Outlook.
+
+STEP 2 - Start a new agent
+  In the left navigation pane, select "Create agent" (also shown as
+  "New agent").
+
+STEP 3 - Choose how to build it
+  - Describe tab: type in plain language what you want the agent to
+    do. Copilot drafts the name, description, and instructions for
+    you, and refines them as you keep chatting.
+  - Configure tab: fill in the fields manually -- Name, Description,
+    Instructions, Knowledge, Starter prompts.
+  - Or start from a built-in template for a common scenario.
+
+STEP 4 - Add knowledge sources (this is what grounds its answers)
+  - SharePoint sites, document libraries, or individual files
+  - OneDrive files
+  - Public websites
+  - With a Copilot license: Teams chat messages and Outlook email as
+    personal context
+  - Any Microsoft 365 Copilot connectors already enabled in your
+    tenant (for example, ServiceNow Knowledge, if IT has set it up)
+
+STEP 5 - Write starter prompts
+  Add 3-5 example questions people can click to get going, e.g.
+  "How do I fail over storage array 3?"
+
+STEP 6 - Test it
+  Use the "Try it" pane before publishing. Ask it the real questions
+  your team would actually ask, not just easy ones.
+
+STEP 7 - Refine
+  Tighten the instructions if answers are vague. Add missing
+  documents if it can't answer something it should be able to.
+
+STEP 8 - Publish
+  Select Create. Microsoft 365 builds the agent in seconds.
+
+STEP 9 - Share it
+  Choose specific people, a Team/channel, or your whole org,
+  depending on what's appropriate for that agent.
+
+STEP 10 - Maintain it
+  Revisit periodically. Add new SOPs/docs as they're written, and
+  adjust instructions as you see how people actually use it.
+
+Note: exact options available can vary by license. If a knowledge
+source or connector is greyed out, check with your M365 admin.
+
+
+================================================================
+SECTION 4: SAMPLE AGENT PROMPT - GUIDED TROUBLESHOOTING AGENT
+================================================================
+
+Instructions field (paste into Agent Builder's Configure tab):
+
+  You are a troubleshooting assistant for the Infrastructure team,
+  covering Linux, Windows, network, and storage systems. When someone
+  describes a symptom or error, use the runbooks and past incident
+  notes in your knowledge sources to walk them through the documented
+  diagnostic steps in order, starting with the most likely cause. If
+  your knowledge sources don't cover the issue, say so directly
+  instead of guessing, and suggest escalating to the on-call
+  engineer. Keep answers short and step-by-step. For any step that
+  involves changing a firewall rule, restarting a production service,
+  or failing over a device, remind the user to confirm a change
+  window or approval before proceeding.
+
+Knowledge sources: SharePoint runbook library + Teams incident
+channels.
+
+Starter prompts:
+  - "VPN keeps dropping for remote users, what should I check?"
+  - "Storage array showing high latency, what's the diagnostic order?"
+  - "Switch port flapping, walk me through it"
+
+
+================================================================
+SECTION 5: WINDOWS TROUBLESHOOTING REFERENCE
+================================================================
+
+1. SERVICE WON'T START
+   Diagnose: Event Viewer > Windows Logs > System/Application;
+   "sc query <service>"; check dependent services and account perms.
+   Fix: Confirm service account password hasn't expired, dependent
+   services are running, config isn't corrupt ("sc qc <service>");
+   review recent patches/changes.
+
+2. HIGH CPU USAGE
+   Diagnose: Task Manager / Resource Monitor / Perfmon to find the
+   top process; Process Explorer for thread-level detail.
+   Fix: Identify and restart/kill the runaway process, check for
+   malware, review scheduled tasks, apply known vendor hotfixes.
+
+3. DISK SPACE FULL (C: DRIVE)
+   Diagnose: Disk Cleanup or WinDirStat to find large files/folders;
+   check C:\Windows\Temp, WinSxS, page file size, Update cache.
+   Fix: Clear temp files, run Disk Cleanup "clean up system files",
+   run "DISM /online /cleanup-image /startcomponentcleanup", resize
+   or relocate the page file if appropriate.
+
+4. SLOW BOOT / SLUGGISH PERFORMANCE
+   Diagnose: Task Manager > Startup tab; check for stuck updates;
+   run chkdsk for disk errors.
+   Fix: Disable unnecessary startup items, complete or roll back
+   stuck updates, repair disk errors, confirm no runaway AV scan.
+
+5. GROUP POLICY NOT APPLYING
+   Diagnose: "gpresult /h report.html" or "gpresult /r"; "rsop.msc";
+   check AD site/OU placement; check event log for GPO errors.
+   Fix: "gpupdate /force"; verify DC connectivity; check security
+   filtering and WMI filters; check SYSVOL replication health.
+
+6. DNS / NAME RESOLUTION ISSUES
+   Diagnose: "nslookup <hostname>"; "ipconfig /displaydns"; check
+   adapter DNS settings.
+   Fix: "ipconfig /flushdns"; correct DNS server entries; check DNS
+   service health and forwarders.
+
+7. BLUE SCREEN (BSOD)
+   Diagnose: Note the stop code; check %SystemRoot%\Minidump; analyze
+   with WinDbg or BlueScreenView; check Event Viewer.
+   Fix: Update or roll back the recent driver involved; run Windows
+   Memory Diagnostic; check for firmware/BIOS updates.
+
+8. WSUS / PATCHING FAILURES
+   Diagnose: "Get-WindowsUpdateLog" in PowerShell; check disk space;
+   check WSUS client-server connectivity.
+   Fix: Reset Windows Update components (stop services, rename
+   SoftwareDistribution, restart services); "sfc /scannow"; "DISM
+   /RestoreHealth".
+
+9. ACTIVE DIRECTORY REPLICATION ISSUES
+   Diagnose: "repadmin /replsummary"; "repadmin /showrepl"; DCDiag;
+   Directory Service event log.
+   Fix: Resolve DNS first (most common root cause); check firewall
+   between DCs; force sync with "repadmin /syncall".
+
+10. RDP CONNECTION ISSUES
+    Diagnose: Confirm RDP service running; firewall rule for port
+    3389; Network Level Authentication settings; licensing limits.
+    Fix: Restart Remote Desktop Services; open firewall for RDP;
+    confirm account has RDP rights; check terminal services
+    licensing.
+
+
+================================================================
+SECTION 6: LINUX TROUBLESHOOTING REFERENCE
+================================================================
+
+1. SERVICE WON'T START
+   Diagnose: "systemctl status <service>"; "journalctl -u <service>
+   -xe"; check SELinux/AppArmor denials ("ausearch -m avc").
+   Fix: Fix config syntax errors, correct binary/config permissions,
+   restart dependent services, clear SELinux denial if legitimate.
+
+2. HIGH LOAD AVERAGE
+   Diagnose: "top"/"htop"; "uptime"; "ps aux --sort=-%cpu"; "iostat";
+   "vmstat".
+   Fix: Address the top consumer, check disk I/O wait vs CPU-bound,
+   check for overlapping cron jobs.
+
+3. DISK SPACE FULL
+   Diagnose: "df -h"; "du -sh /* | sort -rh"; "lsof +L1" for deleted-
+   but-open files.
+   Fix: Rotate/clear old logs, clean package cache ("apt clean" /
+   "yum clean all"), remove old kernels.
+
+4. OUT OF MEMORY / OOM KILLER
+   Diagnose: "dmesg | grep -i oom"; check /var/log/messages or
+   /var/log/syslog; "free -h".
+   Fix: Identify the memory-hungry process, add swap short-term, tune
+   application memory limits, investigate for a leak.
+
+5. NETWORK CONNECTIVITY ISSUES
+   Diagnose: "ip a"; "ip route"; "ping"; "traceroute"/"mtr"; "ss
+   -tulnp".
+   Fix: Correct interface/route config, check "iptables -L" or "nft
+   list ruleset", check switch port config.
+
+6. DNS RESOLUTION ISSUES
+   Diagnose: "cat /etc/resolv.conf"; "dig <hostname>"; "nslookup
+   <hostname>".
+   Fix: Correct nameserver entries, check systemd-resolved status,
+   verify /etc/nsswitch.conf order.
+
+7. PERMISSION / OWNERSHIP ISSUES
+   Diagnose: "ls -la"; "stat <file>"; "ls -Z" for SELinux context.
+   Fix: Correct with "chown"/"chmod"; restore SELinux context with
+   "restorecon".
+
+8. PACKAGE MANAGER BROKEN (APT/YUM)
+   Diagnose: Check for stale lock files ("/var/lib/dpkg/lock"); "apt
+   --fix-broken install" or "yum check".
+   Fix: Remove stale locks (only if no process is really running),
+   clear cache, reinstall corrupted packages.
+
+9. SSH CONNECTION ISSUES
+   Diagnose: "systemctl status sshd"; check /var/log/auth.log or
+   /var/log/secure; verify port 22 open; key permissions (600).
+   Fix: Restart sshd, fix key/file permissions, check fail2ban or TCP
+   wrapper lockouts.
+
+10. FILESYSTEM MOUNT ISSUES / READ-ONLY FILESYSTEM
+    Diagnose: "mount | grep <fs>"; "dmesg" for filesystem errors;
+    "fsck" on the unmounted volume.
+    Fix: Remount read-write if safe ("mount -o remount,rw /"), run
+    fsck to repair, check disk health ("smartctl -a <device>").
+
+
+================================================================
+SECTION 7: NETWORK TROUBLESHOOTING REFERENCE
+================================================================
+
+1. NO CONNECTIVITY TO A HOST
+   Diagnose order: physical link/lights -> local IP/gateway config ->
+   ping gateway -> ping destination -> traceroute/mtr to find the
+   drop point.
+   Fix: Work outward from Layer 1 up: cable/port, then VLAN/L2, then
+   routing/L3, then ACL/firewall.
+
+2. HIGH LATENCY / PACKET LOSS
+   Diagnose: "mtr" or continuous ping to isolate the hop; check
+   interface error/drop counters; check for duplex mismatch.
+   Fix: Correct duplex/speed settings, address an oversubscribed
+   link, fix QoS misconfiguration, replace failing hardware.
+
+3. SWITCH PORT FLAPPING / ERRDISABLE
+   Diagnose: Switch logs for link up/down events; STP topology
+   change events; port error counters.
+   Fix: Check cable/SFP, re-enable the port, verify STP PortFast on
+   access ports, check for a loop or duplicate MAC.
+
+4. FIREWALL BLOCKING TRAFFIC
+   Diagnose: Check firewall logs/hit counters for the rule in
+   question; packet capture on both sides of the firewall.
+   Fix: Add or correct the rule, verify rule order (first-match),
+   confirm NAT rules aren't conflicting.
+
+5. VPN CONNECTIVITY ISSUES
+   Diagnose: Check tunnel status (Phase 1/Phase 2 on IPsec gear);
+   client-side logs.
+   Fix: Verify pre-shared key/certificate, match encryption/hash on
+   both ends, adjust MTU/MSS clamping for fragmentation issues.
+
+6. DHCP ISSUES
+   Diagnose: Check scope utilization; check for a rogue DHCP server;
+   client "ipconfig /release" then "/renew".
+   Fix: Expand the scope if exhausted, disable the rogue server,
+   check DHCP relay/helper-address config on routers.
+
+7. VLAN MISCONFIGURATION
+   Diagnose: "show vlan"; "show interface switchport"; check trunk
+   allowed-VLAN list.
+   Fix: Correct access/trunk VLAN assignment, ensure the trunk
+   carries the needed VLAN, fix native VLAN mismatch.
+
+8. ROUTING ISSUES
+   Diagnose: "show ip route"; verify default gateway; check routing
+   protocol neighbor/adjacency status.
+   Fix: Correct the static route or gateway, fix adjacency issues
+   (MTU, authentication, timers).
+
+9. DUPLEX / SPEED MISMATCH
+   Diagnose: Check interface counters for CRC errors/collisions;
+   compare configured speed/duplex on both ends.
+   Fix: Set both ends to the same fixed speed/duplex, or both to
+   auto-negotiate.
+
+10. WIRELESS CONNECTIVITY ISSUES
+    Diagnose: AP logs, signal strength, channel congestion, RADIUS
+    authentication failures.
+    Fix: Adjust channel/power, correct RADIUS/certificate config,
+    update AP firmware.
+
+
+================================================================
+SECTION 8: STORAGE TROUBLESHOOTING REFERENCE
+================================================================
+
+1. HIGH LATENCY ON ARRAY
+   Diagnose: Array performance dashboard (IOPS, latency, queue
+   depth); look for a noisy-neighbor LUN/volume; controller CPU.
+   Fix: Rebalance workload across pools/controllers, add cache or
+   tiering, isolate the noisy workload.
+
+2. VOLUME / DATASTORE FULL
+   Diagnose: Capacity dashboard; identify largest consumers
+   (snapshots, thin-provisioning overcommit).
+   Fix: Delete stale snapshots, run space reclamation/UNMAP, expand
+   the volume/LUN or add capacity.
+
+3. RAID DEGRADED / DISK FAILURE
+   Diagnose: Array alerts; vendor CLI or dashboard disk status;
+   predictive failure alerts.
+   Fix: Replace the failed disk, let the rebuild complete, confirm a
+   hot spare is configured for next time.
+
+4. MULTIPATHING / FAILOVER ISSUES
+   Diagnose: Path status on host ("multipath -ll" on Linux, MPIO on
+   Windows); HBA/switch zoning.
+   Fix: Correct zoning/masking, bounce the path/HBA, confirm all
+   expected paths are active.
+
+5. REPLICATION LAG
+   Diagnose: Replication dashboard for RPO/lag; WAN link
+   utilization; check for a paused/broken job.
+   Fix: Resume/restart the job, address WAN bandwidth, check
+   throttling settings.
+
+6. SNAPSHOT / BACKUP FAILURES
+   Diagnose: Backup job logs for error codes; snapshot reserve
+   space; VSS errors (Windows) or app-consistency issues.
+   Fix: Free up snapshot reserve, fix VSS writer errors, verify
+   backup agent connectivity.
+
+7. LUN MASKING / ZONING ISSUES (SAN)
+   Diagnose: Confirm LUN presented to the correct host WWPN/
+   initiator group; SAN switch zoning config.
+   Fix: Correct masking/zoning, rescan the HBA on the host.
+
+8. CAPACITY THRESHOLD ALERTS
+   Diagnose: Review growth trend, identify top consumers, check for
+   orphaned/unused volumes.
+   Fix: Clean up orphaned data, expand capacity, or rebalance
+   workloads to an underutilized array.
+
+9. PERFORMANCE BOTTLENECK (IOPS/THROUGHPUT)
+   Diagnose: Baseline expected vs actual IOPS/throughput; check
+   queue depth; check for undersized cache or wrong tier.
+   Fix: Move to the appropriate tier (SSD vs HDD), adjust RAID type
+   for the workload pattern, increase cache.
+
+
+================================================================
+SECTION 9: SERVICENOW TROUBLESHOOTING & BEST PRACTICES
+================================================================
+
+1. TICKET STUCK IN A STATE / NOT PROGRESSING
+   Diagnose: Check Flow Designer/workflow logs for the record; look
+   for a stalled approval; check business rule errors in system logs.
+   Fix: Manually advance the state if safe, fix the broken workflow
+   activity, escalate to the ServiceNow admin for scripting errors.
+
+2. NOTIFICATIONS / EMAILS NOT SENDING
+   Diagnose: Check the Notification record's trigger conditions;
+   System Logs > Email; SMTP/Exchange settings.
+   Fix: Correct the notification condition, confirm the recipient
+   field is populated, check spam filtering or email quotas.
+
+3. INCORRECT ASSIGNMENT GROUP ROUTING
+   Diagnose: Check assignment rules/flow logic for the category;
+   verify the CMDB CI is classified correctly.
+   Fix: Correct the assignment rule condition, fix CI classification,
+   retrain categorization if this keeps recurring.
+
+4. SLA TIMER NOT CALCULATING CORRECTLY
+   Diagnose: Check the SLA definition's conditions; check the
+   attached schedule (business hours); look for a stuck pause
+   condition.
+   Fix: Correct the SLA condition/schedule, manually retask the SLA
+   if needed.
+
+5. USERS CAN'T LOG IN / ACCESS ISSUES
+   Diagnose: Check the user's active status and roles; SSO/identity
+   provider logs if federated; account lockout status.
+   Fix: Reactivate the account or reset the password, correct role
+   assignment, coordinate with the identity team on SSO issues.
+
+6. APPROVAL NOT TRIGGERING
+   Diagnose: Check the approval workflow/flow for the record type;
+   verify the approver group/user is set correctly.
+   Fix: Correct the approval definition, manually add an approver if
+   needed, check for a missing manager field on the requester.
+
+7. CMDB / CI DATA OUT OF DATE
+   Diagnose: Check the discovery schedule and last run status; check
+   for discovery credential failures.
+   Fix: Fix discovery credentials, rerun discovery, manually
+   reconcile critical CIs.
+
+8. DUPLICATE TICKETS FOR THE SAME ISSUE
+   Diagnose: Multiple alerts creating separate incidents for one root
+   cause.
+   Fix: Set up Event Management/correlation rules, link duplicates as
+   related records and close as duplicate.
+
+9. TRIAGE BEST PRACTICES FOR THE INFRA TEAM
+   - Agree on one category/subcategory taxonomy across Linux,
+     Windows, Network, and Storage up front.
+   - Set priority using both impact and urgency, not urgency alone.
+   - Always link related incidents/changes so patterns are visible --
+     this is exactly what the Ticket Trend & Pattern Analysis agent
+     (use case 16) is built to surface.
+
+================================================================
+END OF DOCUMENT
+================================================================
